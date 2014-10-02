@@ -1,1 +1,1 @@
-![Overview of store.go](store.go.overview.svg)
+![Overview of store.go](store.go.overview.png)
