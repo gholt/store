@@ -521,7 +521,7 @@ func (d *diskBlock) reader(cr brimutil.ChecksummedReader, c chan *ReadValue) {
 		vp := r.offset - bp
 		d.cacheLock.RLock()
 		cb := d.cache[bp%256]
-		if cb != nil && binary.LittleEndian.Uint32(cb[CHECKSUM_INTERVAL:]) == bp {
+		if cb != nil {
 			if vp+4 <= CHECKSUM_INTERVAL {
 				z := binary.LittleEndian.Uint32(cb[vp:])
 				if vp+4+z <= CHECKSUM_INTERVAL {
@@ -543,7 +543,7 @@ func (d *diskBlock) reader(cr brimutil.ChecksummedReader, c chan *ReadValue) {
 			d.cacheLock.RUnlock()
 			d.cacheLock.Lock()
 			cb = d.cache[bp%256]
-			if cb != nil && binary.LittleEndian.Uint32(cb[CHECKSUM_INTERVAL:]) == bp {
+			if cb != nil {
 				if vp+4 <= CHECKSUM_INTERVAL {
 					z := binary.LittleEndian.Uint32(cb[vp:])
 					if vp+4+z <= CHECKSUM_INTERVAL {
@@ -561,18 +561,14 @@ func (d *diskBlock) reader(cr brimutil.ChecksummedReader, c chan *ReadValue) {
 					}
 				}
 			} else {
-				chanCB := false
+				cb = <-d.cacheChan
 				if cb == nil {
-					chanCB = true
-					cb = <-d.cacheChan
-					if cb == nil {
-						cb = make([]byte, CHECKSUM_INTERVAL+4)
-					} else if len(cb) == 0 {
-						cb = cb[:cap(cb)]
-					} else {
-					}
+					cb = make([]byte, CHECKSUM_INTERVAL+4)
+				} else if len(cb) == 0 {
+					cb = cb[:cap(cb)]
+				} else {
+					d.cache[binary.LittleEndian.Uint32(cb[CHECKSUM_INTERVAL:])%256] = nil
 				}
-				d.cache[binary.LittleEndian.Uint32(cb[CHECKSUM_INTERVAL:])%256] = nil
 				cr.Seek(int64(bp), 0)
 				if _, err := io.ReadFull(cr, cb[:CHECKSUM_INTERVAL]); err != nil {
 					if err != io.EOF && err != io.ErrUnexpectedEOF {
@@ -584,9 +580,7 @@ func (d *diskBlock) reader(cr brimutil.ChecksummedReader, c chan *ReadValue) {
 				} else {
 					binary.LittleEndian.PutUint32(cb[CHECKSUM_INTERVAL:], bp)
 					d.cache[bp%256] = cb
-					if chanCB {
-						d.cacheChan <- cb
-					}
+					d.cacheChan <- cb
 					if vp+4 <= CHECKSUM_INTERVAL {
 						z := binary.LittleEndian.Uint32(cb[vp:])
 						if vp+4+z <= CHECKSUM_INTERVAL {
