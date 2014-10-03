@@ -1,7 +1,9 @@
 package brimstore
 
 import (
+	"os"
 	"runtime"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"unsafe"
@@ -21,7 +23,16 @@ const (
 )
 
 func newKeyLocationMap() *keyLocationMap {
-	bucketCount := 1 << PowerOfTwoNeeded(128*1024*1024/uint64(unsafe.Sizeof(keyLocation{})))
+	var bucketBlockTarget uint64
+	if env := os.Getenv("BRIMSTORE_BUCKET_BLOCK_TARGET"); env != "" {
+		if val, err := strconv.ParseUint(env, 0, 64); err == nil {
+			bucketBlockTarget = val
+		}
+	}
+	if bucketBlockTarget == 0 {
+		bucketBlockTarget = 4 * 1024 * 1024
+	}
+	bucketCount := 1 << PowerOfTwoNeeded(bucketBlockTarget/uint64(unsafe.Sizeof(keyLocation{})))
 	lockCount := 1 << PowerOfTwoNeeded(uint64(runtime.GOMAXPROCS(0)*runtime.GOMAXPROCS(0)))
 	return &keyLocationMap{
 		a:          newKeyLocationMapSection(bucketCount, lockCount),

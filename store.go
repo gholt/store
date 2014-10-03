@@ -16,6 +16,8 @@ import (
 
 const CHECKSUM_INTERVAL = 65532
 
+var ErrKeyNotFound error = fmt.Errorf("key not found")
+
 type ReadValue struct {
 	KeyHashA uint64
 	KeyHashB uint64
@@ -81,6 +83,13 @@ func NewStore() *Store {
 
 func (s *Store) MaxValueSize() int {
 	return s.maxValueSize
+}
+
+func (s *Store) NewReadValue() *ReadValue {
+	return &ReadValue{
+		Value:    make([]byte, s.maxValueSize),
+		ReadChan: make(chan error, 1),
+	}
 }
 
 func (s *Store) Start() {
@@ -164,8 +173,7 @@ func (s *Store) Get(r *ReadValue) {
 	var id uint16
 	id, r.offset, r.Seq = s.keyLocationMap.get(r.KeyHashA, r.KeyHashB)
 	if id < KEY_LOCATION_BLOCK_ID_OFFSET {
-		r.Value = nil
-		r.ReadChan <- nil
+		r.ReadChan <- ErrKeyNotFound
 	}
 	s.keyLocationBlock(id).Get(r)
 }
@@ -476,7 +484,7 @@ func (m *memBlock) Timestamp() int64 {
 
 func (m *memBlock) Get(r *ReadValue) {
 	z := binary.LittleEndian.Uint32(m.data[r.offset:])
-	r.Value = make([]byte, z)
+	r.Value = r.Value[:z]
 	copy(r.Value, m.data[r.offset+4:])
 	r.ReadChan <- nil
 }
@@ -497,15 +505,15 @@ func (d *diskBlock) Get(r *ReadValue) {
 }
 
 func reader(cr brimutil.ChecksummedReader, c chan *ReadValue) {
+	zb := make([]byte, 4)
 	for {
 		r := <-c
-		zb := make([]byte, 4)
 		cr.Seek(int64(r.offset), 0)
 		if _, err := io.ReadFull(cr, zb); err != nil {
 			r.ReadChan <- err
 		}
 		z := binary.LittleEndian.Uint32(zb)
-		r.Value = make([]byte, z)
+		r.Value = r.Value[:z]
 		if _, err := io.ReadFull(cr, r.Value); err != nil {
 			r.ReadChan <- err
 		}

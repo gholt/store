@@ -1,34 +1,48 @@
 package main
 
 import (
-	"encoding/binary"
-	//"runtime/pprof"
 	"bytes"
+	"encoding/binary"
 	"fmt"
 	"github.com/gholt/brimstore"
 	"github.com/gholt/brimutil"
 	"os"
 	"runtime"
+	//"runtime/pprof"
 	"sync"
 	"time"
 )
 
 func main() {
-	/*
-	   cpuProf, err := os.Create("brimstore.cpu.pprof")
-	   if err != nil {
-	       panic(err)
-	   }
-	   pprof.StartCPUProfile(cpuProf)
-	*/
-	/*
-	   blockPprof := pprof.Lookup("block")
-	   runtime.SetBlockProfileRate(1)
-	*/
+	//cpuProf, err := os.Create("brimstore.cpu.pprof")
+	//if err != nil {
+	//	panic(err)
+	//}
+	//pprof.StartCPUProfile(cpuProf)
+	//blockPprof := pprof.Lookup("block")
+	//runtime.SetBlockProfileRate(1)
+
+	//if os.Getenv("GOMAXPROCS") == "" {
+	//	runtime.GOMAXPROCS(runtime.NumCPU())
+	//}
+	//s := brimstore.NewStore()
+	//s.Start()
+	//w := &brimstore.WriteValue{
+	//	Value:       []byte{},
+	//	WrittenChan: make(chan error, 1),
+	//}
+	//s.Put(w)
+	//err := <-w.WrittenChan
+	//if err != nil {
+	//	panic(err)
+	//}
+	//time.Sleep(15 * time.Second)
+	//s.Stop()
+
 	seed := int64(1)
 	valueLength := 128
 	fmt.Println(valueLength, "value length")
-	targetBytes := 1 * 1024 * 1024
+	targetBytes := 4 * 1024 * 1024 * 1024
 	fmt.Println(targetBytes, "target bytes")
 	cores := runtime.GOMAXPROCS(0)
 	if os.Getenv("GOMAXPROCS") == "" {
@@ -108,22 +122,18 @@ func main() {
 	for i := 0; i < clients; i++ {
 		c[i] = make(chan int)
 		go func(keys []byte, c chan int) {
-			r := &brimstore.ReadValue{
-				ReadChan: make(chan error, 1),
-			}
+			r := s.NewReadValue()
 			m := 0
 			for o := 0; o < len(keys); o += 16 {
 				r.KeyHashA = binary.LittleEndian.Uint64(keys[o:])
 				r.KeyHashB = binary.LittleEndian.Uint64(keys[o+8:])
 				s.Get(r)
 				err := <-r.ReadChan
-				if err != nil {
-					panic(err)
-				}
-				if r.Value == nil {
+				if err == brimstore.ErrKeyNotFound {
 					m++
-				}
-				if !bytes.Equal(r.Value, value) {
+				} else if err != nil {
+					panic(err)
+				} else if !bytes.Equal(r.Value, value) {
 					panic(fmt.Sprintf("%#v != %#v", string(r.Value), string(value)))
 				}
 			}
@@ -182,22 +192,18 @@ func main() {
 			wg.Done()
 		}(keys2[i], uint64(i*keysPerClient))
 		go func(keys []byte, c chan int) {
-			r := &brimstore.ReadValue{
-				ReadChan: make(chan error, 1),
-			}
+			r := s.NewReadValue()
 			m := 0
 			for o := 0; o < len(keys); o += 16 {
 				r.KeyHashA = binary.LittleEndian.Uint64(keys[o:])
 				r.KeyHashB = binary.LittleEndian.Uint64(keys[o+8:])
 				s.Get(r)
 				err := <-r.ReadChan
-				if err != nil {
-					panic(err)
-				}
-				if r.Value == nil {
+				if err == brimstore.ErrKeyNotFound {
 					m++
-				}
-				if !bytes.Equal(r.Value, value) {
+				} else if err != nil {
+					panic(err)
+				} else if !bytes.Equal(r.Value, value) {
 					panic(fmt.Sprintf("%#v != %#v", string(r.Value), string(value)))
 				}
 			}
@@ -233,22 +239,18 @@ func main() {
 	speedStart = start
 	for i := 0; i < clients; i++ {
 		go func(keys []byte, c chan int) {
-			r := &brimstore.ReadValue{
-				ReadChan: make(chan error, 1),
-			}
+			r := s.NewReadValue()
 			m := 0
 			for o := 0; o < len(keys); o += 16 {
 				r.KeyHashA = binary.LittleEndian.Uint64(keys[o:])
 				r.KeyHashB = binary.LittleEndian.Uint64(keys[o+8:])
 				s.Get(r)
 				err := <-r.ReadChan
-				if err != nil {
-					panic(err)
-				}
-				if r.Value == nil {
+				if err == brimstore.ErrKeyNotFound {
 					m++
-				}
-				if !bytes.Equal(r.Value, value) {
+				} else if err != nil {
+					panic(err)
+				} else if !bytes.Equal(r.Value, value) {
 					panic(fmt.Sprintf("%#v != %#v", string(r.Value), string(value)))
 				}
 			}
@@ -261,22 +263,18 @@ func main() {
 	}
 	for i := 0; i < clients; i++ {
 		go func(keys []byte, c chan int) {
-			r := &brimstore.ReadValue{
-				ReadChan: make(chan error, 1),
-			}
+			r := s.NewReadValue()
 			m := 0
 			for o := 0; o < len(keys); o += 16 {
 				r.KeyHashA = binary.LittleEndian.Uint64(keys[o:])
 				r.KeyHashB = binary.LittleEndian.Uint64(keys[o+8:])
 				s.Get(r)
 				err := <-r.ReadChan
-				if err != nil {
-					panic(err)
-				}
-				if r.Value == nil {
+				if err == brimstore.ErrKeyNotFound {
 					m++
-				}
-				if !bytes.Equal(r.Value, value) {
+				} else if err != nil {
+					panic(err)
+				} else if !bytes.Equal(r.Value, value) {
 					panic(fmt.Sprintf("%#v != %#v", string(r.Value), string(value)))
 				}
 			}
@@ -293,16 +291,13 @@ func main() {
 	fmt.Printf("%.2f key lookups per second\n", float64(totalKeys*2)/seconds)
 	fmt.Printf("%.2fns per key lookup\n", float64(nanoseconds)/float64(totalKeys*2))
 	fmt.Println(m, "keys missing")
-	/*
-	   f, err := os.Create("brimstore.blocking.pprof")
-	   if err != nil {
-	       panic(err)
-	   }
-	   blockPprof.WriteTo(f, 0)
-	   f.Close()
-	*/
-	/*
-	   pprof.StopCPUProfile()
-	   cpuProf.Close()
-	*/
+
+	//f, err := os.Create("brimstore.blocking.pprof")
+	//if err != nil {
+	//	panic(err)
+	//}
+	//blockPprof.WriteTo(f, 0)
+	//f.Close()
+	//pprof.StopCPUProfile()
+	//cpuProf.Close()
 }
