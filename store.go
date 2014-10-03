@@ -580,7 +580,9 @@ func (d *diskBlock) reader(cr brimutil.ChecksummedReader, c chan *ReadValue) {
 						r.ReadChan <- err
 						continue
 					}
-					d.cacheChan <- cb[:0]
+					if chanCB {
+                        d.cacheChan <- cb[:0]
+                    }
 				} else {
 					binary.LittleEndian.PutUint32(cb[CHECKSUM_INTERVAL:], bp)
 					d.cache[bp%256] = cb
