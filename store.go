@@ -334,13 +334,14 @@ func (s *Store) diskWriter() {
 				panic(err)
 			}
 			db.writer = brimutil.NewMultiCoreChecksummedWriter(fp, CHECKSUM_INTERVAL, murmur3.New32, s.cores)
-			db.readValueChan = make(chan *ReadValue, s.cores*s.cores)
+			db.readValueChans = make([]chan *ReadValue, s.cores)
 			for i := 0; i < s.cores; i++ {
 				fp, err = os.Open(name)
 				if err != nil {
 					panic(err)
 				}
-				go db.reader(brimutil.NewChecksummedReader(fp, CHECKSUM_INTERVAL, murmur3.New32))
+				db.readValueChans[i] = make(chan *ReadValue, s.cores*s.cores)
+				go reader(brimutil.NewChecksummedReader(fp, CHECKSUM_INTERVAL, murmur3.New32), db.readValueChans[i])
 			}
 			db.id = s.addKeyLocationBlock(db)
 			if _, err := db.writer.Write(head); err != nil {
@@ -481,10 +482,10 @@ func (m *memBlock) Get(r *ReadValue) {
 }
 
 type diskBlock struct {
-	id            uint16
-	timestamp     int64
-	writer        io.WriteCloser
-	readValueChan chan *ReadValue
+	id             uint16
+	timestamp      int64
+	writer         io.WriteCloser
+	readValueChans []chan *ReadValue
 }
 
 func (d *diskBlock) Timestamp() int64 {
@@ -492,12 +493,12 @@ func (d *diskBlock) Timestamp() int64 {
 }
 
 func (d *diskBlock) Get(r *ReadValue) {
-	d.readValueChan <- r
+	d.readValueChans[int(r.KeyHashA>>1)%len(d.readValueChans)] <- r
 }
 
-func (d *diskBlock) reader(cr brimutil.ChecksummedReader) {
+func reader(cr brimutil.ChecksummedReader, c chan *ReadValue) {
 	for {
-		r := <-d.readValueChan
+		r := <-c
 		zb := make([]byte, 4)
 		cr.Seek(int64(r.offset), 0)
 		if _, err := io.ReadFull(cr, zb); err != nil {
