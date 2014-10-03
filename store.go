@@ -517,8 +517,8 @@ func (d *diskBlock) reader(cr brimutil.ChecksummedReader, c chan *ReadValue) {
 	zb := make([]byte, 4)
 	for {
 		r := <-c
-		bp := r.offset / CHECKSUM_INTERVAL
-		vp := r.offset - bp*CHECKSUM_INTERVAL
+		bp := r.offset / CHECKSUM_INTERVAL * CHECKSUM_INTERVAL
+		vp := r.offset - bp
 		d.cacheLock.RLock()
 		cb := d.cache[bp%256]
 		if cb != nil {
@@ -554,37 +554,46 @@ func (d *diskBlock) reader(cr brimutil.ChecksummedReader, c chan *ReadValue) {
 						continue
 					}
 				}
-				d.cacheLock.Unlock()
 			} else {
 				cb = <-d.cacheChan
 				if cb == nil {
 					cb = make([]byte, CHECKSUM_INTERVAL+4)
+				} else if len(cb) == 0 {
+					cb = cb[:cap(cb)]
 				} else {
 					d.cache[binary.LittleEndian.Uint32(cb[CHECKSUM_INTERVAL:])%256] = nil
 				}
 				cr.Seek(int64(bp), 0)
 				if _, err := io.ReadFull(cr, cb[:CHECKSUM_INTERVAL]); err != nil {
-					d.cacheLock.Unlock()
-					r.ReadChan <- err
-				}
-				binary.LittleEndian.PutUint32(cb[CHECKSUM_INTERVAL:], bp)
-				d.cache[bp%256] = cb
-				d.cacheChan <- cb
-				if vp+4 <= CHECKSUM_INTERVAL {
-					z := binary.LittleEndian.Uint32(cb[vp:])
-					if vp+4+z <= CHECKSUM_INTERVAL {
-						r.Value = r.Value[:z]
-						copy(r.Value, cb[vp+4:])
-						if !bytes.Equal(r.Value, TEST_VALUE) {
-							panic("hereC")
-						}
+					if err != io.EOF && err != io.ErrUnexpectedEOF {
 						d.cacheLock.Unlock()
-						r.ReadChan <- nil
+						r.ReadChan <- err
 						continue
 					}
+					d.cacheChan <- cb[:0]
+				} else {
+					binary.LittleEndian.PutUint32(cb[CHECKSUM_INTERVAL:], bp)
+					d.cache[bp%256] = cb
+					d.cacheChan <- cb
+					if vp+4 <= CHECKSUM_INTERVAL {
+						z := binary.LittleEndian.Uint32(cb[vp:])
+						if vp+4+z <= CHECKSUM_INTERVAL {
+							r.Value = r.Value[:z]
+							copy(r.Value, cb[vp+4:])
+							if !bytes.Equal(r.Value, TEST_VALUE) {
+								fmt.Printf("%#v\n", r.Value)
+								fmt.Printf("%#v\n", TEST_VALUE)
+								fmt.Printf("%#v\n", cb[vp:])
+								panic("hereC")
+							}
+							d.cacheLock.Unlock()
+							r.ReadChan <- nil
+							continue
+						}
+					}
 				}
-				d.cacheLock.Unlock()
 			}
+			d.cacheLock.Unlock()
 		}
 		cr.Seek(int64(r.offset), 0)
 		if _, err := io.ReadFull(cr, zb); err != nil {

@@ -42,7 +42,7 @@ func main() {
 	seed := int64(1)
 	valueLength := 128
 	fmt.Println(valueLength, "value length")
-	targetBytes := 4 * 1024 * 1024 * 1024
+	targetBytes := 1 * 1024 * 1024
 	fmt.Println(targetBytes, "target bytes")
 	cores := runtime.GOMAXPROCS(0)
 	if os.Getenv("GOMAXPROCS") == "" {
