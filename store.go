@@ -327,25 +327,22 @@ func (s *Store) diskWriter() {
 			db = nil
 		}
 		if db == nil {
-			db = &diskBlock{timestamp: time.Now().UnixNano(), readValueChan: make(chan *ReadValue, s.cores)}
+			db = &diskBlock{timestamp: time.Now().UnixNano()}
 			name := fmt.Sprintf("%d.values", db.timestamp)
 			fp, err := os.Create(name)
 			if err != nil {
 				panic(err)
 			}
 			db.writer = brimutil.NewMultiCoreChecksummedWriter(fp, CHECKSUM_INTERVAL, murmur3.New32, s.cores)
-			r := s.cores
-			if s.cores%2 == 0 {
-				// To make sure we don't get locks and offsets resonant
-				r++
+			db.readValueChan = make(chan *ReadValue, s.cores*s.cores)
+			for i := 0; i < s.cores; i++ {
+				fp, err = os.Open(name)
+				if err != nil {
+					panic(err)
+				}
+				go db.reader(brimutil.NewChecksummedReader(fp, CHECKSUM_INTERVAL, murmur3.New32))
 			}
-			fp, err = os.Open(name)
-			if err != nil {
-				panic(err)
-			}
-			db.reader = brimutil.NewChecksummedReader(fp, CHECKSUM_INTERVAL, murmur3.New32)
 			db.id = s.addKeyLocationBlock(db)
-			go db.readerRoutine()
 			if _, err := db.writer.Write(head); err != nil {
 				panic(err)
 			}
@@ -487,7 +484,6 @@ type diskBlock struct {
 	id            uint16
 	timestamp     int64
 	writer        io.WriteCloser
-	reader        brimutil.ChecksummedReader
 	readValueChan chan *ReadValue
 }
 
@@ -499,17 +495,17 @@ func (d *diskBlock) Get(r *ReadValue) {
 	d.readValueChan <- r
 }
 
-func (d *diskBlock) readerRoutine() {
+func (d *diskBlock) reader(cr brimutil.ChecksummedReader) {
 	for {
 		r := <-d.readValueChan
 		zb := make([]byte, 4)
-		d.reader.Seek(int64(r.offset), 0)
-		if _, err := io.ReadFull(d.reader, zb); err != nil {
+		cr.Seek(int64(r.offset), 0)
+		if _, err := io.ReadFull(cr, zb); err != nil {
 			r.ReadChan <- err
 		}
 		z := binary.LittleEndian.Uint32(zb)
 		r.Value = make([]byte, z)
-		if _, err := io.ReadFull(d.reader, r.Value); err != nil {
+		if _, err := io.ReadFull(cr, r.Value); err != nil {
 			r.ReadChan <- err
 		}
 		r.ReadChan <- nil
