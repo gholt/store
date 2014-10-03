@@ -75,7 +75,7 @@ func main() {
 	fmt.Println(time.Now().Sub(start), "to make keys and value")
 	start = time.Now()
 	speedStart := start
-	s := brimstore.NewStore()
+	s := brimstore.NewStore(nil)
 	s.Start()
 	fmt.Println(time.Now().Sub(start), "to start store")
 	start = time.Now()

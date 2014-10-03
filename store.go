@@ -14,8 +14,6 @@ import (
 	"time"
 )
 
-const _CHECKSUM_INTERVAL = 65532
-
 var ErrKeyNotFound error = fmt.Errorf("key not found")
 
 type ReadValue struct {
@@ -35,6 +33,59 @@ type WriteValue struct {
 	WrittenChan chan error
 }
 
+type StoreOpts struct {
+	Cores             int
+	MaxValueSize      int
+	MemTOCPageSize    int
+	MemValuesPageSize int
+	ChecksumInterval  int
+}
+
+func NewStoreOpts() *StoreOpts {
+	opts := &StoreOpts{}
+	if env := os.Getenv("BRIMSTORE_CORES"); env != "" {
+		if val, err := strconv.Atoi(env); err == nil {
+			opts.Cores = val
+		}
+	}
+	if opts.Cores <= 0 {
+		opts.Cores = runtime.GOMAXPROCS(0)
+	}
+	if env := os.Getenv("BRIMSTORE_MAX_VALUE_SIZE"); env != "" {
+		if val, err := strconv.Atoi(env); err == nil {
+			opts.MaxValueSize = val
+		}
+	}
+	if opts.MaxValueSize <= 0 {
+		opts.MaxValueSize = 4 * 1024 * 1024
+	}
+	if env := os.Getenv("BRIMSTORE_MEM_TOC_PAGE_SIZE"); env != "" {
+		if val, err := strconv.Atoi(env); err == nil {
+			opts.MemTOCPageSize = val
+		}
+	}
+	if opts.MemTOCPageSize <= 0 {
+		opts.MemTOCPageSize = 1 << PowerOfTwoNeeded(uint64(opts.MaxValueSize+4))
+	}
+	if env := os.Getenv("BRIMSTORE_MEM_VALUES_PAGE_SIZE"); env != "" {
+		if val, err := strconv.Atoi(env); err == nil {
+			opts.MemValuesPageSize = val
+		}
+	}
+	if opts.MemValuesPageSize <= 0 {
+		opts.MemValuesPageSize = 1 << PowerOfTwoNeeded(uint64(opts.MaxValueSize+4))
+	}
+	if env := os.Getenv("BRIMSTORE_CHECKSUM_INTERVAL"); env != "" {
+		if val, err := strconv.Atoi(env); err == nil {
+			opts.ChecksumInterval = val
+		}
+	}
+	if opts.ChecksumInterval <= 0 {
+		opts.ChecksumInterval = 65532
+	}
+	return opts
+}
+
 type Store struct {
 	clearableMemBlockChan    chan *memBlock
 	clearedMemBlockChan      chan *memBlock
@@ -51,33 +102,48 @@ type Store struct {
 	keyLocationMap           *keyLocationMap
 	cores                    int
 	maxValueSize             int
-	allocSize                int
+	memTOCPageSize           int
+	memValuesPageSize        int
+	checksumInterval         int
 	diskWriterBytes          uint64
 	tocWriterBytes           uint64
 }
 
-func NewStore() *Store {
-	cores := runtime.GOMAXPROCS(0)
-	var maxValueSize int
-	if env := os.Getenv("BRIMSTORE_MAX_VALUE_SIZE"); env != "" {
-		if val, err := strconv.Atoi(env); err == nil {
-			maxValueSize = val
-		}
+func NewStore(opts *StoreOpts) *Store {
+	if opts == nil {
+		opts = NewStoreOpts()
 	}
-	if maxValueSize <= 0 {
-		maxValueSize = 4194304
+	cores := opts.Cores
+	if cores < 1 {
+		cores = 1
 	}
-	allocSize := 1 << PowerOfTwoNeeded(uint64(maxValueSize+4))
-	if allocSize < 4096 {
-		allocSize = 4096
+	maxValueSize := opts.MaxValueSize
+	if maxValueSize < 0 {
+		maxValueSize = 0
+	}
+	memTOCPageSize := opts.MemTOCPageSize
+	if memTOCPageSize < 4096 {
+		memTOCPageSize = 4096
+	}
+	memValuesPageSize := opts.MemValuesPageSize
+	if memValuesPageSize < 4096 {
+		memValuesPageSize = 4096
+	}
+	checksumInterval := opts.ChecksumInterval
+	if checksumInterval < 1024 {
+		checksumInterval = 1024
+	} else if checksumInterval >= 4294967296 {
+		checksumInterval = 4294967295
 	}
 	s := &Store{
 		keyLocationBlocks:     make([]keyLocationBlock, 65536),
 		keyLocationBlocksIDer: KEY_LOCATION_BLOCK_ID_OFFSET - 1,
 		keyLocationMap:        newKeyLocationMap(),
 		cores:                 cores,
-		allocSize:             allocSize,
 		maxValueSize:          maxValueSize,
+		memTOCPageSize:        memTOCPageSize,
+		memValuesPageSize:     memValuesPageSize,
+		checksumInterval:      checksumInterval,
 	}
 	return s
 }
@@ -106,16 +172,16 @@ func (s *Store) Start() {
 	s.tocWriterDoneChan = make(chan struct{}, 1)
 	for i := 0; i < cap(s.clearableMemBlockChan); i++ {
 		mb := &memBlock{
-			toc:  make([]byte, 0, s.allocSize),
-			data: make([]byte, 0, s.allocSize),
+			toc:  make([]byte, 0, s.memTOCPageSize),
+			data: make([]byte, 0, s.memValuesPageSize),
 		}
 		mb.id = s.addKeyLocationBlock(mb)
 		s.clearableMemBlockChan <- mb
 	}
 	for i := 0; i < cap(s.clearedMemBlockChan); i++ {
 		mb := &memBlock{
-			toc:  make([]byte, 0, s.allocSize),
-			data: make([]byte, s.allocSize),
+			toc:  make([]byte, 0, s.memTOCPageSize),
+			data: make([]byte, s.memValuesPageSize),
 		}
 		mb.id = s.addKeyLocationBlock(mb)
 		s.clearedMemBlockChan <- mb
@@ -124,7 +190,7 @@ func (s *Store) Start() {
 		s.writeValueChans[i] = make(chan *WriteValue, s.cores)
 	}
 	for i := 0; i < cap(s.freeTOCBlockChan); i++ {
-		s.freeTOCBlockChan <- make([]byte, 0, s.allocSize)
+		s.freeTOCBlockChan <- make([]byte, 0, s.memTOCPageSize)
 	}
 	for i := 0; i < len(s.memWriterDoneChans); i++ {
 		s.memWriterDoneChans[i] = make(chan struct{}, 1)
@@ -308,8 +374,8 @@ func (s *Store) diskWriter() {
 				}
 				db.writer = nil
 				dbOffset += 16
-				s.diskWriterBytes += uint64(dbOffset) + uint64(dbOffset)/_CHECKSUM_INTERVAL*4
-				if dbOffset%_CHECKSUM_INTERVAL != 0 {
+				s.diskWriterBytes += uint64(dbOffset) + uint64(dbOffset)/uint64(s.checksumInterval)*4
+				if dbOffset%uint32(s.checksumInterval) != 0 {
 					s.diskWriterBytes += 4
 				}
 			}
@@ -327,8 +393,8 @@ func (s *Store) diskWriter() {
 			}
 			db.writer = nil
 			dbOffset += 16
-			s.diskWriterBytes += uint64(dbOffset) + uint64(dbOffset)/_CHECKSUM_INTERVAL*4
-			if dbOffset%_CHECKSUM_INTERVAL != 0 {
+			s.diskWriterBytes += uint64(dbOffset) + uint64(dbOffset)/uint64(s.checksumInterval)*4
+			if dbOffset%uint32(s.checksumInterval) != 0 {
 				s.diskWriterBytes += 4
 			}
 			db = nil
@@ -340,7 +406,7 @@ func (s *Store) diskWriter() {
 			if err != nil {
 				panic(err)
 			}
-			db.writer = brimutil.NewMultiCoreChecksummedWriter(fp, _CHECKSUM_INTERVAL, murmur3.New32, s.cores)
+			db.writer = brimutil.NewMultiCoreChecksummedWriter(fp, s.checksumInterval, murmur3.New32, s.cores)
 			db.readValueChans = make([]chan *ReadValue, 4)
 			for i := 0; i < len(db.readValueChans); i++ {
 				fp, err = os.Open(name)
@@ -348,7 +414,7 @@ func (s *Store) diskWriter() {
 					panic(err)
 				}
 				db.readValueChans[i] = make(chan *ReadValue, s.cores)
-				go reader(brimutil.NewChecksummedReader(fp, _CHECKSUM_INTERVAL, murmur3.New32), db.readValueChans[i])
+				go reader(brimutil.NewChecksummedReader(fp, s.checksumInterval, murmur3.New32), db.readValueChans[i])
 			}
 			db.id = s.addKeyLocationBlock(db)
 			if _, err := db.writer.Write(head); err != nil {
@@ -389,8 +455,8 @@ func (s *Store) tocWriter() {
 					panic(err)
 				}
 				offsetB += 16
-				s.tocWriterBytes += offsetB + offsetB/_CHECKSUM_INTERVAL*4
-				if offsetB%_CHECKSUM_INTERVAL != 0 {
+				s.tocWriterBytes += offsetB + offsetB/uint64(s.checksumInterval*4)
+				if offsetB%uint64(s.checksumInterval) != 0 {
 					s.tocWriterBytes += 4
 				}
 			}
@@ -403,8 +469,8 @@ func (s *Store) tocWriter() {
 					panic(err)
 				}
 				offsetA += 16
-				s.tocWriterBytes += offsetA + offsetA/_CHECKSUM_INTERVAL*4
-				if offsetA%_CHECKSUM_INTERVAL != 0 {
+				s.tocWriterBytes += offsetA + offsetA/uint64(s.checksumInterval)*4
+				if offsetA%uint64(s.checksumInterval) != 0 {
 					s.tocWriterBytes += 4
 				}
 			}
@@ -436,8 +502,8 @@ func (s *Store) tocWriter() {
 					panic(err)
 				}
 				offsetB += 16
-				s.tocWriterBytes += offsetB + offsetB/_CHECKSUM_INTERVAL*4
-				if offsetB%_CHECKSUM_INTERVAL != 0 {
+				s.tocWriterBytes += offsetB + offsetB/uint64(s.checksumInterval)*4
+				if offsetB%uint64(s.checksumInterval) != 0 {
 					s.tocWriterBytes += 4
 				}
 			}
@@ -450,7 +516,7 @@ func (s *Store) tocWriter() {
 				panic(err)
 			}
 			//fp := &brimutil.NullIO{}
-			writerA = brimutil.NewMultiCoreChecksummedWriter(fp, _CHECKSUM_INTERVAL, murmur3.New32, s.cores)
+			writerA = brimutil.NewMultiCoreChecksummedWriter(fp, s.checksumInterval, murmur3.New32, s.cores)
 			if _, err := writerA.Write(head); err != nil {
 				panic(err)
 			}
