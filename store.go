@@ -323,10 +323,6 @@ func (s *Store) diskWriter() {
 				panic(err)
 			}
 			db.writer = brimutil.NewMultiCoreChecksummedWriter(fp, CHECKSUM_INTERVAL, murmur3.New32, s.cores)
-			fp, err = os.Open(name)
-			if err != nil {
-				panic(err)
-			}
 			r := s.cores
 			if s.cores%2 == 0 {
 				// To make sure we don't get locks and offsets resonant
@@ -334,6 +330,10 @@ func (s *Store) diskWriter() {
 			}
 			db.readers = make([]brimutil.ChecksummedReader, r)
 			for i := 0; i < r; i++ {
+				fp, err = os.Open(name)
+				if err != nil {
+					panic(err)
+				}
 				db.readers[i] = brimutil.NewChecksummedReader(fp, CHECKSUM_INTERVAL, murmur3.New32)
 			}
 			db.id = s.addKeyLocationBlock(db)
