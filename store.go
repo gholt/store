@@ -289,8 +289,7 @@ func (s *Store) diskWriter() {
 					panic(err)
 				}
 				dbOffset += 16
-				s.diskWriterBytes += 16
-				s.diskWriterBytes += uint64(dbOffset) / CHECKSUM_INTERVAL * 4
+				s.diskWriterBytes += uint64(dbOffset) + uint64(dbOffset)/CHECKSUM_INTERVAL*4
 				if dbOffset%CHECKSUM_INTERVAL != 0 {
 					s.diskWriterBytes += 4
 				}
@@ -308,8 +307,7 @@ func (s *Store) diskWriter() {
 				panic(err)
 			}
 			dbOffset += 16
-			s.diskWriterBytes += 16
-			s.diskWriterBytes += uint64(dbOffset) / CHECKSUM_INTERVAL * 4
+			s.diskWriterBytes += uint64(dbOffset) + uint64(dbOffset)/CHECKSUM_INTERVAL*4
 			if dbOffset%CHECKSUM_INTERVAL != 0 {
 				s.diskWriterBytes += 4
 			}
@@ -328,7 +326,6 @@ func (s *Store) diskWriter() {
 				panic(err)
 			}
 			dbOffset = 32
-			s.diskWriterBytes += 32
 		}
 		if _, err := db.file.Write(mb.data); err != nil {
 			panic(err)
@@ -336,7 +333,6 @@ func (s *Store) diskWriter() {
 		mb.diskID = db.id
 		mb.diskOffset = dbOffset
 		dbOffset += uint32(len(mb.data))
-		s.diskWriterBytes += uint64(len(mb.data))
 		s.clearableMemBlockChan <- mb
 	}
 	s.diskWriterDoneChan <- struct{}{}
@@ -364,8 +360,7 @@ func (s *Store) tocWriter() {
 					panic(err)
 				}
 				offsetB += 16
-				s.tocWriterBytes += 16
-				s.tocWriterBytes += offsetB / CHECKSUM_INTERVAL * 4
+				s.tocWriterBytes += offsetB + offsetB/CHECKSUM_INTERVAL*4
 				if offsetB%CHECKSUM_INTERVAL != 0 {
 					s.tocWriterBytes += 4
 				}
@@ -379,9 +374,8 @@ func (s *Store) tocWriter() {
 					panic(err)
 				}
 				offsetB += 16
-				s.tocWriterBytes += 16
-				s.tocWriterBytes += offsetA / CHECKSUM_INTERVAL * 4
-				if offsetB%CHECKSUM_INTERVAL != 0 {
+				s.tocWriterBytes += offsetA + offsetA/CHECKSUM_INTERVAL*4
+				if offsetA%CHECKSUM_INTERVAL != 0 {
 					s.tocWriterBytes += 4
 				}
 			}
@@ -394,13 +388,11 @@ func (s *Store) tocWriter() {
 				panic(err)
 			}
 			offsetA += uint64(len(t))
-			s.tocWriterBytes += uint64(len(t))
 		case timestampB:
 			if _, err := writerB.Write(t); err != nil {
 				panic(err)
 			}
 			offsetB += uint64(len(t))
-			s.tocWriterBytes += uint64(len(t))
 		default:
 			// An assumption is made here: If the timestamp for this toc block
 			// doesn't match the last two seen timestamps then we expect no
@@ -415,8 +407,7 @@ func (s *Store) tocWriter() {
 					panic(err)
 				}
 				offsetB += 16
-				s.tocWriterBytes += 16
-				s.tocWriterBytes += offsetB / CHECKSUM_INTERVAL * 4
+				s.tocWriterBytes += offsetB + offsetB/CHECKSUM_INTERVAL*4
 				if offsetB%CHECKSUM_INTERVAL != 0 {
 					s.tocWriterBytes += 4
 				}
@@ -438,7 +429,6 @@ func (s *Store) tocWriter() {
 				panic(err)
 			}
 			offsetA = 32 + uint64(len(t))
-			s.tocWriterBytes += 32 + uint64(len(t))
 		}
 		s.freeTOCBlockChan <- t[:0]
 	}
