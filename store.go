@@ -528,6 +528,9 @@ func (d *diskBlock) reader(cr brimutil.ChecksummedReader, c chan *ReadValue) {
 					r.Value = r.Value[:z]
 					copy(r.Value, cb[vp+4:])
 					if !bytes.Equal(r.Value, TEST_VALUE) {
+						fmt.Printf("%#v\n", r.Value)
+						fmt.Printf("%#v\n", TEST_VALUE)
+						fmt.Printf("%#v\n", cb[vp:])
 						panic("hereA")
 					}
 					d.cacheLock.RUnlock()
@@ -547,6 +550,9 @@ func (d *diskBlock) reader(cr brimutil.ChecksummedReader, c chan *ReadValue) {
 						r.Value = r.Value[:z]
 						copy(r.Value, cb[vp+4:])
 						if !bytes.Equal(r.Value, TEST_VALUE) {
+							fmt.Printf("%#v\n", r.Value)
+							fmt.Printf("%#v\n", TEST_VALUE)
+							fmt.Printf("%#v\n", cb[vp:])
 							panic("hereB")
 						}
 						d.cacheLock.Unlock()
