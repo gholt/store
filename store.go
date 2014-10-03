@@ -16,6 +16,15 @@ import (
 
 const CHECKSUM_INTERVAL = 65532
 
+type ReadValue struct {
+	KeyHashA uint64
+	KeyHashB uint64
+	Value    []byte
+	Seq      uint64
+	ReadChan chan error
+	offset   uint32
+}
+
 type WriteValue struct {
 	KeyHashA    uint64
 	KeyHashB    uint64
@@ -28,6 +37,7 @@ type Store struct {
 	clearableMemBlockChan    chan *memBlock
 	clearedMemBlockChan      chan *memBlock
 	writeValueChans          []chan *WriteValue
+	readValueChans           []chan *ReadValue
 	diskWritableMemBlockChan chan *memBlock
 	freeTOCBlockChan         chan []byte
 	pendingTOCBlockChan      chan []byte
@@ -78,6 +88,7 @@ func (s *Store) Start() {
 	s.clearableMemBlockChan = make(chan *memBlock, s.cores)
 	s.clearedMemBlockChan = make(chan *memBlock, s.cores)
 	s.writeValueChans = make([]chan *WriteValue, s.cores)
+	s.readValueChans = make([]chan *ReadValue, 0)
 	s.diskWritableMemBlockChan = make(chan *memBlock, s.cores)
 	s.freeTOCBlockChan = make(chan []byte, s.cores)
 	s.pendingTOCBlockChan = make(chan []byte, s.cores)
@@ -151,12 +162,14 @@ func (s *Store) Stop() uint64 {
 	return s.diskWriterBytes + s.tocWriterBytes
 }
 
-func (s *Store) Get(keyHashA uint64, keyHashB uint64) ([]byte, uint64) {
-	i, o, q := s.keyLocationMap.get(keyHashA, keyHashB)
-	if i < KEY_LOCATION_BLOCK_ID_OFFSET {
-		return nil, 0
+func (s *Store) Get(r *ReadValue) {
+	var id uint16
+	id, r.offset, r.Seq = s.keyLocationMap.get(r.KeyHashA, r.KeyHashB)
+	if id < KEY_LOCATION_BLOCK_ID_OFFSET {
+		r.Value = nil
+		r.ReadChan <- nil
 	}
-	return s.keyLocationBlock(i).Get(o), q
+	s.readValueChans[id-KEY_LOCATION_BLOCK_ID_OFFSET] <- r
 }
 func (s *Store) Put(w *WriteValue) {
 	s.writeValueChans[int(w.KeyHashA>>1)%len(s.writeValueChans)] <- w
@@ -173,7 +186,10 @@ func (s *Store) addKeyLocationBlock(block keyLocationBlock) uint16 {
 	s.keyLocationBlockLock.Lock()
 	id := uint16(KEY_LOCATION_BLOCK_ID_OFFSET + len(s.keyLocationBlocks))
 	s.keyLocationBlocks = append(s.keyLocationBlocks, block)
+	c := make(chan *ReadValue, s.cores)
+	s.readValueChans = append(s.readValueChans, c)
 	s.keyLocationBlockLock.Unlock()
+	go s.reader(c, block)
 	return id
 }
 
@@ -328,15 +344,7 @@ func (s *Store) diskWriter() {
 				// To make sure we don't get locks and offsets resonant
 				r++
 			}
-			db.readers = make([]brimutil.ChecksummedReader, r)
-			db.readerLocks = make([]sync.Mutex, r)
-			for i := 0; i < r; i++ {
-				fp, err = os.Open(name)
-				if err != nil {
-					panic(err)
-				}
-				db.readers[i] = brimutil.NewChecksummedReader(fp, CHECKSUM_INTERVAL, murmur3.New32)
-			}
+			db.reader = brimutil.NewChecksummedReader(fp, CHECKSUM_INTERVAL, murmur3.New32)
 			db.id = s.addKeyLocationBlock(db)
 			if _, err := db.writer.Write(head); err != nil {
 				panic(err)
@@ -451,6 +459,14 @@ func (s *Store) tocWriter() {
 	s.tocWriterDoneChan <- struct{}{}
 }
 
+func (s *Store) reader(c chan *ReadValue, b keyLocationBlock) {
+	for {
+		r := <-c
+		r.Value = b.Get(r.offset)
+		r.ReadChan <- nil
+	}
+}
+
 type keyLocationBlock interface {
 	Timestamp() int64
 	Get(offset uint32) []byte
@@ -476,11 +492,10 @@ func (m *memBlock) Get(offset uint32) []byte {
 }
 
 type diskBlock struct {
-	id          uint16
-	timestamp   int64
-	writer      io.WriteCloser
-	readers     []brimutil.ChecksummedReader
-	readerLocks []sync.Mutex
+	id        uint16
+	timestamp int64
+	writer    io.WriteCloser
+	reader    brimutil.ChecksummedReader
 }
 
 func (d *diskBlock) Timestamp() int64 {
@@ -488,18 +503,15 @@ func (d *diskBlock) Timestamp() int64 {
 }
 
 func (d *diskBlock) Get(offset uint32) []byte {
-	ix := int(offset) % len(d.readerLocks)
-	d.readerLocks[ix].Lock()
 	v := make([]byte, 4)
-	d.readers[ix].Seek(int64(offset), 0)
-	if _, err := io.ReadFull(d.readers[ix], v); err != nil {
+	d.reader.Seek(int64(offset), 0)
+	if _, err := io.ReadFull(d.reader, v); err != nil {
 		panic(err)
 	}
 	z := binary.LittleEndian.Uint32(v)
 	v = make([]byte, z)
-	if _, err := io.ReadFull(d.readers[ix], v); err != nil {
+	if _, err := io.ReadFull(d.reader, v); err != nil {
 		panic(err)
 	}
-	d.readerLocks[ix].Unlock()
 	return v
 }

@@ -108,14 +108,23 @@ func main() {
 	for i := 0; i < clients; i++ {
 		c[i] = make(chan int)
 		go func(keys []byte, c chan int) {
+			r := &brimstore.ReadValue{
+				ReadChan: make(chan error, 1),
+			}
 			m := 0
 			for o := 0; o < len(keys); o += 16 {
-				v, _ := s.Get(binary.LittleEndian.Uint64(keys[o:]), binary.LittleEndian.Uint64(keys[o+8:]))
-				if v == nil {
+				r.KeyHashA = binary.LittleEndian.Uint64(keys[o:])
+				r.KeyHashB = binary.LittleEndian.Uint64(keys[o+8:])
+				s.Get(r)
+				err := <-r.ReadChan
+				if err != nil {
+					panic(err)
+				}
+				if r.Value == nil {
 					m++
 				}
-				if !bytes.Equal(v, value) {
-					panic(fmt.Sprintf("%#v != %#v", string(v), string(value)))
+				if !bytes.Equal(r.Value, value) {
+					panic(fmt.Sprintf("%#v != %#v", string(r.Value), string(value)))
 				}
 			}
 			c <- m
@@ -173,11 +182,23 @@ func main() {
 			wg.Done()
 		}(keys2[i], uint64(i*keysPerClient))
 		go func(keys []byte, c chan int) {
+			r := &brimstore.ReadValue{
+				ReadChan: make(chan error, 1),
+			}
 			m := 0
 			for o := 0; o < len(keys); o += 16 {
-				v, _ := s.Get(binary.LittleEndian.Uint64(keys[o:]), binary.LittleEndian.Uint64(keys[o+8:]))
-				if v == nil {
+				r.KeyHashA = binary.LittleEndian.Uint64(keys[o:])
+				r.KeyHashB = binary.LittleEndian.Uint64(keys[o+8:])
+				s.Get(r)
+				err := <-r.ReadChan
+				if err != nil {
+					panic(err)
+				}
+				if r.Value == nil {
 					m++
+				}
+				if !bytes.Equal(r.Value, value) {
+					panic(fmt.Sprintf("%#v != %#v", string(r.Value), string(value)))
 				}
 			}
 			c <- m
@@ -212,11 +233,23 @@ func main() {
 	speedStart = start
 	for i := 0; i < clients; i++ {
 		go func(keys []byte, c chan int) {
+			r := &brimstore.ReadValue{
+				ReadChan: make(chan error, 1),
+			}
 			m := 0
 			for o := 0; o < len(keys); o += 16 {
-				v, _ := s.Get(binary.LittleEndian.Uint64(keys[o:]), binary.LittleEndian.Uint64(keys[o+8:]))
-				if v == nil {
+				r.KeyHashA = binary.LittleEndian.Uint64(keys[o:])
+				r.KeyHashB = binary.LittleEndian.Uint64(keys[o+8:])
+				s.Get(r)
+				err := <-r.ReadChan
+				if err != nil {
+					panic(err)
+				}
+				if r.Value == nil {
 					m++
+				}
+				if !bytes.Equal(r.Value, value) {
+					panic(fmt.Sprintf("%#v != %#v", string(r.Value), string(value)))
 				}
 			}
 			c <- m
@@ -228,11 +261,23 @@ func main() {
 	}
 	for i := 0; i < clients; i++ {
 		go func(keys []byte, c chan int) {
+			r := &brimstore.ReadValue{
+				ReadChan: make(chan error, 1),
+			}
 			m := 0
 			for o := 0; o < len(keys); o += 16 {
-				v, _ := s.Get(binary.LittleEndian.Uint64(keys[o:]), binary.LittleEndian.Uint64(keys[o+8:]))
-				if v == nil {
+				r.KeyHashA = binary.LittleEndian.Uint64(keys[o:])
+				r.KeyHashB = binary.LittleEndian.Uint64(keys[o+8:])
+				s.Get(r)
+				err := <-r.ReadChan
+				if err != nil {
+					panic(err)
+				}
+				if r.Value == nil {
 					m++
+				}
+				if !bytes.Equal(r.Value, value) {
+					panic(fmt.Sprintf("%#v != %#v", string(r.Value), string(value)))
 				}
 			}
 			c <- m
