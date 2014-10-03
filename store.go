@@ -329,6 +329,7 @@ func (s *Store) diskWriter() {
 				r++
 			}
 			db.readers = make([]brimutil.ChecksummedReader, r)
+			db.readerLocks = make([]sync.Mutex, r)
 			for i := 0; i < r; i++ {
 				fp, err = os.Open(name)
 				if err != nil {
