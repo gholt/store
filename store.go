@@ -14,7 +14,7 @@ import (
 	"time"
 )
 
-const CHECKSUM_INTERVAL = 65532
+const _CHECKSUM_INTERVAL = 65532
 
 var ErrKeyNotFound error = fmt.Errorf("key not found")
 
@@ -308,8 +308,8 @@ func (s *Store) diskWriter() {
 				}
 				db.writer = nil
 				dbOffset += 16
-				s.diskWriterBytes += uint64(dbOffset) + uint64(dbOffset)/CHECKSUM_INTERVAL*4
-				if dbOffset%CHECKSUM_INTERVAL != 0 {
+				s.diskWriterBytes += uint64(dbOffset) + uint64(dbOffset)/_CHECKSUM_INTERVAL*4
+				if dbOffset%_CHECKSUM_INTERVAL != 0 {
 					s.diskWriterBytes += 4
 				}
 			}
@@ -327,8 +327,8 @@ func (s *Store) diskWriter() {
 			}
 			db.writer = nil
 			dbOffset += 16
-			s.diskWriterBytes += uint64(dbOffset) + uint64(dbOffset)/CHECKSUM_INTERVAL*4
-			if dbOffset%CHECKSUM_INTERVAL != 0 {
+			s.diskWriterBytes += uint64(dbOffset) + uint64(dbOffset)/_CHECKSUM_INTERVAL*4
+			if dbOffset%_CHECKSUM_INTERVAL != 0 {
 				s.diskWriterBytes += 4
 			}
 			db = nil
@@ -340,7 +340,7 @@ func (s *Store) diskWriter() {
 			if err != nil {
 				panic(err)
 			}
-			db.writer = brimutil.NewMultiCoreChecksummedWriter(fp, CHECKSUM_INTERVAL, murmur3.New32, s.cores)
+			db.writer = brimutil.NewMultiCoreChecksummedWriter(fp, _CHECKSUM_INTERVAL, murmur3.New32, s.cores)
 			db.readValueChans = make([]chan *ReadValue, 4)
 			for i := 0; i < len(db.readValueChans); i++ {
 				fp, err = os.Open(name)
@@ -348,7 +348,7 @@ func (s *Store) diskWriter() {
 					panic(err)
 				}
 				db.readValueChans[i] = make(chan *ReadValue, s.cores)
-				go reader(brimutil.NewChecksummedReader(fp, CHECKSUM_INTERVAL, murmur3.New32), db.readValueChans[i])
+				go reader(brimutil.NewChecksummedReader(fp, _CHECKSUM_INTERVAL, murmur3.New32), db.readValueChans[i])
 			}
 			db.id = s.addKeyLocationBlock(db)
 			if _, err := db.writer.Write(head); err != nil {
@@ -389,8 +389,8 @@ func (s *Store) tocWriter() {
 					panic(err)
 				}
 				offsetB += 16
-				s.tocWriterBytes += offsetB + offsetB/CHECKSUM_INTERVAL*4
-				if offsetB%CHECKSUM_INTERVAL != 0 {
+				s.tocWriterBytes += offsetB + offsetB/_CHECKSUM_INTERVAL*4
+				if offsetB%_CHECKSUM_INTERVAL != 0 {
 					s.tocWriterBytes += 4
 				}
 			}
@@ -403,8 +403,8 @@ func (s *Store) tocWriter() {
 					panic(err)
 				}
 				offsetA += 16
-				s.tocWriterBytes += offsetA + offsetA/CHECKSUM_INTERVAL*4
-				if offsetA%CHECKSUM_INTERVAL != 0 {
+				s.tocWriterBytes += offsetA + offsetA/_CHECKSUM_INTERVAL*4
+				if offsetA%_CHECKSUM_INTERVAL != 0 {
 					s.tocWriterBytes += 4
 				}
 			}
@@ -436,8 +436,8 @@ func (s *Store) tocWriter() {
 					panic(err)
 				}
 				offsetB += 16
-				s.tocWriterBytes += offsetB + offsetB/CHECKSUM_INTERVAL*4
-				if offsetB%CHECKSUM_INTERVAL != 0 {
+				s.tocWriterBytes += offsetB + offsetB/_CHECKSUM_INTERVAL*4
+				if offsetB%_CHECKSUM_INTERVAL != 0 {
 					s.tocWriterBytes += 4
 				}
 			}
@@ -450,7 +450,7 @@ func (s *Store) tocWriter() {
 				panic(err)
 			}
 			//fp := &brimutil.NullIO{}
-			writerA = brimutil.NewMultiCoreChecksummedWriter(fp, CHECKSUM_INTERVAL, murmur3.New32, s.cores)
+			writerA = brimutil.NewMultiCoreChecksummedWriter(fp, _CHECKSUM_INTERVAL, murmur3.New32, s.cores)
 			if _, err := writerA.Write(head); err != nil {
 				panic(err)
 			}
