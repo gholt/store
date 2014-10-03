@@ -65,7 +65,7 @@ func NewStore() *Store {
 	if maxValueSize <= 0 {
 		maxValueSize = 4194304
 	}
-	allocSize := 1 << PowerOfTwoNeeded(uint64(maxValueSize))
+	allocSize := 1 << PowerOfTwoNeeded(uint64(maxValueSize+4))
 	if allocSize < 4096 {
 		allocSize = 4096
 	}
