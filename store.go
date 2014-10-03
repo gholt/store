@@ -344,6 +344,10 @@ func (s *Store) diskWriter() {
 				// To make sure we don't get locks and offsets resonant
 				r++
 			}
+			fp, err = os.Open(name)
+			if err != nil {
+				panic(err)
+			}
 			db.reader = brimutil.NewChecksummedReader(fp, CHECKSUM_INTERVAL, murmur3.New32)
 			db.id = s.addKeyLocationBlock(db)
 			if _, err := db.writer.Write(head); err != nil {
