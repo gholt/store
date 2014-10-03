@@ -1,7 +1,6 @@
 package brimstore
 
 import (
-	"bytes"
 	"encoding/binary"
 	"fmt"
 	"github.com/gholt/brimutil"
@@ -14,8 +13,6 @@ import (
 	"sync"
 	"time"
 )
-
-var TEST_VALUE = []byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
 
 const CHECKSUM_INTERVAL = 65532
 
@@ -527,9 +524,6 @@ func (d *diskBlock) reader(cr brimutil.ChecksummedReader, c chan *ReadValue) {
 				if vp+4+z <= CHECKSUM_INTERVAL {
 					r.Value = r.Value[:z]
 					copy(r.Value, cb[vp+4:])
-					if !bytes.Equal(r.Value, TEST_VALUE) {
-						panic("hereA")
-					}
 					d.cacheLock.RUnlock()
 					r.ReadChan <- nil
 					continue
@@ -546,9 +540,6 @@ func (d *diskBlock) reader(cr brimutil.ChecksummedReader, c chan *ReadValue) {
 					if vp+4+z <= CHECKSUM_INTERVAL {
 						r.Value = r.Value[:z]
 						copy(r.Value, cb[vp+4:])
-						if !bytes.Equal(r.Value, TEST_VALUE) {
-							panic("hereB")
-						}
 						d.cacheLock.Unlock()
 						r.ReadChan <- nil
 						continue
@@ -575,9 +566,6 @@ func (d *diskBlock) reader(cr brimutil.ChecksummedReader, c chan *ReadValue) {
 					if vp+4+z <= CHECKSUM_INTERVAL {
 						r.Value = r.Value[:z]
 						copy(r.Value, cb[vp+4:])
-						if !bytes.Equal(r.Value, TEST_VALUE) {
-							panic("hereC")
-						}
 						d.cacheLock.Unlock()
 						r.ReadChan <- nil
 						continue
@@ -594,9 +582,6 @@ func (d *diskBlock) reader(cr brimutil.ChecksummedReader, c chan *ReadValue) {
 		r.Value = r.Value[:z]
 		if _, err := io.ReadFull(cr, r.Value); err != nil {
 			r.ReadChan <- err
-		}
-		if !bytes.Equal(r.Value, TEST_VALUE) {
-			panic("hereD")
 		}
 		r.ReadChan <- nil
 	}
