@@ -148,6 +148,7 @@ func (s *Store) Stop() uint64 {
 	for s.keyLocationMap.isResizing() {
 		time.Sleep(10 * time.Millisecond)
 	}
+	fmt.Println(s.diskWriterBytes, s.tocWriterBytes)
 	return s.diskWriterBytes + s.tocWriterBytes
 }
 
@@ -373,7 +374,7 @@ func (s *Store) tocWriter() {
 				if err := writerA.Close(); err != nil {
 					panic(err)
 				}
-				offsetB += 16
+				offsetA += 16
 				s.tocWriterBytes += offsetA + offsetA/CHECKSUM_INTERVAL*4
 				if offsetA%CHECKSUM_INTERVAL != 0 {
 					s.tocWriterBytes += 4
