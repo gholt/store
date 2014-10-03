@@ -327,7 +327,15 @@ func (s *Store) diskWriter() {
 			if err != nil {
 				panic(err)
 			}
-			db.reader = brimutil.NewChecksummedReader(fp, CHECKSUM_INTERVAL, murmur3.New32)
+			r := s.cores
+			if s.cores%2 == 0 {
+				// To make sure we don't get locks and offsets resonant
+				r++
+			}
+			db.readers = make([]brimutil.ChecksummedReader, r)
+			for i := 0; i < r; i++ {
+				db.readers[i] = brimutil.NewChecksummedReader(fp, CHECKSUM_INTERVAL, murmur3.New32)
+			}
 			db.id = s.addKeyLocationBlock(db)
 			if _, err := db.writer.Write(head); err != nil {
 				panic(err)
@@ -467,11 +475,11 @@ func (m *memBlock) Get(offset uint32) []byte {
 }
 
 type diskBlock struct {
-	id         uint16
-	timestamp  int64
-	writer     io.WriteCloser
-	reader     io.ReadSeeker
-	readerLock sync.Mutex
+	id          uint16
+	timestamp   int64
+	writer      io.WriteCloser
+	readers     []brimutil.ChecksummedReader
+	readerLocks []sync.Mutex
 }
 
 func (d *diskBlock) Timestamp() int64 {
@@ -479,17 +487,18 @@ func (d *diskBlock) Timestamp() int64 {
 }
 
 func (d *diskBlock) Get(offset uint32) []byte {
-	d.readerLock.Lock()
+	ix := int(offset) % len(d.readerLocks)
+	d.readerLocks[ix].Lock()
 	v := make([]byte, 4)
-	d.reader.Seek(int64(offset), 0)
-	if _, err := io.ReadFull(d.reader, v); err != nil {
+	d.readers[ix].Seek(int64(offset), 0)
+	if _, err := io.ReadFull(d.readers[ix], v); err != nil {
 		panic(err)
 	}
 	z := binary.LittleEndian.Uint32(v)
 	v = make([]byte, z)
-	if _, err := io.ReadFull(d.reader, v); err != nil {
+	if _, err := io.ReadFull(d.readers[ix], v); err != nil {
 		panic(err)
 	}
-	d.readerLock.Unlock()
+	d.readerLocks[ix].Unlock()
 	return v
 }
