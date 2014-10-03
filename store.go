@@ -519,13 +519,15 @@ func (d *diskBlock) reader(cr brimutil.ChecksummedReader, c chan *ReadValue) {
 		d.cacheLock.RLock()
 		cb := d.cache[bp%256]
 		if cb != nil {
-			z := binary.LittleEndian.Uint32(cb[vp:])
-			if vp+4+z <= CHECKSUM_INTERVAL {
-				r.Value = r.Value[:z]
-				copy(r.Value, cb[vp+4:])
-				d.cacheLock.RUnlock()
-				r.ReadChan <- nil
-				continue
+			if vp+4 <= CHECKSUM_INTERVAL {
+				z := binary.LittleEndian.Uint32(cb[vp:])
+				if vp+4+z <= CHECKSUM_INTERVAL {
+					r.Value = r.Value[:z]
+					copy(r.Value, cb[vp+4:])
+					d.cacheLock.RUnlock()
+					r.ReadChan <- nil
+					continue
+				}
 			}
 			d.cacheLock.RUnlock()
 		} else {
@@ -533,13 +535,15 @@ func (d *diskBlock) reader(cr brimutil.ChecksummedReader, c chan *ReadValue) {
 			d.cacheLock.Lock()
 			cb = d.cache[bp%256]
 			if cb != nil {
-				z := binary.LittleEndian.Uint32(cb[vp:])
-				if vp+4+z <= CHECKSUM_INTERVAL {
-					r.Value = r.Value[:z]
-					copy(r.Value, cb[vp+4:])
-					d.cacheLock.Unlock()
-					r.ReadChan <- nil
-					continue
+				if vp+4 <= CHECKSUM_INTERVAL {
+					z := binary.LittleEndian.Uint32(cb[vp:])
+					if vp+4+z <= CHECKSUM_INTERVAL {
+						r.Value = r.Value[:z]
+						copy(r.Value, cb[vp+4:])
+						d.cacheLock.Unlock()
+						r.ReadChan <- nil
+						continue
+					}
 				}
 				d.cacheLock.Unlock()
 			} else {
@@ -557,13 +561,15 @@ func (d *diskBlock) reader(cr brimutil.ChecksummedReader, c chan *ReadValue) {
 				binary.LittleEndian.PutUint32(cb[CHECKSUM_INTERVAL:], bp)
 				d.cache[bp%256] = cb
 				d.cacheChan <- cb
-				z := binary.LittleEndian.Uint32(cb[vp:])
-				if vp+4+z <= CHECKSUM_INTERVAL {
-					r.Value = r.Value[:z]
-					copy(r.Value, cb[vp+4:])
-					d.cacheLock.Unlock()
-					r.ReadChan <- nil
-					continue
+				if vp+4 <= CHECKSUM_INTERVAL {
+					z := binary.LittleEndian.Uint32(cb[vp:])
+					if vp+4+z <= CHECKSUM_INTERVAL {
+						r.Value = r.Value[:z]
+						copy(r.Value, cb[vp+4:])
+						d.cacheLock.Unlock()
+						r.ReadChan <- nil
+						continue
+					}
 				}
 				d.cacheLock.Unlock()
 			}
