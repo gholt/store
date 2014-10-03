@@ -148,7 +148,6 @@ func (s *Store) Stop() uint64 {
 	for s.keyLocationMap.isResizing() {
 		time.Sleep(10 * time.Millisecond)
 	}
-	fmt.Println(s.diskWriterBytes, s.tocWriterBytes)
 	return s.diskWriterBytes + s.tocWriterBytes
 }
 
@@ -283,12 +282,13 @@ func (s *Store) diskWriter() {
 		if mb == nil {
 			if db != nil {
 				binary.LittleEndian.PutUint64(term[4:], uint64(dbOffset))
-				if _, err := db.file.Write(term); err != nil {
+				if _, err := db.writer.Write(term); err != nil {
 					panic(err)
 				}
-				if err := db.file.Close(); err != nil {
+				if err := db.writer.Close(); err != nil {
 					panic(err)
 				}
+				db.writer = nil
 				dbOffset += 16
 				s.diskWriterBytes += uint64(dbOffset) + uint64(dbOffset)/CHECKSUM_INTERVAL*4
 				if dbOffset%CHECKSUM_INTERVAL != 0 {
@@ -301,12 +301,13 @@ func (s *Store) diskWriter() {
 		// 48 is head and term usage
 		if db != nil && dbOffset+uint32(len(mb.data))+48 < dbOffset {
 			binary.LittleEndian.PutUint32(term[4:], dbOffset)
-			if _, err := db.file.Write(term); err != nil {
+			if _, err := db.writer.Write(term); err != nil {
 				panic(err)
 			}
-			if err := db.file.Close(); err != nil {
+			if err := db.writer.Close(); err != nil {
 				panic(err)
 			}
+			db.writer = nil
 			dbOffset += 16
 			s.diskWriterBytes += uint64(dbOffset) + uint64(dbOffset)/CHECKSUM_INTERVAL*4
 			if dbOffset%CHECKSUM_INTERVAL != 0 {
@@ -316,19 +317,24 @@ func (s *Store) diskWriter() {
 		}
 		if db == nil {
 			db = &diskBlock{timestamp: time.Now().UnixNano()}
-			fp, err := os.Create(fmt.Sprintf("%d.values", db.timestamp))
+			name := fmt.Sprintf("%d.values", db.timestamp)
+			fp, err := os.Create(name)
 			if err != nil {
 				panic(err)
 			}
-			//fp := &brimutil.NullIO{}
-			db.file = brimutil.NewMultiCoreChecksummedWriter(fp, CHECKSUM_INTERVAL, murmur3.New32, s.cores)
+			db.writer = brimutil.NewMultiCoreChecksummedWriter(fp, CHECKSUM_INTERVAL, murmur3.New32, s.cores)
+			fp, err = os.Open(name)
+			if err != nil {
+				panic(err)
+			}
+			db.reader = brimutil.NewChecksummedReader(fp, CHECKSUM_INTERVAL, murmur3.New32)
 			db.id = s.addKeyLocationBlock(db)
-			if _, err := db.file.Write(head); err != nil {
+			if _, err := db.writer.Write(head); err != nil {
 				panic(err)
 			}
 			dbOffset = 32
 		}
-		if _, err := db.file.Write(mb.data); err != nil {
+		if _, err := db.writer.Write(mb.data); err != nil {
 			panic(err)
 		}
 		mb.diskID = db.id
@@ -461,9 +467,11 @@ func (m *memBlock) Get(offset uint32) []byte {
 }
 
 type diskBlock struct {
-	id        uint16
-	timestamp int64
-	file      io.WriteCloser
+	id         uint16
+	timestamp  int64
+	writer     io.WriteCloser
+	reader     io.ReadSeeker
+	readerLock sync.Mutex
 }
 
 func (d *diskBlock) Timestamp() int64 {
@@ -471,5 +479,17 @@ func (d *diskBlock) Timestamp() int64 {
 }
 
 func (d *diskBlock) Get(offset uint32) []byte {
-	return []byte{}
+	d.readerLock.Lock()
+	v := make([]byte, 4)
+	d.reader.Seek(int64(offset), 0)
+	if _, err := io.ReadFull(d.reader, v); err != nil {
+		panic(err)
+	}
+	z := binary.LittleEndian.Uint32(v)
+	v = make([]byte, z)
+	if _, err := io.ReadFull(d.reader, v); err != nil {
+		panic(err)
+	}
+	d.readerLock.Unlock()
+	return v
 }
