@@ -335,10 +335,7 @@ func (s *Store) diskWriter() {
 			db = nil
 		}
 		if db == nil {
-			db = &diskBlock{timestamp: time.Now().UnixNano(), cache: make([][]byte, 256), cacheChan: make(chan []byte, 256)}
-			for i := 0; i < 256; i++ {
-				db.cacheChan <- nil
-			}
+			db = &diskBlock{timestamp: time.Now().UnixNano()}
 			name := fmt.Sprintf("%d.values", db.timestamp)
 			fp, err := os.Create(name)
 			if err != nil {
@@ -352,7 +349,7 @@ func (s *Store) diskWriter() {
 					panic(err)
 				}
 				db.readValueChans[i] = make(chan *ReadValue, s.cores)
-				go db.reader(brimutil.NewChecksummedReader(fp, CHECKSUM_INTERVAL, murmur3.New32), db.readValueChans[i])
+				go reader(brimutil.NewChecksummedReader(fp, CHECKSUM_INTERVAL, murmur3.New32), db.readValueChans[i])
 			}
 			db.id = s.addKeyLocationBlock(db)
 			if _, err := db.writer.Write(head); err != nil {
@@ -497,9 +494,6 @@ type diskBlock struct {
 	timestamp      int64
 	writer         io.WriteCloser
 	readValueChans []chan *ReadValue
-	cacheLock      sync.RWMutex
-	cache          [][]byte
-	cacheChan      chan []byte
 }
 
 func (d *diskBlock) Timestamp() int64 {
@@ -510,64 +504,10 @@ func (d *diskBlock) Get(r *ReadValue) {
 	d.readValueChans[int(r.KeyHashA>>1)%len(d.readValueChans)] <- r
 }
 
-func (d *diskBlock) reader(cr brimutil.ChecksummedReader, c chan *ReadValue) {
+func reader(cr brimutil.ChecksummedReader, c chan *ReadValue) {
 	zb := make([]byte, 4)
 	for {
 		r := <-c
-		bp := r.offset / CHECKSUM_INTERVAL
-		vp := r.offset - bp*CHECKSUM_INTERVAL
-		d.cacheLock.RLock()
-		cb := d.cache[bp%256]
-		if cb != nil {
-			z := binary.LittleEndian.Uint32(cb[vp:])
-			if vp+4+z <= CHECKSUM_INTERVAL {
-				r.Value = r.Value[:z]
-				copy(r.Value, cb[vp+4:])
-				d.cacheLock.RUnlock()
-				r.ReadChan <- nil
-				continue
-			}
-			d.cacheLock.RUnlock()
-		} else {
-			d.cacheLock.RUnlock()
-			d.cacheLock.Lock()
-			cb = d.cache[bp%256]
-			if cb != nil {
-				z := binary.LittleEndian.Uint32(cb[vp:])
-				if vp+4+z <= CHECKSUM_INTERVAL {
-					r.Value = r.Value[:z]
-					copy(r.Value, cb[vp+4:])
-					d.cacheLock.Unlock()
-					r.ReadChan <- nil
-					continue
-				}
-				d.cacheLock.Unlock()
-			} else {
-				cb = <-d.cacheChan
-				if cb == nil {
-					cb = make([]byte, CHECKSUM_INTERVAL+4)
-				} else {
-					d.cache[binary.LittleEndian.Uint32(cb[CHECKSUM_INTERVAL:])%256] = nil
-				}
-				cr.Seek(int64(bp), 0)
-				if _, err := io.ReadFull(cr, cb[:CHECKSUM_INTERVAL]); err != nil {
-					d.cacheLock.Unlock()
-					r.ReadChan <- err
-				}
-				binary.LittleEndian.PutUint32(cb[CHECKSUM_INTERVAL:], bp)
-				d.cache[bp%256] = cb
-				d.cacheChan <- cb
-				z := binary.LittleEndian.Uint32(cb[vp:])
-				if vp+4+z <= CHECKSUM_INTERVAL {
-					r.Value = r.Value[:z]
-					copy(r.Value, cb[vp+4:])
-					d.cacheLock.Unlock()
-					r.ReadChan <- nil
-					continue
-				}
-				d.cacheLock.Unlock()
-			}
-		}
 		cr.Seek(int64(r.offset), 0)
 		if _, err := io.ReadFull(cr, zb); err != nil {
 			r.ReadChan <- err
