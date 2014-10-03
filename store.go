@@ -340,7 +340,7 @@ func (s *Store) diskWriter() {
 				if err != nil {
 					panic(err)
 				}
-				db.readValueChans[i] = make(chan *ReadValue, s.cores*s.cores)
+				db.readValueChans[i] = make(chan *ReadValue, s.cores)
 				go reader(brimutil.NewChecksummedReader(fp, CHECKSUM_INTERVAL, murmur3.New32), db.readValueChans[i])
 			}
 			db.id = s.addKeyLocationBlock(db)
