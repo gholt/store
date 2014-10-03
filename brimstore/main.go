@@ -184,10 +184,6 @@ func main() {
 		}(keys[i], c[i])
 	}
 	wg.Wait()
-	m = 0
-	for i := 0; i < clients; i++ {
-		m += <-c[i]
-	}
 	fmt.Println(time.Now().Sub(start), "to add new keys while looking up old keys")
 	start = time.Now()
 	bytesWritten2 := s.Stop()
@@ -198,6 +194,13 @@ func main() {
 	seconds = float64(speedStop.UnixNano()-speedStart.UnixNano()) / 1000000000.0
 	fmt.Printf("%.2fG/s based on total value length\n", float64(totalValueLength)/seconds/1024.0/1024.0/1024.0)
 	fmt.Printf("%.2fG/s based on total bytes to disk\n", float64(bytesWritten2-bytesWritten)/seconds/1024.0/1024.0/1024.0)
+	m = 0
+	for i := 0; i < clients; i++ {
+		m += <-c[i]
+	}
+	speedStop = time.Now()
+	nanoseconds = speedStop.UnixNano() - speedStart.UnixNano()
+	seconds = float64(speedStop.UnixNano()-speedStart.UnixNano()) / 1000000000.0
 	runtime.ReadMemStats(&st)
 	fmt.Printf("%.2fG total alloc\n", float64(st.TotalAlloc)/1024/1024/1024)
 	fmt.Printf("%.2f key lookups per second\n", float64(totalKeys)/seconds)
