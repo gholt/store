@@ -341,8 +341,8 @@ func (s *Store) diskWriter() {
 				panic(err)
 			}
 			db.writer = brimutil.NewMultiCoreChecksummedWriter(fp, CHECKSUM_INTERVAL, murmur3.New32, s.cores)
-			db.readValueChans = make([]chan *ReadValue, s.cores)
-			for i := 0; i < s.cores; i++ {
+			db.readValueChans = make([]chan *ReadValue, 1)
+			for i := 0; i < len(db.readValueChans); i++ {
 				fp, err = os.Open(name)
 				if err != nil {
 					panic(err)
