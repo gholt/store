@@ -10,7 +10,7 @@ import (
 	"os"
 	"runtime"
 	"strconv"
-	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -47,7 +47,7 @@ type Store struct {
 	diskWriterDoneChan       chan struct{}
 	tocWriterDoneChan        chan struct{}
 	keyLocationBlocks        []keyLocationBlock
-	keyLocationBlockLock     sync.RWMutex
+	keyLocationBlocksIDer    int32
 	keyLocationMap           *keyLocationMap
 	cores                    int
 	maxValueSize             int
@@ -72,11 +72,12 @@ func NewStore() *Store {
 		allocSize = 4096
 	}
 	s := &Store{
-		keyLocationBlocks: make([]keyLocationBlock, 0),
-		keyLocationMap:    newKeyLocationMap(),
-		cores:             cores,
-		allocSize:         allocSize,
-		maxValueSize:      maxValueSize,
+		keyLocationBlocks:     make([]keyLocationBlock, 65536),
+		keyLocationBlocksIDer: KEY_LOCATION_BLOCK_ID_OFFSET - 1,
+		keyLocationMap:        newKeyLocationMap(),
+		cores:                 cores,
+		allocSize:             allocSize,
+		maxValueSize:          maxValueSize,
 	}
 	return s
 }
@@ -182,18 +183,16 @@ func (s *Store) Put(w *WriteValue) {
 }
 
 func (s *Store) keyLocationBlock(keyLocationBlockID uint16) keyLocationBlock {
-	s.keyLocationBlockLock.RLock()
-	block := s.keyLocationBlocks[keyLocationBlockID-KEY_LOCATION_BLOCK_ID_OFFSET]
-	s.keyLocationBlockLock.RUnlock()
-	return block
+	return s.keyLocationBlocks[keyLocationBlockID]
 }
 
 func (s *Store) addKeyLocationBlock(block keyLocationBlock) uint16 {
-	s.keyLocationBlockLock.Lock()
-	id := uint16(KEY_LOCATION_BLOCK_ID_OFFSET + len(s.keyLocationBlocks))
-	s.keyLocationBlocks = append(s.keyLocationBlocks, block)
-	s.keyLocationBlockLock.Unlock()
-	return id
+	id := atomic.AddInt32(&s.keyLocationBlocksIDer, 1)
+	if id >= 65536 {
+		panic("too many keyLocationBlocks")
+	}
+	s.keyLocationBlocks[id] = block
+	return uint16(id)
 }
 
 func (s *Store) memClearer(memClearerDoneChan chan struct{}) {
