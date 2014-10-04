@@ -3,15 +3,17 @@ package brimstore
 import (
 	"encoding/binary"
 	"fmt"
-	"github.com/gholt/brimutil"
-	"github.com/spaolacci/murmur3"
 	"io"
 	"math"
 	"os"
 	"runtime"
 	"strconv"
+	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/gholt/brimutil"
+	"github.com/spaolacci/murmur3"
 )
 
 var ErrKeyNotFound error = fmt.Errorf("key not found")
@@ -151,6 +153,7 @@ func NewStore(opts *StoreOpts) *Store {
 	if memValuesPageSize < 4096 {
 		memValuesPageSize = 4096
 	}
+	fmt.Println(memValuesPageSize, "memValuesPageSize")
 	checksumInterval := opts.ChecksumInterval
 	if checksumInterval < 1024 {
 		checksumInterval = 1024
@@ -199,16 +202,18 @@ func (s *Store) Start() {
 	s.tocWriterDoneChan = make(chan struct{}, 1)
 	for i := 0; i < cap(s.clearableMemBlockChan); i++ {
 		mb := &memBlock{
-			toc:  make([]byte, 0, s.memTOCPageSize),
-			data: make([]byte, 0, s.memValuesPageSize),
+			store: s,
+			toc:   make([]byte, 0, s.memTOCPageSize),
+			data:  make([]byte, 0, s.memValuesPageSize),
 		}
 		mb.id = s.addKeyLocationBlock(mb)
 		s.clearableMemBlockChan <- mb
 	}
 	for i := 0; i < cap(s.clearedMemBlockChan); i++ {
 		mb := &memBlock{
-			toc:  make([]byte, 0, s.memTOCPageSize),
-			data: make([]byte, s.memValuesPageSize),
+			store: s,
+			toc:   make([]byte, 0, s.memTOCPageSize),
+			data:  make([]byte, 0, s.memValuesPageSize),
 		}
 		mb.id = s.addKeyLocationBlock(mb)
 		s.clearedMemBlockChan <- mb
@@ -216,8 +221,20 @@ func (s *Store) Start() {
 	for i := 0; i < len(s.writeValueChans); i++ {
 		s.writeValueChans[i] = make(chan *WriteValue, s.cores)
 	}
+	for i := 0; i < cap(s.diskWritableMemBlockChan); i++ {
+		mb := &memBlock{
+			store: s,
+			toc:   make([]byte, 0, s.memTOCPageSize),
+			data:  make([]byte, 0, s.memValuesPageSize),
+		}
+		mb.id = s.addKeyLocationBlock(mb)
+		s.diskWritableMemBlockChan <- mb
+	}
 	for i := 0; i < cap(s.freeTOCBlockChan); i++ {
 		s.freeTOCBlockChan <- make([]byte, 0, s.memTOCPageSize)
+	}
+	for i := 0; i < cap(s.pendingTOCBlockChan); i++ {
+		s.pendingTOCBlockChan <- make([]byte, 0, s.memTOCPageSize)
 	}
 	for i := 0; i < len(s.memWriterDoneChans); i++ {
 		s.memWriterDoneChans[i] = make(chan struct{}, 1)
@@ -235,27 +252,14 @@ func (s *Store) Start() {
 	}
 }
 
+func (s *Store) BytesWritten() uint64 {
+	return atomic.LoadUint64(&s.diskWriterBytes) + atomic.LoadUint64(&s.tocWriterBytes)
+}
+
 func (s *Store) Stop() uint64 {
 	for _, c := range s.writeValueChans {
-		close(c)
+		c <- nil
 	}
-	for _, c := range s.memWriterDoneChans {
-		<-c
-	}
-	close(s.diskWritableMemBlockChan)
-	<-s.diskWriterDoneChan
-	close(s.clearableMemBlockChan)
-	for c := 0; c < cap(s.clearedMemBlockChan); c++ {
-		<-s.clearedMemBlockChan
-	}
-	for c := 0; c < cap(s.clearableMemBlockChan); c++ {
-		<-s.clearedMemBlockChan
-	}
-	close(s.clearedMemBlockChan)
-	for _, c := range s.memClearerDoneChans {
-		<-c
-	}
-	close(s.pendingTOCBlockChan)
 	<-s.tocWriterDoneChan
 	for s.keyLocationMap.isResizing() {
 		time.Sleep(10 * time.Millisecond)
@@ -268,11 +272,14 @@ func (s *Store) Get(r *ReadValue) {
 	id, r.offset, r.Seq = s.keyLocationMap.get(r.KeyHashA, r.KeyHashB)
 	if id < KEY_LOCATION_BLOCK_ID_OFFSET {
 		r.ReadChan <- ErrKeyNotFound
+	} else {
+		s.keyLocationBlock(id).Get(r)
 	}
-	s.keyLocationBlock(id).Get(r)
 }
 func (s *Store) Put(w *WriteValue) {
-	s.writeValueChans[int(w.KeyHashA>>1)%len(s.writeValueChans)] <- w
+	if w != nil {
+		s.writeValueChans[int(w.KeyHashA>>1)%len(s.writeValueChans)] <- w
+	}
 }
 
 func (s *Store) keyLocationBlock(keyLocationBlockID uint16) keyLocationBlock {
@@ -296,45 +303,51 @@ func (s *Store) memClearer(memClearerDoneChan chan struct{}) {
 		mb := <-s.clearableMemBlockChan
 		if mb == nil {
 			if tb != nil {
-				binary.LittleEndian.PutUint32(tb, uint32(len(tb)-4))
+				binary.BigEndian.PutUint32(tb, uint32(len(tb)-4))
 				s.pendingTOCBlockChan <- tb
+				<-s.freeTOCBlockChan
 			}
+			s.pendingTOCBlockChan <- nil
+			<-s.freeTOCBlockChan
 			break
 		}
-		if tb != nil && tbTimestamp != s.keyLocationBlock(mb.diskID).Timestamp() {
-			binary.LittleEndian.PutUint32(tb, uint32(len(tb)-4))
+		db := s.keyLocationBlock(mb.diskID)
+		if tb != nil && tbTimestamp != db.Timestamp() {
+			binary.BigEndian.PutUint32(tb, uint32(len(tb)-4))
 			s.pendingTOCBlockChan <- tb
 			tb = nil
 		}
 		for mbTOCOffset := 0; mbTOCOffset < len(mb.toc); mbTOCOffset += 28 {
-			mbDataOffset := binary.LittleEndian.Uint32(mb.toc[mbTOCOffset:])
-			a := binary.LittleEndian.Uint64(mb.toc[mbTOCOffset+4:])
-			b := binary.LittleEndian.Uint64(mb.toc[mbTOCOffset+12:])
-			q := binary.LittleEndian.Uint64(mb.toc[mbTOCOffset+20:])
+			mbDataOffset := binary.BigEndian.Uint32(mb.toc[mbTOCOffset:])
+			a := binary.BigEndian.Uint64(mb.toc[mbTOCOffset+4:])
+			b := binary.BigEndian.Uint64(mb.toc[mbTOCOffset+12:])
+			q := binary.BigEndian.Uint64(mb.toc[mbTOCOffset+20:])
 			s.keyLocationMap.set(mb.diskID, mb.diskOffset+mbDataOffset, a, b, q)
 			if tb != nil && tbOffset+28 > cap(tb) {
-				binary.LittleEndian.PutUint32(tb, uint32(len(tb)-4))
+				binary.BigEndian.PutUint32(tb, uint32(len(tb)-4))
 				s.pendingTOCBlockChan <- tb
 				tb = nil
 			}
 			if tb == nil {
 				tb = <-s.freeTOCBlockChan
-				tbTimestamp = s.keyLocationBlock(mb.diskID).Timestamp()
+				tbTimestamp = db.Timestamp()
 				tb = tb[:12]
-				binary.LittleEndian.PutUint64(tb[4:], uint64(tbTimestamp))
+				binary.BigEndian.PutUint64(tb[4:], uint64(tbTimestamp))
 				tbOffset = 12
 			}
 			tb = tb[:tbOffset+28]
-			binary.LittleEndian.PutUint32(tb[tbOffset:], mb.diskOffset+uint32(mbDataOffset))
-			binary.LittleEndian.PutUint64(tb[tbOffset+4:], a)
-			binary.LittleEndian.PutUint64(tb[tbOffset+12:], b)
-			binary.LittleEndian.PutUint64(tb[tbOffset+20:], q)
+			binary.BigEndian.PutUint32(tb[tbOffset:], mb.diskOffset+uint32(mbDataOffset))
+			binary.BigEndian.PutUint64(tb[tbOffset+4:], a)
+			binary.BigEndian.PutUint64(tb[tbOffset+12:], b)
+			binary.BigEndian.PutUint64(tb[tbOffset+20:], q)
 			tbOffset += 28
 		}
+		mb.discardLock.Lock()
 		mb.diskID = 0
 		mb.diskOffset = 0
 		mb.toc = mb.toc[:0]
 		mb.data = mb.data[:0]
+		mb.discardLock.Unlock()
 		s.clearedMemBlockChan <- mb
 	}
 	memClearerDoneChan <- struct{}{}
@@ -349,7 +362,10 @@ func (s *Store) memWriter(writeValueChan chan *WriteValue, memWriterDoneChan cha
 		if w == nil {
 			if mb != nil && len(mb.toc) > 0 {
 				s.diskWritableMemBlockChan <- mb
+				<-s.clearedMemBlockChan
 			}
+			s.diskWritableMemBlockChan <- nil
+			<-s.clearedMemBlockChan
 			break
 		}
 		vz := len(w.Value)
@@ -367,16 +383,18 @@ func (s *Store) memWriter(writeValueChan chan *WriteValue, memWriterDoneChan cha
 			mbDataOffset = 0
 		}
 		mb.toc = mb.toc[:mbTOCOffset+28]
-		binary.LittleEndian.PutUint32(mb.toc[mbTOCOffset:], uint32(mbDataOffset))
-		binary.LittleEndian.PutUint64(mb.toc[mbTOCOffset+4:], w.KeyHashA)
-		binary.LittleEndian.PutUint64(mb.toc[mbTOCOffset+12:], w.KeyHashB)
-		binary.LittleEndian.PutUint64(mb.toc[mbTOCOffset+20:], w.Seq)
+		binary.BigEndian.PutUint32(mb.toc[mbTOCOffset:], uint32(mbDataOffset))
+		binary.BigEndian.PutUint64(mb.toc[mbTOCOffset+4:], w.KeyHashA)
+		binary.BigEndian.PutUint64(mb.toc[mbTOCOffset+12:], w.KeyHashB)
+		binary.BigEndian.PutUint64(mb.toc[mbTOCOffset+20:], w.Seq)
 		mbTOCOffset += 28
+		mb.discardLock.Lock()
 		mb.data = mb.data[:mbDataOffset+4+vz]
-		binary.LittleEndian.PutUint32(mb.data[mbDataOffset:], uint32(vz))
+		mb.discardLock.Unlock()
+		binary.BigEndian.PutUint32(mb.data[mbDataOffset:], uint32(vz))
 		copy(mb.data[mbDataOffset+4:], w.Value)
-		mbDataOffset += 4 + vz
 		s.keyLocationMap.set(mb.id, uint32(mbDataOffset), w.KeyHashA, w.KeyHashB, w.Seq)
+		mbDataOffset += 4 + vz
 		w.WrittenChan <- nil
 	}
 	memWriterDoneChan <- struct{}{}
@@ -384,79 +402,30 @@ func (s *Store) memWriter(writeValueChan chan *WriteValue, memWriterDoneChan cha
 
 func (s *Store) diskWriter() {
 	var db *diskBlock
-	var dbOffset uint32
-	head := []byte("BRIMSTORE VALUES v0             ")
-	binary.LittleEndian.PutUint32(head[28:], uint32(s.checksumInterval))
-	term := make([]byte, 16)
-	copy(term[12:], "TERM")
+	memWritersLeft := s.cores
 	for {
 		mb := <-s.diskWritableMemBlockChan
 		if mb == nil {
-			if db != nil {
-				binary.LittleEndian.PutUint64(term[4:], uint64(dbOffset))
-				if _, err := db.writer.Write(term); err != nil {
-					panic(err)
+			memWritersLeft--
+			if memWritersLeft < 1 {
+				if db != nil {
+					db.close()
 				}
-				if err := db.writer.Close(); err != nil {
-					panic(err)
+				for i := 0; i <= s.cores; i++ {
+					db.store.clearableMemBlockChan <- nil
 				}
-				db.writer = nil
-				dbOffset += 16
-				s.diskWriterBytes += uint64(dbOffset) + uint64(dbOffset)/uint64(s.checksumInterval)*4
-				if dbOffset%uint32(s.checksumInterval) != 0 {
-					s.diskWriterBytes += 4
-				}
+				break
 			}
-			break
+			continue
 		}
-		// Use overflow to detect when to open a new disk file.
-		// 48 is head and term usage
-		if db != nil && dbOffset+uint32(len(mb.data))+48 < dbOffset {
-			binary.LittleEndian.PutUint32(term[4:], dbOffset)
-			if _, err := db.writer.Write(term); err != nil {
-				panic(err)
-			}
-			if err := db.writer.Close(); err != nil {
-				panic(err)
-			}
-			db.writer = nil
-			dbOffset += 16
-			s.diskWriterBytes += uint64(dbOffset) + uint64(dbOffset)/uint64(s.checksumInterval)*4
-			if dbOffset%uint32(s.checksumInterval) != 0 {
-				s.diskWriterBytes += 4
-			}
+		if db != nil && db.offset()+len(mb.data) > math.MaxUint32 {
+			db.close()
 			db = nil
 		}
 		if db == nil {
-			db = &diskBlock{timestamp: time.Now().UnixNano()}
-			name := fmt.Sprintf("%d.values", db.timestamp)
-			fp, err := os.Create(name)
-			if err != nil {
-				panic(err)
-			}
-			db.writer = brimutil.NewMultiCoreChecksummedWriter(fp, s.checksumInterval, murmur3.New32, s.cores)
-			db.readValueChans = make([]chan *ReadValue, s.readersPerValuesFile)
-			for i := 0; i < len(db.readValueChans); i++ {
-				fp, err = os.Open(name)
-				if err != nil {
-					panic(err)
-				}
-				db.readValueChans[i] = make(chan *ReadValue, s.cores)
-				go reader(brimutil.NewChecksummedReader(fp, s.checksumInterval, murmur3.New32), db.readValueChans[i])
-			}
-			db.id = s.addKeyLocationBlock(db)
-			if _, err := db.writer.Write(head); err != nil {
-				panic(err)
-			}
-			dbOffset = 32
+			db = newDiskBlock(s)
 		}
-		if _, err := db.writer.Write(mb.data); err != nil {
-			panic(err)
-		}
-		mb.diskID = db.id
-		mb.diskOffset = dbOffset
-		dbOffset += uint32(len(mb.data))
-		s.clearableMemBlockChan <- mb
+		db.write(mb)
 	}
 	s.diskWriterDoneChan <- struct{}{}
 }
@@ -469,89 +438,96 @@ func (s *Store) tocWriter() {
 	var writerB io.WriteCloser
 	var offsetB uint64
 	head := []byte("BRIMSTORE TOC v0                ")
-	binary.LittleEndian.PutUint32(head[28:], uint32(s.checksumInterval))
+	binary.BigEndian.PutUint32(head[28:], uint32(s.checksumInterval))
 	term := make([]byte, 16)
 	copy(term[12:], "TERM")
+	memClearersLeft := s.cores
 	for {
 		t := <-s.pendingTOCBlockChan
 		if t == nil {
-			if writerB != nil {
-				binary.LittleEndian.PutUint64(term[4:], offsetB)
-				if _, err := writerB.Write(term); err != nil {
-					panic(err)
+			memClearersLeft--
+			if memClearersLeft < 1 {
+				if writerB != nil {
+					binary.BigEndian.PutUint64(term[4:], offsetB)
+					if _, err := writerB.Write(term); err != nil {
+						panic(err)
+					}
+					if err := writerB.Close(); err != nil {
+						panic(err)
+					}
+					offsetB += 16
+					s.tocWriterBytes += offsetB + offsetB/uint64(s.checksumInterval*4)
+					if offsetB%uint64(s.checksumInterval) != 0 {
+						s.tocWriterBytes += 4
+					}
 				}
-				if err := writerB.Close(); err != nil {
-					panic(err)
+				if writerA != nil {
+					binary.BigEndian.PutUint64(term[4:], offsetA)
+					if _, err := writerA.Write(term); err != nil {
+						panic(err)
+					}
+					if err := writerA.Close(); err != nil {
+						panic(err)
+					}
+					offsetA += 16
+					s.tocWriterBytes += offsetA + offsetA/uint64(s.checksumInterval)*4
+					if offsetA%uint64(s.checksumInterval) != 0 {
+						s.tocWriterBytes += 4
+					}
 				}
-				offsetB += 16
-				s.tocWriterBytes += offsetB + offsetB/uint64(s.checksumInterval*4)
-				if offsetB%uint64(s.checksumInterval) != 0 {
-					s.tocWriterBytes += 4
-				}
+				break
 			}
-			if writerA != nil {
-				binary.LittleEndian.PutUint64(term[4:], offsetA)
-				if _, err := writerA.Write(term); err != nil {
-					panic(err)
-				}
-				if err := writerA.Close(); err != nil {
-					panic(err)
-				}
-				offsetA += 16
-				s.tocWriterBytes += offsetA + offsetA/uint64(s.checksumInterval)*4
-				if offsetA%uint64(s.checksumInterval) != 0 {
-					s.tocWriterBytes += 4
-				}
-			}
-			break
+			continue
 		}
-		timestamp := binary.LittleEndian.Uint64(t[4:])
-		switch timestamp {
-		case timestampA:
-			if _, err := writerA.Write(t); err != nil {
-				panic(err)
-			}
-			offsetA += uint64(len(t))
-		case timestampB:
-			if _, err := writerB.Write(t); err != nil {
-				panic(err)
-			}
-			offsetB += uint64(len(t))
-		default:
-			// An assumption is made here: If the timestamp for this toc block
-			// doesn't match the last two seen timestamps then we expect no
-			// more toc blocks for the oldest timestamp and can close that toc
-			// file.
-			if writerB != nil {
-				binary.LittleEndian.PutUint64(term[4:], offsetB)
-				if _, err := writerB.Write(term); err != nil {
+		if len(t) > 0 {
+			timestamp := binary.BigEndian.Uint64(t[4:])
+			switch timestamp {
+			case timestampA:
+				if _, err := writerA.Write(t); err != nil {
 					panic(err)
 				}
-				if err := writerB.Close(); err != nil {
+				offsetA += uint64(len(t))
+			case timestampB:
+				if _, err := writerB.Write(t); err != nil {
 					panic(err)
 				}
-				offsetB += 16
-				s.tocWriterBytes += offsetB + offsetB/uint64(s.checksumInterval)*4
-				if offsetB%uint64(s.checksumInterval) != 0 {
-					s.tocWriterBytes += 4
+				offsetB += uint64(len(t))
+			default:
+				// An assumption is made here: If the timestamp for this toc block
+				// doesn't match the last two seen timestamps then we expect no
+				// more toc blocks for the oldest timestamp and can close that toc
+				// file.
+				if writerB != nil {
+					binary.BigEndian.PutUint64(term[4:], offsetB)
+					if _, err := writerB.Write(term); err != nil {
+						panic(err)
+					}
+					if err := writerB.Close(); err != nil {
+						panic(err)
+					}
+					offsetB += 16
+					s.tocWriterBytes += offsetB + offsetB/uint64(s.checksumInterval)*4
+					if offsetB%uint64(s.checksumInterval) != 0 {
+						s.tocWriterBytes += 4
+					}
 				}
+				timestampB = timestampA
+				writerB = writerA
+				offsetB = offsetA
+				timestampA = timestamp
+				fp, err := os.Create(fmt.Sprintf("%d.toc", timestamp))
+				if err != nil {
+					panic(err)
+				}
+				writerA = brimutil.NewMultiCoreChecksummedWriter(fp, s.checksumInterval, murmur3.New32, s.cores)
+				if _, err := writerA.Write(head); err != nil {
+					panic(err)
+				}
+				if _, err := writerA.Write(t); err != nil {
+					panic(err)
+				}
+				offsetA = 32 + uint64(len(t))
 			}
-			timestampB = timestampA
-			writerB = writerA
-			offsetB = offsetA
-			timestampA = timestamp
-			fp, err := os.Create(fmt.Sprintf("%d.toc", timestamp))
-			if err != nil {
-				panic(err)
-			}
-			writerA = brimutil.NewMultiCoreChecksummedWriter(fp, s.checksumInterval, murmur3.New32, s.cores)
-			if _, err := writerA.Write(head); err != nil {
-				panic(err)
-			}
-			if _, err := writerA.Write(t); err != nil {
-				panic(err)
-			}
-			offsetA = 32 + uint64(len(t))
 		}
 		s.freeTOCBlockChan <- t[:0]
 	}
@@ -564,11 +540,13 @@ type keyLocationBlock interface {
 }
 
 type memBlock struct {
-	id         uint16
-	diskID     uint16
-	diskOffset uint32
-	toc        []byte
-	data       []byte
+	store       *Store
+	id          uint16
+	diskID      uint16
+	diskOffset  uint32
+	toc         []byte
+	data        []byte
+	discardLock sync.RWMutex
 }
 
 func (m *memBlock) Timestamp() int64 {
@@ -576,40 +554,32 @@ func (m *memBlock) Timestamp() int64 {
 }
 
 func (m *memBlock) Get(r *ReadValue) {
-	z := binary.LittleEndian.Uint32(m.data[r.offset:])
-	r.Value = r.Value[:z]
-	copy(r.Value, m.data[r.offset+4:])
-	r.ReadChan <- nil
-}
-
-type diskBlock struct {
-	id             uint16
-	timestamp      int64
-	writer         io.WriteCloser
-	readValueChans []chan *ReadValue
-}
-
-func (d *diskBlock) Timestamp() int64 {
-	return d.timestamp
-}
-
-func (d *diskBlock) Get(r *ReadValue) {
-	d.readValueChans[int(r.KeyHashA>>1)%len(d.readValueChans)] <- r
-}
-
-func reader(cr brimutil.ChecksummedReader, c chan *ReadValue) {
-	zb := make([]byte, 4)
-	for {
-		r := <-c
-		cr.Seek(int64(r.offset), 0)
-		if _, err := io.ReadFull(cr, zb); err != nil {
-			r.ReadChan <- err
+	m.discardLock.RLock()
+	var id uint16
+	id, r.offset, r.Seq = m.store.keyLocationMap.get(r.KeyHashA, r.KeyHashB)
+	if id < KEY_LOCATION_BLOCK_ID_OFFSET {
+		m.discardLock.RUnlock()
+		r.ReadChan <- ErrKeyNotFound
+	} else if id != m.id {
+		m.discardLock.RUnlock()
+		m.store.keyLocationBlock(id).Get(r)
+	} else {
+		if r.offset+4 > uint32(len(m.data)) {
+			fmt.Println("A", r.offset, len(m.data))
+			m.discardLock.RUnlock()
+			r.ReadChan <- ErrKeyNotFound
+		} else {
+			z := binary.BigEndian.Uint32(m.data[r.offset:])
+			if r.offset+4+z > uint32(len(m.data)) {
+				fmt.Println("B", r.offset, len(m.data))
+				m.discardLock.RUnlock()
+				r.ReadChan <- ErrKeyNotFound
+			} else {
+				r.Value = r.Value[:z]
+				copy(r.Value, m.data[r.offset+4:])
+				m.discardLock.RUnlock()
+				r.ReadChan <- nil
+			}
 		}
-		z := binary.LittleEndian.Uint32(zb)
-		r.Value = r.Value[:z]
-		if _, err := io.ReadFull(cr, r.Value); err != nil {
-			r.ReadChan <- err
-		}
-		r.ReadChan <- nil
 	}
 }

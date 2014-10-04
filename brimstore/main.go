@@ -4,13 +4,13 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
-	"github.com/gholt/brimstore"
-	"github.com/gholt/brimutil"
 	"os"
 	"runtime"
-	//"runtime/pprof"
 	"sync"
 	"time"
+
+	"github.com/gholt/brimstore"
+	"github.com/gholt/brimutil"
 )
 
 func main() {
@@ -71,7 +71,7 @@ func main() {
 	}
 	wg.Wait()
 	value := make([]byte, valueLength)
-	brimutil.NewSeededScrambled(seed).Read(value)
+	//brimutil.NewSeededScrambled(seed).Read(value)
 	fmt.Println(time.Now().Sub(start), "to make keys and value")
 	start = time.Now()
 	speedStart := start
@@ -89,8 +89,8 @@ func main() {
 				Seq:         seq,
 			}
 			for o := 0; o < len(keys); o += 16 {
-				w.KeyHashA = binary.LittleEndian.Uint64(keys[o:])
-				w.KeyHashB = binary.LittleEndian.Uint64(keys[o+8:])
+				w.KeyHashA = binary.BigEndian.Uint64(keys[o:])
+				w.KeyHashB = binary.BigEndian.Uint64(keys[o+8:])
 				w.Seq++
 				s.Put(w)
 				err = <-w.WrittenChan
@@ -104,7 +104,7 @@ func main() {
 	wg.Wait()
 	fmt.Println(time.Now().Sub(start), "to add keys")
 	start = time.Now()
-	bytesWritten := s.Stop()
+	bytesWritten := s.BytesWritten()
 	speedStop := time.Now()
 	fmt.Println(time.Now().Sub(start), "to stop store")
 	fmt.Println(bytesWritten, "bytes written")
@@ -125,8 +125,8 @@ func main() {
 			r := s.NewReadValue()
 			m := 0
 			for o := 0; o < len(keys); o += 16 {
-				r.KeyHashA = binary.LittleEndian.Uint64(keys[o:])
-				r.KeyHashB = binary.LittleEndian.Uint64(keys[o+8:])
+				r.KeyHashA = binary.BigEndian.Uint64(keys[o:])
+				r.KeyHashB = binary.BigEndian.Uint64(keys[o+8:])
 				s.Get(r)
 				err := <-r.ReadChan
 				if err == brimstore.ErrKeyNotFound {
@@ -167,7 +167,7 @@ func main() {
 	fmt.Println(time.Now().Sub(start), "to make second set of keys")
 	start = time.Now()
 	speedStart = start
-	s.Start()
+	//s.Start()
 	fmt.Println(time.Now().Sub(start), "to restart store")
 	start = time.Now()
 	wg.Add(clients)
@@ -180,8 +180,8 @@ func main() {
 				Seq:         seq,
 			}
 			for o := 0; o < len(keys); o += 16 {
-				w.KeyHashA = binary.LittleEndian.Uint64(keys[o:])
-				w.KeyHashB = binary.LittleEndian.Uint64(keys[o+8:])
+				w.KeyHashA = binary.BigEndian.Uint64(keys[o:])
+				w.KeyHashB = binary.BigEndian.Uint64(keys[o+8:])
 				w.Seq++
 				s.Put(w)
 				err = <-w.WrittenChan
@@ -195,8 +195,8 @@ func main() {
 			r := s.NewReadValue()
 			m := 0
 			for o := 0; o < len(keys); o += 16 {
-				r.KeyHashA = binary.LittleEndian.Uint64(keys[o:])
-				r.KeyHashB = binary.LittleEndian.Uint64(keys[o+8:])
+				r.KeyHashA = binary.BigEndian.Uint64(keys[o:])
+				r.KeyHashB = binary.BigEndian.Uint64(keys[o+8:])
 				s.Get(r)
 				err := <-r.ReadChan
 				if err == brimstore.ErrKeyNotFound {
@@ -213,7 +213,7 @@ func main() {
 	wg.Wait()
 	fmt.Println(time.Now().Sub(start), "to add new keys while looking up old keys")
 	start = time.Now()
-	bytesWritten2 := s.Stop()
+	bytesWritten2 := s.BytesWritten()
 	speedStop = time.Now()
 	fmt.Println(time.Now().Sub(start), "to stop store")
 	fmt.Println(bytesWritten2-bytesWritten, "bytes written")
@@ -242,8 +242,8 @@ func main() {
 			r := s.NewReadValue()
 			m := 0
 			for o := 0; o < len(keys); o += 16 {
-				r.KeyHashA = binary.LittleEndian.Uint64(keys[o:])
-				r.KeyHashB = binary.LittleEndian.Uint64(keys[o+8:])
+				r.KeyHashA = binary.BigEndian.Uint64(keys[o:])
+				r.KeyHashB = binary.BigEndian.Uint64(keys[o+8:])
 				s.Get(r)
 				err := <-r.ReadChan
 				if err == brimstore.ErrKeyNotFound {
@@ -266,8 +266,8 @@ func main() {
 			r := s.NewReadValue()
 			m := 0
 			for o := 0; o < len(keys); o += 16 {
-				r.KeyHashA = binary.LittleEndian.Uint64(keys[o:])
-				r.KeyHashB = binary.LittleEndian.Uint64(keys[o+8:])
+				r.KeyHashA = binary.BigEndian.Uint64(keys[o:])
+				r.KeyHashB = binary.BigEndian.Uint64(keys[o+8:])
 				s.Get(r)
 				err := <-r.ReadChan
 				if err == brimstore.ErrKeyNotFound {
@@ -291,6 +291,7 @@ func main() {
 	fmt.Printf("%.2f key lookups per second\n", float64(totalKeys*2)/seconds)
 	fmt.Printf("%.2fns per key lookup\n", float64(nanoseconds)/float64(totalKeys*2))
 	fmt.Println(m, "keys missing")
+	s.Stop()
 
 	//f, err := os.Create("brimstore.blocking.pprof")
 	//if err != nil {
