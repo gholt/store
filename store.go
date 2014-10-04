@@ -34,12 +34,13 @@ type WriteValue struct {
 }
 
 type StoreOpts struct {
-	Cores                int
-	MaxValueSize         int
-	MemTOCPageSize       int
-	MemValuesPageSize    int
-	ChecksumInterval     int
-	ReadersPerValuesFile int
+	Cores                  int
+	MaxValueSize           int
+	MemTOCPageSize         int
+	MemValuesPageSize      int
+	KeyLocationMapPageSize int
+	ChecksumInterval       int
+	ReadersPerValuesFile   int
 }
 
 func NewStoreOpts() *StoreOpts {
@@ -75,6 +76,14 @@ func NewStoreOpts() *StoreOpts {
 	}
 	if opts.MemValuesPageSize <= 0 {
 		opts.MemValuesPageSize = 1 << PowerOfTwoNeeded(uint64(opts.MaxValueSize+4))
+	}
+	if env := os.Getenv("BRIMSTORE_KEY_LOCATION_MAP_PAGE_SIZE"); env != "" {
+		if val, err := strconv.Atoi(env); err == nil {
+			opts.KeyLocationMapPageSize = val
+		}
+	}
+	if opts.KeyLocationMapPageSize <= 0 {
+		opts.KeyLocationMapPageSize = 4 * 1024 * 1024
 	}
 	if env := os.Getenv("BRIMSTORE_CHECKSUM_INTERVAL"); env != "" {
 		if val, err := strconv.Atoi(env); err == nil {
@@ -155,7 +164,7 @@ func NewStore(opts *StoreOpts) *Store {
 	s := &Store{
 		keyLocationBlocks:     make([]keyLocationBlock, 65536),
 		keyLocationBlocksIDer: KEY_LOCATION_BLOCK_ID_OFFSET - 1,
-		keyLocationMap:        newKeyLocationMap(),
+		keyLocationMap:        newKeyLocationMap(opts),
 		cores:                 cores,
 		maxValueSize:          maxValueSize,
 		memTOCPageSize:        memTOCPageSize,
@@ -377,6 +386,7 @@ func (s *Store) diskWriter() {
 	var db *diskBlock
 	var dbOffset uint32
 	head := []byte("BRIMSTORE VALUES v0             ")
+	binary.LittleEndian.PutUint32(head[28:], uint32(s.checksumInterval))
 	term := make([]byte, 16)
 	copy(term[12:], "TERM")
 	for {
@@ -459,6 +469,7 @@ func (s *Store) tocWriter() {
 	var writerB io.WriteCloser
 	var offsetB uint64
 	head := []byte("BRIMSTORE TOC v0                ")
+	binary.LittleEndian.PutUint32(head[28:], uint32(s.checksumInterval))
 	term := make([]byte, 16)
 	copy(term[12:], "TERM")
 	for {
@@ -533,7 +544,6 @@ func (s *Store) tocWriter() {
 			if err != nil {
 				panic(err)
 			}
-			//fp := &brimutil.NullIO{}
 			writerA = brimutil.NewMultiCoreChecksummedWriter(fp, s.checksumInterval, murmur3.New32, s.cores)
 			if _, err := writerA.Write(head); err != nil {
 				panic(err)

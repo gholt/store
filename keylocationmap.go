@@ -1,8 +1,8 @@
 package brimstore
 
 import (
+	"math"
 	"os"
-	"runtime"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -22,18 +22,25 @@ const (
 	KEY_LOCATION_BLOCK_ID_OFFSET = iota
 )
 
-func newKeyLocationMap() *keyLocationMap {
-	var bucketBlockTarget uint64
+func newKeyLocationMap(opts *StoreOpts) *keyLocationMap {
+	if opts == nil {
+		opts = NewStoreOpts()
+	}
+	cores := opts.Cores
+	if cores < 1 {
+		cores = 1
+	}
+	keyLocationMapPageSize := opts.KeyLocationMapPageSize
 	if env := os.Getenv("BRIMSTORE_BUCKET_BLOCK_TARGET"); env != "" {
-		if val, err := strconv.ParseUint(env, 0, 64); err == nil {
-			bucketBlockTarget = val
+		if val, err := strconv.Atoi(env); err == nil {
+			keyLocationMapPageSize = val
 		}
 	}
-	if bucketBlockTarget == 0 {
-		bucketBlockTarget = 4 * 1024 * 1024
+	if keyLocationMapPageSize < 4096 {
+		keyLocationMapPageSize = 4096
 	}
-	bucketCount := 1 << PowerOfTwoNeeded(bucketBlockTarget/uint64(unsafe.Sizeof(keyLocation{})))
-	lockCount := 1 << PowerOfTwoNeeded(uint64(runtime.GOMAXPROCS(0)*runtime.GOMAXPROCS(0)))
+	bucketCount := 1 << PowerOfTwoNeeded(uint64(keyLocationMapPageSize)/uint64(unsafe.Sizeof(keyLocation{})))
+	lockCount := 1 << PowerOfTwoNeeded(uint64(cores*cores))
 	return &keyLocationMap{
 		a:          newKeyLocationMapSection(bucketCount, lockCount),
 		b:          newKeyLocationMapSection(bucketCount, lockCount),
@@ -305,7 +312,7 @@ func (klms *keyLocationMapSection) split(sectionMask uint64) {
 	klms.storageB = storageB
 	sectionMask >>= 1
 	lockMask := len(storageA.locks) - 1
-	cores := runtime.GOMAXPROCS(0)
+	cores := int(math.Sqrt(float64(len(storageA.locks))))
 	wg := &sync.WaitGroup{}
 	wg.Add(cores)
 	for core := 0; core < cores; core++ {
