@@ -1,5 +1,6 @@
 #!/bin/bash
+cd valuesstore
 go build
-cd brimstore
+cd ../brimstore
 go build
 cd ..

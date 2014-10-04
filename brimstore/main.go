@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/gholt/brimstore"
+	"github.com/gholt/brimstore/valuesstore"
 	"github.com/gholt/brimutil"
 )
 
@@ -25,19 +25,18 @@ func main() {
 	//if os.Getenv("GOMAXPROCS") == "" {
 	//	runtime.GOMAXPROCS(runtime.NumCPU())
 	//}
-	//s := brimstore.NewStore()
-	//s.Start()
-	//w := &brimstore.WriteValue{
+	//s := valuesstore.NewValuesStore()
+	//w := &valuesstore.WriteValue{
 	//	Value:       []byte{},
 	//	WrittenChan: make(chan error, 1),
 	//}
-	//s.Put(w)
+	//s.WriteValue(w)
 	//err := <-w.WrittenChan
 	//if err != nil {
 	//	panic(err)
 	//}
 	//time.Sleep(15 * time.Second)
-	//s.Stop()
+	//s.Close()
 
 	seed := int64(1)
 	valueLength := 128
@@ -75,24 +74,23 @@ func main() {
 	fmt.Println(time.Now().Sub(start), "to make keys and value")
 	start = time.Now()
 	speedStart := start
-	s := brimstore.NewStore(nil)
-	s.Start()
+	s := valuesstore.NewValuesStore(nil)
 	fmt.Println(time.Now().Sub(start), "to start store")
 	start = time.Now()
 	wg.Add(clients)
 	for i := 0; i < clients; i++ {
 		go func(keys []byte, seq uint64) {
 			var err error
-			w := &brimstore.WriteValue{
+			w := &valuesstore.WriteValue{
 				Value:       value,
 				WrittenChan: make(chan error, 1),
 				Seq:         seq,
 			}
 			for o := 0; o < len(keys); o += 16 {
-				w.KeyHashA = binary.BigEndian.Uint64(keys[o:])
-				w.KeyHashB = binary.BigEndian.Uint64(keys[o+8:])
+				w.KeyA = binary.BigEndian.Uint64(keys[o:])
+				w.KeyB = binary.BigEndian.Uint64(keys[o+8:])
 				w.Seq++
-				s.Put(w)
+				s.WriteValue(w)
 				err = <-w.WrittenChan
 				if err != nil {
 					panic(err)
@@ -104,13 +102,10 @@ func main() {
 	wg.Wait()
 	fmt.Println(time.Now().Sub(start), "to add keys")
 	start = time.Now()
-	bytesWritten := s.BytesWritten()
 	speedStop := time.Now()
 	fmt.Println(time.Now().Sub(start), "to stop store")
-	fmt.Println(bytesWritten, "bytes written")
 	seconds := float64(speedStop.UnixNano()-speedStart.UnixNano()) / 1000000000.0
 	fmt.Printf("%.2fG/s based on total value length\n", float64(totalValueLength)/seconds/1024.0/1024.0/1024.0)
-	fmt.Printf("%.2fG/s based on total bytes to disk\n", float64(bytesWritten)/seconds/1024.0/1024.0/1024.0)
 	var st runtime.MemStats
 	runtime.ReadMemStats(&st)
 	fmt.Printf("%.2fG total alloc\n", float64(st.TotalAlloc)/1024/1024/1024)
@@ -125,11 +120,11 @@ func main() {
 			r := s.NewReadValue()
 			m := 0
 			for o := 0; o < len(keys); o += 16 {
-				r.KeyHashA = binary.BigEndian.Uint64(keys[o:])
-				r.KeyHashB = binary.BigEndian.Uint64(keys[o+8:])
-				s.Get(r)
+				r.KeyA = binary.BigEndian.Uint64(keys[o:])
+				r.KeyB = binary.BigEndian.Uint64(keys[o+8:])
+				s.ReadValue(r)
 				err := <-r.ReadChan
-				if err == brimstore.ErrKeyNotFound {
+				if err == valuesstore.ErrValueNotFound {
 					m++
 				} else if err != nil {
 					panic(err)
@@ -167,23 +162,22 @@ func main() {
 	fmt.Println(time.Now().Sub(start), "to make second set of keys")
 	start = time.Now()
 	speedStart = start
-	//s.Start()
 	fmt.Println(time.Now().Sub(start), "to restart store")
 	start = time.Now()
 	wg.Add(clients)
 	for i := 0; i < clients; i++ {
 		go func(keys []byte, seq uint64) {
 			var err error
-			w := &brimstore.WriteValue{
+			w := &valuesstore.WriteValue{
 				Value:       value,
 				WrittenChan: make(chan error, 1),
 				Seq:         seq,
 			}
 			for o := 0; o < len(keys); o += 16 {
-				w.KeyHashA = binary.BigEndian.Uint64(keys[o:])
-				w.KeyHashB = binary.BigEndian.Uint64(keys[o+8:])
+				w.KeyA = binary.BigEndian.Uint64(keys[o:])
+				w.KeyB = binary.BigEndian.Uint64(keys[o+8:])
 				w.Seq++
-				s.Put(w)
+				s.WriteValue(w)
 				err = <-w.WrittenChan
 				if err != nil {
 					panic(err)
@@ -195,11 +189,11 @@ func main() {
 			r := s.NewReadValue()
 			m := 0
 			for o := 0; o < len(keys); o += 16 {
-				r.KeyHashA = binary.BigEndian.Uint64(keys[o:])
-				r.KeyHashB = binary.BigEndian.Uint64(keys[o+8:])
-				s.Get(r)
+				r.KeyA = binary.BigEndian.Uint64(keys[o:])
+				r.KeyB = binary.BigEndian.Uint64(keys[o+8:])
+				s.ReadValue(r)
 				err := <-r.ReadChan
-				if err == brimstore.ErrKeyNotFound {
+				if err == valuesstore.ErrValueNotFound {
 					m++
 				} else if err != nil {
 					panic(err)
@@ -213,14 +207,11 @@ func main() {
 	wg.Wait()
 	fmt.Println(time.Now().Sub(start), "to add new keys while looking up old keys")
 	start = time.Now()
-	bytesWritten2 := s.BytesWritten()
 	speedStop = time.Now()
 	fmt.Println(time.Now().Sub(start), "to stop store")
-	fmt.Println(bytesWritten2-bytesWritten, "bytes written")
 	nanoseconds = speedStop.UnixNano() - speedStart.UnixNano()
 	seconds = float64(speedStop.UnixNano()-speedStart.UnixNano()) / 1000000000.0
 	fmt.Printf("%.2fG/s based on total value length\n", float64(totalValueLength)/seconds/1024.0/1024.0/1024.0)
-	fmt.Printf("%.2fG/s based on total bytes to disk\n", float64(bytesWritten2-bytesWritten)/seconds/1024.0/1024.0/1024.0)
 	m = 0
 	for i := 0; i < clients; i++ {
 		m += <-c[i]
@@ -242,11 +233,11 @@ func main() {
 			r := s.NewReadValue()
 			m := 0
 			for o := 0; o < len(keys); o += 16 {
-				r.KeyHashA = binary.BigEndian.Uint64(keys[o:])
-				r.KeyHashB = binary.BigEndian.Uint64(keys[o+8:])
-				s.Get(r)
+				r.KeyA = binary.BigEndian.Uint64(keys[o:])
+				r.KeyB = binary.BigEndian.Uint64(keys[o+8:])
+				s.ReadValue(r)
 				err := <-r.ReadChan
-				if err == brimstore.ErrKeyNotFound {
+				if err == valuesstore.ErrValueNotFound {
 					m++
 				} else if err != nil {
 					panic(err)
@@ -266,11 +257,11 @@ func main() {
 			r := s.NewReadValue()
 			m := 0
 			for o := 0; o < len(keys); o += 16 {
-				r.KeyHashA = binary.BigEndian.Uint64(keys[o:])
-				r.KeyHashB = binary.BigEndian.Uint64(keys[o+8:])
-				s.Get(r)
+				r.KeyA = binary.BigEndian.Uint64(keys[o:])
+				r.KeyB = binary.BigEndian.Uint64(keys[o+8:])
+				s.ReadValue(r)
 				err := <-r.ReadChan
-				if err == brimstore.ErrKeyNotFound {
+				if err == valuesstore.ErrValueNotFound {
 					m++
 				} else if err != nil {
 					panic(err)
@@ -291,7 +282,7 @@ func main() {
 	fmt.Printf("%.2f key lookups per second\n", float64(totalKeys*2)/seconds)
 	fmt.Printf("%.2fns per key lookup\n", float64(nanoseconds)/float64(totalKeys*2))
 	fmt.Println(m, "keys missing")
-	s.Stop()
+	s.Close()
 
 	//f, err := os.Create("brimstore.blocking.pprof")
 	//if err != nil {
