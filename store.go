@@ -34,11 +34,12 @@ type WriteValue struct {
 }
 
 type StoreOpts struct {
-	Cores             int
-	MaxValueSize      int
-	MemTOCPageSize    int
-	MemValuesPageSize int
-	ChecksumInterval  int
+	Cores                int
+	MaxValueSize         int
+	MemTOCPageSize       int
+	MemValuesPageSize    int
+	ChecksumInterval     int
+	ReadersPerValuesFile int
 }
 
 func NewStoreOpts() *StoreOpts {
@@ -83,6 +84,17 @@ func NewStoreOpts() *StoreOpts {
 	if opts.ChecksumInterval <= 0 {
 		opts.ChecksumInterval = 65532
 	}
+	if env := os.Getenv("BRIMSTORE_READERS_PER_VALUES_FILE"); env != "" {
+		if val, err := strconv.Atoi(env); err == nil {
+			opts.ReadersPerValuesFile = val
+		}
+	}
+	if opts.ReadersPerValuesFile <= 0 {
+		opts.ReadersPerValuesFile = opts.Cores
+		if opts.Cores > 8 {
+			opts.ReadersPerValuesFile = 8
+		}
+	}
 	return opts
 }
 
@@ -105,6 +117,7 @@ type Store struct {
 	memTOCPageSize           int
 	memValuesPageSize        int
 	checksumInterval         int
+	readersPerValuesFile     int
 	diskWriterBytes          uint64
 	tocWriterBytes           uint64
 }
@@ -135,6 +148,10 @@ func NewStore(opts *StoreOpts) *Store {
 	} else if checksumInterval >= 4294967296 {
 		checksumInterval = 4294967295
 	}
+	readersPerValuesFile := opts.ReadersPerValuesFile
+	if readersPerValuesFile < 1 {
+		readersPerValuesFile = 1
+	}
 	s := &Store{
 		keyLocationBlocks:     make([]keyLocationBlock, 65536),
 		keyLocationBlocksIDer: KEY_LOCATION_BLOCK_ID_OFFSET - 1,
@@ -144,6 +161,7 @@ func NewStore(opts *StoreOpts) *Store {
 		memTOCPageSize:        memTOCPageSize,
 		memValuesPageSize:     memValuesPageSize,
 		checksumInterval:      checksumInterval,
+		readersPerValuesFile:  readersPerValuesFile,
 	}
 	return s
 }
@@ -407,7 +425,7 @@ func (s *Store) diskWriter() {
 				panic(err)
 			}
 			db.writer = brimutil.NewMultiCoreChecksummedWriter(fp, s.checksumInterval, murmur3.New32, s.cores)
-			db.readValueChans = make([]chan *ReadValue, 4)
+			db.readValueChans = make([]chan *ReadValue, s.readersPerValuesFile)
 			for i := 0; i < len(db.readValueChans); i++ {
 				fp, err = os.Open(name)
 				if err != nil {
