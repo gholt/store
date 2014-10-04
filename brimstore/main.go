@@ -14,69 +14,123 @@ import (
 )
 
 func main() {
-	//cpuProf, err := os.Create("brimstore.cpu.pprof")
-	//if err != nil {
-	//	panic(err)
-	//}
-	//pprof.StartCPUProfile(cpuProf)
-	//blockPprof := pprof.Lookup("block")
-	//runtime.SetBlockProfileRate(1)
-
-	//if os.Getenv("GOMAXPROCS") == "" {
-	//	runtime.GOMAXPROCS(runtime.NumCPU())
-	//}
-	//s := valuesstore.NewValuesStore()
-	//w := &valuesstore.WriteValue{
-	//	Value:       []byte{},
-	//	WrittenChan: make(chan error, 1),
-	//}
-	//s.WriteValue(w)
-	//err := <-w.WrittenChan
-	//if err != nil {
-	//	panic(err)
-	//}
-	//time.Sleep(15 * time.Second)
-	//s.Close()
-
 	seed := int64(1)
-	valueLength := 128
-	fmt.Println(valueLength, "value length")
+	bytesPerValue := 128
 	targetBytes := 4 * 1024 * 1024 * 1024
-	fmt.Println(targetBytes, "target bytes")
 	cores := runtime.GOMAXPROCS(0)
 	if os.Getenv("GOMAXPROCS") == "" {
 		runtime.GOMAXPROCS(runtime.NumCPU())
 		cores = runtime.GOMAXPROCS(0)
 	}
-	fmt.Println(cores, "cores")
 	clients := cores * cores
+	valuesPerClient := targetBytes / bytesPerValue / clients
+	totalValues := clients * valuesPerClient
+	totalValueBytes := totalValues * bytesPerValue
+
+	fmt.Println(cores, "cores")
+	fmt.Println(bytesPerValue, "bytes per value")
 	fmt.Println(clients, "clients")
-	keysPerClient := targetBytes / valueLength / clients
-	fmt.Println(keysPerClient, "keys per client")
-	totalKeys := clients * keysPerClient
-	fmt.Println(totalKeys, "total keys")
-	totalValueLength := totalKeys * valueLength
-	fmt.Println(totalValueLength, "total value length")
+	fmt.Println(valuesPerClient, "values per client")
+	fmt.Printf("%d %0.2fm total values\n", totalValues, float64(totalValues)/1000000)
+	fmt.Printf("%d %0.2fG total value bytes\n", totalValueBytes, float64(totalValueBytes)/1024/1024/1024)
+
+	value := make([]byte, bytesPerValue)
+	brimutil.NewSeededScrambled(seed).Read(value)
+	keys := createKeys(seed, clients, valuesPerClient)
+
 	start := time.Now()
+	vs := valuesstore.NewValuesStore(nil)
+	dur := time.Now().Sub(start)
+	fmt.Println(dur, "to start ValuesStore")
+
+	start = time.Now()
+	writeValues(vs, keys, value, clients, valuesPerClient)
+	dur = time.Now().Sub(start)
+	fmt.Printf("%s %.0f/s %0.2fG/s to add %d values\n", dur, float64(totalValues)/float64(dur)/float64(time.Second), float64(totalValueBytes)/float64(dur)/float64(time.Second)/1024/1024/1024, totalValues)
+	var st runtime.MemStats
+	runtime.ReadMemStats(&st)
+	fmt.Printf("%0.2fG total alloc\n", float64(st.TotalAlloc)/1024/1024/1024)
+
+	fmt.Println()
+	start = time.Now()
+	m := readValues(vs, [][][]byte{keys}, value, clients, valuesPerClient)
+	dur = time.Now().Sub(start)
+	fmt.Printf("%s %.0f/s %dns each, to read %d values\n", dur, float64(totalValues)/float64(dur)/float64(time.Second), int(dur)/totalValues, totalValues)
+	if m != 0 {
+		fmt.Println(m, "MISSING KEYS!")
+	}
+
+	fmt.Println()
+	keys2 := createKeys(seed+int64(totalValues), clients, valuesPerClient)
+	start = time.Now()
+	readChan, writeChan := readAndWriteValues(vs, keys, keys2, value, clients, valuesPerClient)
+	readDone := false
+	writeDone := false
+	for !readDone || !writeDone {
+		if readDone {
+			<-writeChan
+			dur = time.Now().Sub(start)
+			fmt.Printf("%s %.0f/s %0.2fG/s to add %d values\n", dur, float64(totalValues)/float64(dur)/float64(time.Second), float64(totalValueBytes)/float64(dur)/float64(time.Second)/1024/1024/1024, totalValues)
+			writeDone = true
+		} else if writeDone {
+			m = <-readChan
+			dur = time.Now().Sub(start)
+			fmt.Printf("%s %.0f/s %dns each, to read %d values\n", dur, float64(totalValues)/float64(dur)/float64(time.Second), int(dur)/totalValues, totalValues)
+			if m != 0 {
+				fmt.Println(m, "MISSING KEYS!")
+			}
+			readDone = true
+		} else {
+			select {
+			case m = <-readChan:
+				dur = time.Now().Sub(start)
+				fmt.Printf("%s %.0f/s %dns each, to read %d values while writing other values\n", dur, float64(totalValues)/float64(dur)/float64(time.Second), int(dur)/totalValues, totalValues)
+				if m != 0 {
+					fmt.Println(m, "MISSING KEYS!")
+				}
+				readDone = true
+			case <-writeChan:
+				dur = time.Now().Sub(start)
+				fmt.Printf("%s %.0f/s %0.2fG/s to add %d values while reading other values\n", dur, float64(totalValues)/float64(dur)/float64(time.Second), float64(totalValueBytes)/float64(dur)/float64(time.Second)/1024/1024/1024, totalValues)
+				writeDone = true
+			}
+		}
+	}
+	runtime.ReadMemStats(&st)
+	fmt.Printf("%0.2fG total alloc\n", float64(st.TotalAlloc)/1024/1024/1024)
+
+	fmt.Println()
+	start = time.Now()
+	m = readValues(vs, [][][]byte{keys, keys2}, value, clients, valuesPerClient)
+	dur = time.Now().Sub(start)
+	fmt.Printf("%s %.0f/s %dns each, to read %d values\n", dur, float64(totalValues*2)/float64(dur)/float64(time.Second), int(dur)/(totalValues*2), totalValues*2)
+	if m != 0 {
+		fmt.Println(m, "MISSING KEYS!")
+	}
+
+	start = time.Now()
+	vs.Close()
+	dur = time.Now().Sub(start)
+	fmt.Println(dur, "to close ValuesStore")
+}
+
+func createKeys(seed int64, clients int, valuesPerClient int) [][]byte {
 	wg := &sync.WaitGroup{}
 	keys := make([][]byte, clients)
 	wg.Add(clients)
 	for i := 0; i < clients; i++ {
-		keys[i] = make([]byte, keysPerClient*16)
+		keys[i] = make([]byte, valuesPerClient*16)
 		go func(i int) {
-			brimutil.NewSeededScrambled(seed + int64(keysPerClient*i)).Read(keys[i])
+			brimutil.NewSeededScrambled(seed + int64(valuesPerClient*i)).Read(keys[i])
 			wg.Done()
 		}(i)
 	}
 	wg.Wait()
-	value := make([]byte, valueLength)
-	//brimutil.NewSeededScrambled(seed).Read(value)
-	fmt.Println(time.Now().Sub(start), "to make keys and value")
-	start = time.Now()
-	speedStart := start
-	s := valuesstore.NewValuesStore(nil)
-	fmt.Println(time.Now().Sub(start), "to start store")
-	start = time.Now()
+	return keys
+}
+
+func writeValues(vs *valuesstore.ValuesStore, keys [][]byte, value []byte, clients int, valuesPerClient int) {
+	wg := &sync.WaitGroup{}
 	wg.Add(clients)
 	for i := 0; i < clients; i++ {
 		go func(keys []byte, seq uint64) {
@@ -90,46 +144,38 @@ func main() {
 				w.KeyA = binary.BigEndian.Uint64(keys[o:])
 				w.KeyB = binary.BigEndian.Uint64(keys[o+8:])
 				w.Seq++
-				s.WriteValue(w)
+				vs.WriteValue(w)
 				err = <-w.WrittenChan
 				if err != nil {
 					panic(err)
 				}
 			}
 			wg.Done()
-		}(keys[i], uint64(i*keysPerClient))
+		}(keys[i], uint64(i*valuesPerClient))
 	}
 	wg.Wait()
-	fmt.Println(time.Now().Sub(start), "to add keys")
-	start = time.Now()
-	speedStop := time.Now()
-	fmt.Println(time.Now().Sub(start), "to stop store")
-	seconds := float64(speedStop.UnixNano()-speedStart.UnixNano()) / 1000000000.0
-	fmt.Printf("%.2fG/s based on total value length\n", float64(totalValueLength)/seconds/1024.0/1024.0/1024.0)
-	var st runtime.MemStats
-	runtime.ReadMemStats(&st)
-	fmt.Printf("%.2fG total alloc\n", float64(st.TotalAlloc)/1024/1024/1024)
+}
 
-	fmt.Println()
-	start = time.Now()
-	speedStart = start
+func readValues(vs *valuesstore.ValuesStore, keys [][][]byte, value []byte, clients int, valuesPerClient int) int {
 	c := make([]chan int, clients)
 	for i := 0; i < clients; i++ {
 		c[i] = make(chan int)
-		go func(keys []byte, c chan int) {
-			r := s.NewReadValue()
+		go func(keys [][]byte, c chan int) {
+			r := vs.NewReadValue()
 			m := 0
-			for o := 0; o < len(keys); o += 16 {
-				r.KeyA = binary.BigEndian.Uint64(keys[o:])
-				r.KeyB = binary.BigEndian.Uint64(keys[o+8:])
-				s.ReadValue(r)
-				err := <-r.ReadChan
-				if err == valuesstore.ErrValueNotFound {
-					m++
-				} else if err != nil {
-					panic(err)
-				} else if !bytes.Equal(r.Value, value) {
-					panic(fmt.Sprintf("%#v != %#v", string(r.Value), string(value)))
+			for _, keysB := range keys {
+				for o := 0; o < len(keysB); o += 16 {
+					r.KeyA = binary.BigEndian.Uint64(keysB[o:])
+					r.KeyB = binary.BigEndian.Uint64(keysB[o+8:])
+					vs.ReadValue(r)
+					err := <-r.ReadChan
+					if err == valuesstore.ErrValueNotFound {
+						m++
+					} else if err != nil {
+						panic(err)
+					} else if !bytes.Equal(r.Value, value) {
+						panic(fmt.Sprintf("%#v != %#v", string(r.Value), string(value)))
+					}
 				}
 			}
 			c <- m
@@ -139,157 +185,18 @@ func main() {
 	for i := 0; i < clients; i++ {
 		m += <-c[i]
 	}
-	speedStop = time.Now()
-	fmt.Println(time.Now().Sub(start), "to lookup keys")
-	nanoseconds := speedStop.UnixNano() - speedStart.UnixNano()
-	seconds = float64(speedStop.UnixNano()-speedStart.UnixNano()) / 1000000000.0
-	fmt.Printf("%.2f key lookups per second\n", float64(totalKeys)/seconds)
-	fmt.Printf("%.2fns per key lookup\n", float64(nanoseconds)/float64(totalKeys))
-	fmt.Println(m, "keys missing")
+	return m
+}
 
-	fmt.Println()
-	start = time.Now()
-	keys2 := make([][]byte, clients)
-	wg.Add(clients)
-	for i := 0; i < clients; i++ {
-		keys2[i] = make([]byte, keysPerClient*16)
-		go func(i int) {
-			brimutil.NewSeededScrambled(seed + int64(totalKeys+keysPerClient*i)).Read(keys2[i])
-			wg.Done()
-		}(i)
-	}
-	wg.Wait()
-	fmt.Println(time.Now().Sub(start), "to make second set of keys")
-	start = time.Now()
-	speedStart = start
-	fmt.Println(time.Now().Sub(start), "to restart store")
-	start = time.Now()
-	wg.Add(clients)
-	for i := 0; i < clients; i++ {
-		go func(keys []byte, seq uint64) {
-			var err error
-			w := &valuesstore.WriteValue{
-				Value:       value,
-				WrittenChan: make(chan error, 1),
-				Seq:         seq,
-			}
-			for o := 0; o < len(keys); o += 16 {
-				w.KeyA = binary.BigEndian.Uint64(keys[o:])
-				w.KeyB = binary.BigEndian.Uint64(keys[o+8:])
-				w.Seq++
-				s.WriteValue(w)
-				err = <-w.WrittenChan
-				if err != nil {
-					panic(err)
-				}
-			}
-			wg.Done()
-		}(keys2[i], uint64(i*keysPerClient))
-		go func(keys []byte, c chan int) {
-			r := s.NewReadValue()
-			m := 0
-			for o := 0; o < len(keys); o += 16 {
-				r.KeyA = binary.BigEndian.Uint64(keys[o:])
-				r.KeyB = binary.BigEndian.Uint64(keys[o+8:])
-				s.ReadValue(r)
-				err := <-r.ReadChan
-				if err == valuesstore.ErrValueNotFound {
-					m++
-				} else if err != nil {
-					panic(err)
-				} else if !bytes.Equal(r.Value, value) {
-					panic(fmt.Sprintf("%#v != %#v", string(r.Value), string(value)))
-				}
-			}
-			c <- m
-		}(keys[i], c[i])
-	}
-	wg.Wait()
-	fmt.Println(time.Now().Sub(start), "to add new keys while looking up old keys")
-	start = time.Now()
-	speedStop = time.Now()
-	fmt.Println(time.Now().Sub(start), "to stop store")
-	nanoseconds = speedStop.UnixNano() - speedStart.UnixNano()
-	seconds = float64(speedStop.UnixNano()-speedStart.UnixNano()) / 1000000000.0
-	fmt.Printf("%.2fG/s based on total value length\n", float64(totalValueLength)/seconds/1024.0/1024.0/1024.0)
-	m = 0
-	for i := 0; i < clients; i++ {
-		m += <-c[i]
-	}
-	speedStop = time.Now()
-	nanoseconds = speedStop.UnixNano() - speedStart.UnixNano()
-	seconds = float64(speedStop.UnixNano()-speedStart.UnixNano()) / 1000000000.0
-	runtime.ReadMemStats(&st)
-	fmt.Printf("%.2fG total alloc\n", float64(st.TotalAlloc)/1024/1024/1024)
-	fmt.Printf("%.2f key lookups per second\n", float64(totalKeys)/seconds)
-	fmt.Printf("%.2fns per key lookup\n", float64(nanoseconds)/float64(totalKeys))
-	fmt.Println(m, "keys missing")
-
-	fmt.Println()
-	start = time.Now()
-	speedStart = start
-	for i := 0; i < clients; i++ {
-		go func(keys []byte, c chan int) {
-			r := s.NewReadValue()
-			m := 0
-			for o := 0; o < len(keys); o += 16 {
-				r.KeyA = binary.BigEndian.Uint64(keys[o:])
-				r.KeyB = binary.BigEndian.Uint64(keys[o+8:])
-				s.ReadValue(r)
-				err := <-r.ReadChan
-				if err == valuesstore.ErrValueNotFound {
-					m++
-				} else if err != nil {
-					panic(err)
-				} else if !bytes.Equal(r.Value, value) {
-					panic(fmt.Sprintf("%#v != %#v", string(r.Value), string(value)))
-				}
-			}
-			c <- m
-		}(keys[i], c[i])
-	}
-	m = 0
-	for i := 0; i < clients; i++ {
-		m += <-c[i]
-	}
-	for i := 0; i < clients; i++ {
-		go func(keys []byte, c chan int) {
-			r := s.NewReadValue()
-			m := 0
-			for o := 0; o < len(keys); o += 16 {
-				r.KeyA = binary.BigEndian.Uint64(keys[o:])
-				r.KeyB = binary.BigEndian.Uint64(keys[o+8:])
-				s.ReadValue(r)
-				err := <-r.ReadChan
-				if err == valuesstore.ErrValueNotFound {
-					m++
-				} else if err != nil {
-					panic(err)
-				} else if !bytes.Equal(r.Value, value) {
-					panic(fmt.Sprintf("%#v != %#v", string(r.Value), string(value)))
-				}
-			}
-			c <- m
-		}(keys2[i], c[i])
-	}
-	for i := 0; i < clients; i++ {
-		m += <-c[i]
-	}
-	speedStop = time.Now()
-	fmt.Println(time.Now().Sub(start), "to lookup both sets of keys")
-	nanoseconds = speedStop.UnixNano() - speedStart.UnixNano()
-	seconds = float64(speedStop.UnixNano()-speedStart.UnixNano()) / 1000000000.0
-	fmt.Printf("%.2f key lookups per second\n", float64(totalKeys*2)/seconds)
-	fmt.Printf("%.2fns per key lookup\n", float64(nanoseconds)/float64(totalKeys*2))
-	fmt.Println(m, "keys missing")
-	s.Close()
-
-	//f, err := os.Create("brimstore.blocking.pprof")
-	//if err != nil {
-	//	panic(err)
-	//}
-	//blockPprof.WriteTo(f, 0)
-	//f.Close()
-	//pprof.StopCPUProfile()
-	//cpuProf.Close()
+func readAndWriteValues(vs *valuesstore.ValuesStore, keys [][]byte, keys2 [][]byte, value []byte, clients int, valuesPerClient int) (chan int, chan struct{}) {
+	readChan := make(chan int, 1)
+	writeChan := make(chan struct{}, 1)
+	go func() {
+		readChan <- readValues(vs, [][][]byte{keys}, value, clients, valuesPerClient)
+	}()
+	go func() {
+		writeValues(vs, keys2, value, clients, valuesPerClient)
+		writeChan <- struct{}{}
+	}()
+	return readChan, writeChan
 }
