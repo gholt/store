@@ -160,7 +160,6 @@ func NewValuesStore(opts *ValuesStoreOpts) *ValuesStore {
 	if memValuesPageSize < 4096 {
 		memValuesPageSize = 4096
 	}
-	fmt.Println(memValuesPageSize, "memValuesPageSize")
 	checksumInterval := opts.ChecksumInterval
 	if checksumInterval < 1024 {
 		checksumInterval = 1024
