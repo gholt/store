@@ -18,7 +18,7 @@ import (
 
 var ErrValueNotFound error = fmt.Errorf("value not found")
 
-type writeValue struct {
+type wreq struct {
 	KeyA        uint64
 	KeyB        uint64
 	Value       []byte
@@ -115,7 +115,8 @@ func NewValuesStoreOpts() *ValuesStoreOpts {
 type ValuesStore struct {
 	clearableMemBlockChan chan *memBlock
 	clearedMemBlockChan   chan *memBlock
-	writeValueChans       []chan *writeValue
+	freeWreqChans         []chan *wreq
+	pendingWreqChans      []chan *wreq
 	vfMBChan              chan *memBlock
 	freeTOCBlockChan      chan []byte
 	pendingTOCBlockChan   chan []byte
@@ -185,7 +186,8 @@ func NewValuesStore(opts *ValuesStoreOpts) *ValuesStore {
 	}
 	vs.clearableMemBlockChan = make(chan *memBlock, vs.cores)
 	vs.clearedMemBlockChan = make(chan *memBlock, vs.cores)
-	vs.writeValueChans = make([]chan *writeValue, vs.cores)
+	vs.freeWreqChans = make([]chan *wreq, vs.cores)
+	vs.pendingWreqChans = make([]chan *wreq, vs.cores)
 	vs.vfMBChan = make(chan *memBlock, vs.cores)
 	vs.freeTOCBlockChan = make(chan []byte, vs.cores)
 	vs.pendingTOCBlockChan = make(chan []byte, vs.cores)
@@ -211,8 +213,14 @@ func NewValuesStore(opts *ValuesStoreOpts) *ValuesStore {
 		mb.id = vs.addValuesLocBock(mb)
 		vs.clearedMemBlockChan <- mb
 	}
-	for i := 0; i < len(vs.writeValueChans); i++ {
-		vs.writeValueChans[i] = make(chan *writeValue, vs.cores)
+	for i := 0; i < len(vs.freeWreqChans); i++ {
+		vs.freeWreqChans[i] = make(chan *wreq, vs.cores)
+		for j := 0; j < vs.cores; j++ {
+			vs.freeWreqChans[i] <- &wreq{WrittenChan: make(chan error, 1)}
+		}
+	}
+	for i := 0; i < len(vs.pendingWreqChans); i++ {
+		vs.pendingWreqChans[i] = make(chan *wreq, vs.cores)
 	}
 	for i := 0; i < cap(vs.vfMBChan); i++ {
 		mb := &memBlock{
@@ -240,8 +248,8 @@ func NewValuesStore(opts *ValuesStoreOpts) *ValuesStore {
 	for i := 0; i < len(vs.memClearerDoneChans); i++ {
 		go vs.memClearer(vs.memClearerDoneChans[i])
 	}
-	for i := 0; i < len(vs.writeValueChans); i++ {
-		go vs.memWriter(vs.writeValueChans[i], vs.memWriterDoneChans[i])
+	for i := 0; i < len(vs.pendingWreqChans); i++ {
+		go vs.memWriter(vs.pendingWreqChans[i], vs.memWriterDoneChans[i])
 	}
 	return vs
 }
@@ -251,7 +259,7 @@ func (vs *ValuesStore) MaxValueSize() int {
 }
 
 func (vs *ValuesStore) Close() {
-	for _, c := range vs.writeValueChans {
+	for _, c := range vs.pendingWreqChans {
 		c <- nil
 	}
 	<-vs.tocWriterDoneChan
@@ -274,15 +282,17 @@ func (vs *ValuesStore) ReadValue(keyA uint64, keyB uint64, value []byte) ([]byte
 // WriteValue stores value, seq for keyA, keyB or returns any error; a newer
 // seq already in place is not reported as an error.
 func (vs *ValuesStore) WriteValue(keyA uint64, keyB uint64, value []byte, seq uint64) error {
-	c := make(chan error, 1)
-	vs.writeValueChans[int(keyA>>1)%len(vs.writeValueChans)] <- &writeValue{
-		KeyA:        keyA,
-		KeyB:        keyB,
-		Value:       value,
-		Seq:         seq,
-		WrittenChan: c,
-	}
-	return <-c
+	i := int(keyA>>1) % len(vs.freeWreqChans)
+	wreq := <-vs.freeWreqChans[i]
+	wreq.KeyA = keyA
+	wreq.KeyB = keyB
+	wreq.Value = value
+	wreq.Seq = seq
+	vs.pendingWreqChans[i] <- wreq
+	err := <-wreq.WrittenChan
+	wreq.Value = nil
+	vs.freeWreqChans[i] <- wreq
+	return err
 }
 
 func (vs *ValuesStore) valuesLocBlock(valuesLocBlockID uint16) valuesLocBlock {
@@ -356,12 +366,12 @@ func (vs *ValuesStore) memClearer(memClearerDoneChan chan struct{}) {
 	memClearerDoneChan <- struct{}{}
 }
 
-func (vs *ValuesStore) memWriter(writeValueChan chan *writeValue, memWriterDoneChan chan struct{}) {
+func (vs *ValuesStore) memWriter(wreqChan chan *wreq, memWriterDoneChan chan struct{}) {
 	var mb *memBlock
 	var mbTOCOffset int
 	var mbDataOffset int
 	for {
-		w := <-writeValueChan
+		w := <-wreqChan
 		if w == nil {
 			if mb != nil && len(mb.toc) > 0 {
 				vs.vfMBChan <- mb
