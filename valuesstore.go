@@ -1,10 +1,12 @@
 package brimstore
 
 import (
+	"bytes"
 	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"math"
 	"os"
 	"runtime"
@@ -222,89 +224,7 @@ func NewValuesStore(opts *ValuesStoreOpts) *ValuesStore {
 	for i := 0; i < len(vs.pendingVWRChans); i++ {
 		go vs.memWriter(vs.pendingVWRChans[i])
 	}
-	dfp, err := os.Open(".")
-	if err != nil {
-		panic(err)
-	}
-	names, err := dfp.Readdirnames(-1)
-	if err != nil {
-		panic(err)
-	}
-	sort.Strings(names)
-	count := 0
-	for i := len(names) - 1; i >= 0; i-- {
-		if !strings.HasSuffix(names[i], ".toc") {
-			continue
-		}
-		fmt.Println("reading", names[i])
-		ts := int64(0)
-		if ts, err = strconv.ParseInt(names[i][:len(names[i])-4], 10, 64); err != nil {
-			panic(err)
-		}
-		if ts == 0 {
-			panic(ts)
-		}
-		vf := newValuesFile(vs, ts)
-		fp, err := os.Open(names[i])
-		if err != nil {
-			panic(err)
-		}
-		buf := make([]byte, vs.checksumInterval+4)
-		overflow := make([]byte, 0, 28)
-		first := true
-		for {
-			n, err := io.ReadFull(fp, buf)
-			if n < 4 {
-				if err != io.EOF || err != io.ErrUnexpectedEOF {
-					fmt.Println(err)
-				}
-				break
-			}
-			n -= 4
-			c := murmur3.Sum32(buf[:n])
-			if c == binary.BigEndian.Uint32(buf[n:]) {
-				i := 0
-				if first {
-					i += 32
-					first = false
-				}
-				if len(overflow) > 0 {
-					i += 28 - len(overflow)
-					overflow = append(overflow, buf[i-28+len(overflow):i]...)
-					offset := binary.BigEndian.Uint32(overflow)
-					a := binary.BigEndian.Uint64(overflow[4:])
-					b := binary.BigEndian.Uint64(overflow[12:])
-					q := binary.BigEndian.Uint64(overflow[20:])
-					vs.vlm.set(vf.id, offset, a, b, q)
-					count++
-					overflow = overflow[:0]
-				}
-				for ; i+28 <= n; i += 28 {
-					offset := binary.BigEndian.Uint32(buf[i:])
-					a := binary.BigEndian.Uint64(buf[i+4:])
-					b := binary.BigEndian.Uint64(buf[i+12:])
-					q := binary.BigEndian.Uint64(buf[i+20:])
-					vs.vlm.set(vf.id, offset, a, b, q)
-					count++
-				}
-				if i != n {
-					overflow = overflow[:n-i]
-					copy(overflow, buf[i-28:])
-				}
-			} else {
-				fmt.Println("checksum fail")
-			}
-			if err == io.EOF || err == io.ErrUnexpectedEOF {
-				break
-			}
-			if err != nil {
-				fmt.Println(err)
-				break
-			}
-		}
-		fp.Close()
-	}
-	fmt.Println(count, "count")
+	vs.recover()
 	return vs
 }
 
@@ -557,7 +477,7 @@ func (vs *ValuesStore) tocWriter() {
 				writerB = writerA
 				offsetB = offsetA
 				tsA = ts
-				fp, err := os.Create(fmt.Sprintf("%d.toc", ts))
+				fp, err := os.Create(fmt.Sprintf("%d.valuestoc", ts))
 				if err != nil {
 					panic(err)
 				}
@@ -574,6 +494,123 @@ func (vs *ValuesStore) tocWriter() {
 		vs.freeTOCBlockChan <- t[:0]
 	}
 	vs.tocWriterDoneChan <- struct{}{}
+}
+
+func (vs *ValuesStore) recover() {
+	start := time.Now()
+	dfp, err := os.Open(".")
+	if err != nil {
+		panic(err)
+	}
+	names, err := dfp.Readdirnames(-1)
+	if err != nil {
+		panic(err)
+	}
+	sort.Strings(names)
+	count := 0
+	for i := len(names) - 1; i >= 0; i-- {
+		if !strings.HasSuffix(names[i], ".valuestoc") {
+			continue
+		}
+		ts := int64(0)
+		if ts, err = strconv.ParseInt(names[i][:len(names[i])-len(".valuestoc")], 10, 64); err != nil {
+			log.Printf("bad timestamp name: %#v\n", names[i])
+			continue
+		}
+		if ts == 0 {
+			log.Printf("bad timestamp name: %#v\n", names[i])
+			continue
+		}
+		vf := newValuesFile(vs, ts)
+		fp, err := os.Open(names[i])
+		if err != nil {
+			log.Printf("error opening %s: %s\n", names[i], err)
+			continue
+		}
+		buf := make([]byte, vs.checksumInterval+4)
+		checksumFailures := 0
+		overflow := make([]byte, 0, 28)
+		first := true
+		terminated := false
+		for {
+			n, err := io.ReadFull(fp, buf)
+			if n < 4 {
+				if err != io.EOF && err != io.ErrUnexpectedEOF {
+					log.Printf("error reading %s: %s\n", names[i], err)
+				}
+				break
+			}
+			n -= 4
+			c := murmur3.Sum32(buf[:n])
+			if c != binary.BigEndian.Uint32(buf[n:]) {
+				checksumFailures++
+			} else {
+				i := 0
+				if first {
+					if !bytes.Equal(buf[:28], []byte("BRIMSTORE VALUESTOC v0      ")) {
+						log.Printf("bad header: %s\n", names[i])
+						break
+					}
+					if binary.BigEndian.Uint32(buf[28:]) != vs.checksumInterval {
+						log.Printf("bad header checksum interval: %s\n", names[i])
+						break
+					}
+					i += 32
+					first = false
+				}
+				if n < int(vs.checksumInterval) {
+					if binary.BigEndian.Uint32(buf[n-16:]) != 0 {
+						log.Printf("bad terminator size marker: %s\n", names[i])
+						break
+					}
+					if !bytes.Equal(buf[n-4:n], []byte("TERM")) {
+						log.Printf("bad terminator: %s\n", names[i])
+						break
+					}
+					n -= 16
+					terminated = true
+				}
+				if len(overflow) > 0 {
+					i += 28 - len(overflow)
+					overflow = append(overflow, buf[i-28+len(overflow):i]...)
+					offset := binary.BigEndian.Uint32(overflow)
+					a := binary.BigEndian.Uint64(overflow[4:])
+					b := binary.BigEndian.Uint64(overflow[12:])
+					q := binary.BigEndian.Uint64(overflow[20:])
+					vs.vlm.set(vf.id, offset, a, b, q)
+					count++
+					overflow = overflow[:0]
+				}
+				for ; i+28 <= n; i += 28 {
+					offset := binary.BigEndian.Uint32(buf[i:])
+					a := binary.BigEndian.Uint64(buf[i+4:])
+					b := binary.BigEndian.Uint64(buf[i+12:])
+					q := binary.BigEndian.Uint64(buf[i+20:])
+					vs.vlm.set(vf.id, offset, a, b, q)
+					count++
+				}
+				if i != n {
+					overflow = overflow[:n-i]
+					copy(overflow, buf[i:])
+				}
+			}
+			if err != nil && err != io.EOF && err != io.ErrUnexpectedEOF {
+				log.Printf("error reading %s: %s\n", names[i], err)
+				break
+			}
+		}
+		fp.Close()
+		if !terminated {
+			log.Printf("early end of file: %s\n", names[i])
+		}
+		if checksumFailures > 0 {
+			log.Printf("%d checksum failures for %s\n", checksumFailures, names[i])
+		}
+	}
+	if count > 0 {
+		dur := time.Now().Sub(start)
+		log.Printf("%d key locations recovered in %s, %.0f/s\n", count, dur, float64(count)/(float64(dur)/float64(time.Second)))
+	}
 }
 
 type valueWriteReq struct {
