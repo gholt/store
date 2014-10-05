@@ -18,14 +18,6 @@ import (
 
 var ErrValueNotFound error = fmt.Errorf("value not found")
 
-type wreq struct {
-	KeyA        uint64
-	KeyB        uint64
-	Value       []byte
-	Seq         uint64
-	WrittenChan chan error
-}
-
 // ValuesStoreOpts allows configuration of the ValuesStore, although normally
 // the defaults are best.
 type ValuesStoreOpts struct {
@@ -216,11 +208,11 @@ func NewValuesStore(opts *ValuesStoreOpts) *ValuesStore {
 	for i := 0; i < len(vs.freeWreqChans); i++ {
 		vs.freeWreqChans[i] = make(chan *wreq, vs.cores)
 		for j := 0; j < vs.cores; j++ {
-			vs.freeWreqChans[i] <- &wreq{WrittenChan: make(chan error, 1)}
+			vs.freeWreqChans[i] <- &wreq{errChan: make(chan error, 1)}
 		}
 	}
 	for i := 0; i < len(vs.pendingWreqChans); i++ {
-		vs.pendingWreqChans[i] = make(chan *wreq, vs.cores)
+		vs.pendingWreqChans[i] = make(chan *wreq)
 	}
 	for i := 0; i < cap(vs.vfMBChan); i++ {
 		mb := &memBlock{
@@ -283,15 +275,15 @@ func (vs *ValuesStore) ReadValue(keyA uint64, keyB uint64, value []byte) ([]byte
 // seq already in place is not reported as an error.
 func (vs *ValuesStore) WriteValue(keyA uint64, keyB uint64, value []byte, seq uint64) error {
 	i := int(keyA>>1) % len(vs.freeWreqChans)
-	wreq := <-vs.freeWreqChans[i]
-	wreq.KeyA = keyA
-	wreq.KeyB = keyB
-	wreq.Value = value
-	wreq.Seq = seq
-	vs.pendingWreqChans[i] <- wreq
-	err := <-wreq.WrittenChan
-	wreq.Value = nil
-	vs.freeWreqChans[i] <- wreq
+	w := <-vs.freeWreqChans[i]
+	w.keyA = keyA
+	w.keyB = keyB
+	w.value = value
+	w.seq = seq
+	vs.pendingWreqChans[i] <- w
+	err := <-w.errChan
+	w.value = nil
+	vs.freeWreqChans[i] <- w
 	return err
 }
 
@@ -381,9 +373,9 @@ func (vs *ValuesStore) memWriter(wreqChan chan *wreq, memWriterDoneChan chan str
 			<-vs.clearedMemBlockChan
 			break
 		}
-		vz := len(w.Value)
+		vz := len(w.value)
 		if vz > vs.maxValueSize {
-			w.WrittenChan <- fmt.Errorf("value length of %d > %d", vz, vs.maxValueSize)
+			w.errChan <- fmt.Errorf("value length of %d > %d", vz, vs.maxValueSize)
 			continue
 		}
 		if mb != nil && (mbTOCOffset+28 > cap(mb.toc) || mbDataOffset+4+vz > cap(mb.data)) {
@@ -397,18 +389,18 @@ func (vs *ValuesStore) memWriter(wreqChan chan *wreq, memWriterDoneChan chan str
 		}
 		mb.toc = mb.toc[:mbTOCOffset+28]
 		binary.BigEndian.PutUint32(mb.toc[mbTOCOffset:], uint32(mbDataOffset))
-		binary.BigEndian.PutUint64(mb.toc[mbTOCOffset+4:], w.KeyA)
-		binary.BigEndian.PutUint64(mb.toc[mbTOCOffset+12:], w.KeyB)
-		binary.BigEndian.PutUint64(mb.toc[mbTOCOffset+20:], w.Seq)
+		binary.BigEndian.PutUint64(mb.toc[mbTOCOffset+4:], w.keyA)
+		binary.BigEndian.PutUint64(mb.toc[mbTOCOffset+12:], w.keyB)
+		binary.BigEndian.PutUint64(mb.toc[mbTOCOffset+20:], w.seq)
 		mbTOCOffset += 28
 		mb.discardLock.Lock()
 		mb.data = mb.data[:mbDataOffset+4+vz]
 		mb.discardLock.Unlock()
 		binary.BigEndian.PutUint32(mb.data[mbDataOffset:], uint32(vz))
-		copy(mb.data[mbDataOffset+4:], w.Value)
-		vs.vlm.set(mb.id, uint32(mbDataOffset), w.KeyA, w.KeyB, w.Seq)
+		copy(mb.data[mbDataOffset+4:], w.value)
+		vs.vlm.set(mb.id, uint32(mbDataOffset), w.keyA, w.keyB, w.seq)
 		mbDataOffset += 4 + vz
-		w.WrittenChan <- nil
+		w.errChan <- nil
 	}
 	memWriterDoneChan <- struct{}{}
 }
@@ -533,6 +525,14 @@ func (vs *ValuesStore) tocWriter() {
 		vs.freeTOCBlockChan <- t[:0]
 	}
 	vs.tocWriterDoneChan <- struct{}{}
+}
+
+type wreq struct {
+	keyA    uint64
+	keyB    uint64
+	value   []byte
+	seq     uint64
+	errChan chan error
 }
 
 type valuesLocBlock interface {
