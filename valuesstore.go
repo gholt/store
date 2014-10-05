@@ -223,6 +223,47 @@ func NewValuesStore(opts *ValuesStoreOpts) *ValuesStore {
 	for i := 0; i < len(vs.pendingVWRChans); i++ {
 		go vs.memWriter(vs.pendingVWRChans[i])
 	}
+	//fp, err := os.Open("1412518284291556122.toc")
+	//if err != nil {
+	//    panic(err)
+	//}
+	//buf := make([]byte, vs.checksumInterval + 4)
+	//first := true
+	//for {
+	//    n, err := io.ReadFull(fp, buf)
+	//    if n < 4 {
+	//        if err != io.EOF || err != io.ErrUnexpectedEOF {
+	//            fmt.Println(err)
+	//        }
+	//        break
+	//    }
+	//    n-=4
+	//    c := murmur3.Sum32(buf[:n])
+	//    if c == binary.BigEndian.Uint32(buf[n:]) {
+	//        i := 0
+	//        if first {
+	//            i += 32
+	//            first = false
+	//        }
+	//        for ;i+28 < n;i+=28 {
+	//            offset := binary.BigEndian.Uint32(buf[i:])
+	//            a := binary.BigEndian.Uint64(buf[i+4:])
+	//            b := binary.BigEndian.Uint64(buf[i+12:])
+	//            q := binary.BigEndian.Uint64(buf[i+20:])
+	//            vs.vlm.set(10, offset, a, b, q)
+	//        }
+	//    } else {
+	//        fmt.Println("checksum fail")
+	//    }
+	//    if err == io.EOF || err == io.ErrUnexpectedEOF {
+	//        break
+	//    }
+	//    if err != nil {
+	//        fmt.Println(err)
+	//        break
+	//    }
+	//}
+	//fp.Close()
 	return vs
 }
 
@@ -298,7 +339,6 @@ func (vs *ValuesStore) memClearer() {
 		}
 		vf := vs.valuesLocBlock(vm.vfID)
 		if tb != nil && tbTS != vf.timestamp() {
-			binary.BigEndian.PutUint32(tb, uint32(len(tb)-4))
 			vs.pendingTOCBlockChan <- tb
 			tb = nil
 		}
@@ -309,16 +349,15 @@ func (vs *ValuesStore) memClearer() {
 			q := binary.BigEndian.Uint64(vm.toc[vmTOCOffset+20:])
 			vs.vlm.set(vm.vfID, vm.vfOffset+vmMemOffset, a, b, q)
 			if tb != nil && tbOffset+28 > cap(tb) {
-				binary.BigEndian.PutUint32(tb, uint32(len(tb)-4))
 				vs.pendingTOCBlockChan <- tb
 				tb = nil
 			}
 			if tb == nil {
 				tb = <-vs.freeTOCBlockChan
 				tbTS = vf.timestamp()
-				tb = tb[:12]
-				binary.BigEndian.PutUint64(tb[4:], uint64(tbTS))
-				tbOffset = 12
+				tb = tb[:8]
+				binary.BigEndian.PutUint64(tb, uint64(tbTS))
+				tbOffset = 8
 			}
 			tb = tb[:tbOffset+28]
 			binary.BigEndian.PutUint32(tb[tbOffset:], vm.vfOffset+uint32(vmMemOffset))
@@ -437,7 +476,6 @@ func (vs *ValuesStore) tocWriter() {
 					if err := writerB.Close(); err != nil {
 						panic(err)
 					}
-					offsetB += 16
 				}
 				if writerA != nil {
 					binary.BigEndian.PutUint64(term[4:], offsetA)
@@ -447,25 +485,24 @@ func (vs *ValuesStore) tocWriter() {
 					if err := writerA.Close(); err != nil {
 						panic(err)
 					}
-					offsetA += 16
 				}
 				break
 			}
 			continue
 		}
-		if len(t) > 0 {
-			ts := binary.BigEndian.Uint64(t[4:])
+		if len(t) > 8 {
+			ts := binary.BigEndian.Uint64(t)
 			switch ts {
 			case tsA:
-				if _, err := writerA.Write(t); err != nil {
+				if _, err := writerA.Write(t[8:]); err != nil {
 					panic(err)
 				}
-				offsetA += uint64(len(t))
+				offsetA += uint64(len(t) - 8)
 			case tsB:
-				if _, err := writerB.Write(t); err != nil {
+				if _, err := writerB.Write(t[8:]); err != nil {
 					panic(err)
 				}
-				offsetB += uint64(len(t))
+				offsetB += uint64(len(t) - 8)
 			default:
 				// An assumption is made here: If the timestamp for this toc
 				// block doesn't match the last two seen timestamps then we
@@ -479,7 +516,6 @@ func (vs *ValuesStore) tocWriter() {
 					if err := writerB.Close(); err != nil {
 						panic(err)
 					}
-					offsetB += 16
 				}
 				tsB = tsA
 				writerB = writerA
@@ -493,10 +529,10 @@ func (vs *ValuesStore) tocWriter() {
 				if _, err := writerA.Write(head); err != nil {
 					panic(err)
 				}
-				if _, err := writerA.Write(t); err != nil {
+				if _, err := writerA.Write(t[8:]); err != nil {
 					panic(err)
 				}
-				offsetA = 32 + uint64(len(t))
+				offsetA = 32 + uint64(len(t)-8)
 			}
 		}
 		vs.freeTOCBlockChan <- t[:0]
