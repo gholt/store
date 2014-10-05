@@ -188,7 +188,7 @@ func NewValuesStore(opts *ValuesStoreOpts) *ValuesStore {
 	vs.freeVWRChans = make([]chan *valueWriteReq, vs.cores)
 	vs.pendingVWRChans = make([]chan *valueWriteReq, vs.cores)
 	vs.vfVMChan = make(chan *valuesMem, vs.cores)
-	vs.freeTOCBlockChan = make(chan []byte, vs.cores)
+	vs.freeTOCBlockChan = make(chan []byte, vs.cores*2)
 	vs.pendingTOCBlockChan = make(chan []byte, vs.cores)
 	vs.tocWriterDoneChan = make(chan struct{}, 1)
 	for i := 0; i < cap(vs.freeVMChan); i++ {
@@ -201,8 +201,8 @@ func NewValuesStore(opts *ValuesStoreOpts) *ValuesStore {
 		vs.freeVMChan <- vm
 	}
 	for i := 0; i < len(vs.freeVWRChans); i++ {
-		vs.freeVWRChans[i] = make(chan *valueWriteReq, vs.cores)
-		for j := 0; j < vs.cores; j++ {
+		vs.freeVWRChans[i] = make(chan *valueWriteReq, vs.cores*2)
+		for j := 0; j < vs.cores*2; j++ {
 			vs.freeVWRChans[i] <- &valueWriteReq{errChan: make(chan error, 1)}
 		}
 	}
@@ -211,9 +211,6 @@ func NewValuesStore(opts *ValuesStoreOpts) *ValuesStore {
 	}
 	for i := 0; i < cap(vs.freeTOCBlockChan); i++ {
 		vs.freeTOCBlockChan <- make([]byte, 0, vs.memTOCPageSize)
-	}
-	for i := 0; i < cap(vs.pendingTOCBlockChan); i++ {
-		vs.pendingTOCBlockChan <- make([]byte, 0, vs.memTOCPageSize)
 	}
 	go vs.tocWriter()
 	go vs.vfWriter()
@@ -329,12 +326,9 @@ func (vs *ValuesStore) memClearer() {
 		vm := <-vs.freeableVMChan
 		if vm == nil {
 			if tb != nil {
-				binary.BigEndian.PutUint32(tb, uint32(len(tb)-4))
 				vs.pendingTOCBlockChan <- tb
-				<-vs.freeTOCBlockChan
 			}
 			vs.pendingTOCBlockChan <- nil
-			<-vs.freeTOCBlockChan
 			break
 		}
 		vf := vs.valuesLocBlock(vm.vfID)
@@ -385,10 +379,8 @@ func (vs *ValuesStore) memWriter(VWRChan chan *valueWriteReq) {
 		if vwr == nil {
 			if vm != nil && len(vm.toc) > 0 {
 				vs.vfVMChan <- vm
-				<-vs.freeVMChan
 			}
 			vs.vfVMChan <- nil
-			<-vs.freeVMChan
 			break
 		}
 		vz := len(vwr.value)
