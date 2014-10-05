@@ -88,7 +88,7 @@ func (vf *valuesFile) readValue(keyA uint64, keyB uint64, value []byte, seq uint
 		return value, seq, err
 	}
 	z := int(binary.BigEndian.Uint32(vf.readerLens[i]))
-	if len(value)+z < cap(value) {
+	if len(value)+z <= cap(value) {
 		value = value[:len(value)+z]
 	} else {
 		value2 := make([]byte, len(value)+z)
