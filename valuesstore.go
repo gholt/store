@@ -103,7 +103,7 @@ func NewValuesStoreOpts() *ValuesStoreOpts {
 	return opts
 }
 
-// ValuesStore will store []byte values referenced by 128 bit keys.
+// ValuesStore: See NewValuesStore.
 type ValuesStore struct {
 	clearableVMChan       chan *valuesMem
 	clearedVMChan         chan *valuesMem
@@ -125,8 +125,12 @@ type ValuesStore struct {
 	checksumInterval      uint32
 }
 
-// NewValuesStore initializes a ValuesStore for use; opts may be nil to use the
-// defaults.
+// NewValuesStore creates a ValuesStore for use in storing []byte values
+// referenced by 128 bit keys; opts may be nil to use the defaults.
+//
+// Note that a lot of buffering and multiple cores can be in use and Close
+// should be called prior to the process exiting to ensure all processing is
+// done and the buffers are flushed.
 func NewValuesStore(opts *ValuesStoreOpts) *ValuesStore {
 	if opts == nil {
 		opts = NewValuesStoreOpts()
