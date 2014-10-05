@@ -105,8 +105,8 @@ func NewValuesStoreOpts() *ValuesStoreOpts {
 
 // ValuesStore: See NewValuesStore.
 type ValuesStore struct {
-	clearableVMChan       chan *valuesMem
-	clearedVMChan         chan *valuesMem
+	freeableVMChan        chan *valuesMem
+	freeVMChan            chan *valuesMem
 	freeVWRChans          []chan *valueWriteReq
 	pendingVWRChans       []chan *valueWriteReq
 	vfVMChan              chan *valuesMem
@@ -165,6 +165,12 @@ func NewValuesStore(opts *ValuesStoreOpts) *ValuesStore {
 	} else if checksumInterval >= 4294967296 {
 		checksumInterval = 4294967295
 	}
+	if memTOCPageSize < checksumInterval/2+1 {
+		memTOCPageSize = checksumInterval/2 + 1
+	}
+	if memValuesPageSize < checksumInterval/2+1 {
+		memValuesPageSize = checksumInterval/2 + 1
+	}
 	vs := &ValuesStore{
 		valuesLocBlocks:       make([]valuesLocBlock, 65536),
 		atValuesLocBlocksIDer: _VALUESBLOCK_IDOFFSET - 1,
@@ -177,31 +183,31 @@ func NewValuesStore(opts *ValuesStoreOpts) *ValuesStore {
 		checksumInterval:  uint32(checksumInterval),
 		valuesFileReaders: valuesFileReaders,
 	}
-	vs.clearableVMChan = make(chan *valuesMem, vs.cores)
-	vs.clearedVMChan = make(chan *valuesMem, vs.cores)
+	vs.freeableVMChan = make(chan *valuesMem, vs.cores)
+	vs.freeVMChan = make(chan *valuesMem, vs.cores*2)
 	vs.freeVWRChans = make([]chan *valueWriteReq, vs.cores)
 	vs.pendingVWRChans = make([]chan *valueWriteReq, vs.cores)
 	vs.vfVMChan = make(chan *valuesMem, vs.cores)
 	vs.freeTOCBlockChan = make(chan []byte, vs.cores)
 	vs.pendingTOCBlockChan = make(chan []byte, vs.cores)
 	vs.tocWriterDoneChan = make(chan struct{}, 1)
-	//for i := 0; i < cap(vs.clearableVMChan); i++ {
+	//for i := 0; i < cap(vs.freeableVMChan); i++ {
 	//	vm := &valuesMem{
 	//		vs:     vs,
 	//		toc:    make([]byte, 0, vs.memTOCPageSize),
 	//		values: make([]byte, 0, vs.memValuesPageSize),
 	//	}
 	//	vm.id = vs.addValuesLocBock(vm)
-	//	vs.clearableVMChan <- vm
+	//	vs.freeableVMChan <- vm
 	//}
-	for i := 0; i < cap(vs.clearedVMChan); i++ {
+	for i := 0; i < cap(vs.freeVMChan); i++ {
 		vm := &valuesMem{
 			vs:     vs,
 			toc:    make([]byte, 0, vs.memTOCPageSize),
 			values: make([]byte, 0, vs.memValuesPageSize),
 		}
 		vm.id = vs.addValuesLocBock(vm)
-		vs.clearedVMChan <- vm
+		vs.freeVMChan <- vm
 	}
 	for i := 0; i < len(vs.freeVWRChans); i++ {
 		vs.freeVWRChans[i] = make(chan *valueWriteReq, vs.cores)
@@ -297,7 +303,7 @@ func (vs *ValuesStore) memClearer() {
 	var tbTS int64
 	var tbOffset int
 	for {
-		vm := <-vs.clearableVMChan
+		vm := <-vs.freeableVMChan
 		if vm == nil {
 			if tb != nil {
 				binary.BigEndian.PutUint32(tb, uint32(len(tb)-4))
@@ -345,7 +351,7 @@ func (vs *ValuesStore) memClearer() {
 		vm.toc = vm.toc[:0]
 		vm.values = vm.values[:0]
 		vm.discardLock.Unlock()
-		vs.clearedVMChan <- vm
+		vs.freeVMChan <- vm
 	}
 }
 
@@ -358,10 +364,10 @@ func (vs *ValuesStore) memWriter(VWRChan chan *valueWriteReq) {
 		if vwr == nil {
 			if vm != nil && len(vm.toc) > 0 {
 				vs.vfVMChan <- vm
-				<-vs.clearedVMChan
+				<-vs.freeVMChan
 			}
 			vs.vfVMChan <- nil
-			<-vs.clearedVMChan
+			<-vs.freeVMChan
 			break
 		}
 		vz := len(vwr.value)
@@ -374,7 +380,7 @@ func (vs *ValuesStore) memWriter(VWRChan chan *valueWriteReq) {
 			vm = nil
 		}
 		if vm == nil {
-			vm = <-vs.clearedVMChan
+			vm = <-vs.freeVMChan
 			vmTOCOffset = 0
 			vmMemOffset = 0
 		}
@@ -407,7 +413,7 @@ func (vs *ValuesStore) vfWriter() {
 					vf.close()
 				}
 				for i := 0; i <= vs.cores; i++ {
-					vs.clearableVMChan <- nil
+					vs.freeableVMChan <- nil
 				}
 				break
 			}

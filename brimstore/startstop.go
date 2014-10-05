@@ -15,7 +15,7 @@ func startstop() {
 	fmt.Printf("%0.2fG total alloc\n", float64(st.TotalAlloc)/1024/1024/1024)
 	start := time.Now()
 
-    fmt.Println()
+	fmt.Println()
 	vs := brimstore.NewValuesStore(nil)
 	dur := time.Now().Sub(start)
 	fmt.Println(dur, "to start ValuesStore")

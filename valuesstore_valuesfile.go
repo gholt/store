@@ -108,7 +108,7 @@ func (vf *valuesFile) write(vm *valuesMem) {
 		return
 	}
 	if len(vm.values) < 1 {
-		vf.vs.clearableVMChan <- vm
+		vf.vs.freeableVMChan <- vm
 		return
 	}
 	vm.vfID = vf.id
@@ -127,7 +127,7 @@ func (vf *valuesFile) write(vm *valuesMem) {
 		left -= n
 	}
 	if vf.buf.offset == 0 {
-		vf.vs.clearableVMChan <- vm
+		vf.vs.freeableVMChan <- vm
 	} else {
 		vf.buf.vms = append(vf.buf.vms, vm)
 	}
@@ -158,7 +158,7 @@ func (vf *valuesFile) close() {
 		panic(err)
 	}
 	for _, vm := range vf.buf.vms {
-		vf.vs.clearableVMChan <- vm
+		vf.vs.freeableVMChan <- vm
 	}
 	vf.writerFP = nil
 	vf.freeChan = nil
@@ -203,7 +203,7 @@ func (vf *valuesFile) writer() {
 		}
 		if len(buf.vms) > 0 {
 			for _, vm := range buf.vms {
-				vf.vs.clearableVMChan <- vm
+				vf.vs.freeableVMChan <- vm
 			}
 			buf.vms = buf.vms[:0]
 		}
