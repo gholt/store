@@ -39,6 +39,7 @@ func main() {
 	fmt.Printf("%d %0.2fG total value bytes\n", totalValueBytes, float64(totalValueBytes)/1024/1024/1024)
 	var st runtime.MemStats
 	runtime.ReadMemStats(&st)
+	lastAlloc := st.TotalAlloc
 	fmt.Printf("%0.2fG total alloc\n", float64(st.TotalAlloc)/1024/1024/1024)
 
 	fmt.Println()
@@ -47,7 +48,9 @@ func main() {
 	dur := time.Now().Sub(start)
 	fmt.Println(dur, "to start ValuesStore")
 	runtime.ReadMemStats(&st)
-	fmt.Printf("%0.2fG total alloc\n", float64(st.TotalAlloc)/1024/1024/1024)
+	deltaAlloc := st.TotalAlloc - lastAlloc
+	lastAlloc = st.TotalAlloc
+	fmt.Printf("%0.2fG total alloc, %0.2fG delta\n", float64(st.TotalAlloc)/1024/1024/1024, float64(deltaAlloc)/1024/1024/1024)
 
 	fmt.Println()
 	start = time.Now()
@@ -55,7 +58,9 @@ func main() {
 	dur = time.Now().Sub(start)
 	fmt.Printf("%s %.0f/s %0.2fG/s to add %d values\n", dur, float64(totalValues)/(float64(dur)/float64(time.Second)), float64(totalValueBytes)/(float64(dur)/float64(time.Second))/1024/1024/1024, totalValues)
 	runtime.ReadMemStats(&st)
-	fmt.Printf("%0.2fG total alloc\n", float64(st.TotalAlloc)/1024/1024/1024)
+	deltaAlloc = st.TotalAlloc - lastAlloc
+	lastAlloc = st.TotalAlloc
+	fmt.Printf("%0.2fG total alloc, %0.2fG delta\n", float64(st.TotalAlloc)/1024/1024/1024, float64(deltaAlloc)/1024/1024/1024)
 
 	fmt.Println()
 	start = time.Now()
@@ -66,7 +71,9 @@ func main() {
 		fmt.Println(m, "MISSING KEYS!")
 	}
 	runtime.ReadMemStats(&st)
-	fmt.Printf("%0.2fG total alloc\n", float64(st.TotalAlloc)/1024/1024/1024)
+	deltaAlloc = st.TotalAlloc - lastAlloc
+	lastAlloc = st.TotalAlloc
+	fmt.Printf("%0.2fG total alloc, %0.2fG delta\n", float64(st.TotalAlloc)/1024/1024/1024, float64(deltaAlloc)/1024/1024/1024)
 
 	fmt.Println()
 	start = time.Now()
@@ -104,7 +111,9 @@ func main() {
 		}
 	}
 	runtime.ReadMemStats(&st)
-	fmt.Printf("%0.2fG total alloc\n", float64(st.TotalAlloc)/1024/1024/1024)
+	deltaAlloc = st.TotalAlloc - lastAlloc
+	lastAlloc = st.TotalAlloc
+	fmt.Printf("%0.2fG total alloc, %0.2fG delta\n", float64(st.TotalAlloc)/1024/1024/1024, float64(deltaAlloc)/1024/1024/1024)
 
 	fmt.Println()
 	start = time.Now()
@@ -115,7 +124,9 @@ func main() {
 		fmt.Println(m, "MISSING KEYS!")
 	}
 	runtime.ReadMemStats(&st)
-	fmt.Printf("%0.2fG total alloc\n", float64(st.TotalAlloc)/1024/1024/1024)
+	deltaAlloc = st.TotalAlloc - lastAlloc
+	lastAlloc = st.TotalAlloc
+	fmt.Printf("%0.2fG total alloc, %0.2fG delta\n", float64(st.TotalAlloc)/1024/1024/1024, float64(deltaAlloc)/1024/1024/1024)
 
 	fmt.Println()
 	start = time.Now()
@@ -123,7 +134,9 @@ func main() {
 	dur = time.Now().Sub(start)
 	fmt.Println(dur, "to close ValuesStore")
 	runtime.ReadMemStats(&st)
-	fmt.Printf("%0.2fG total alloc\n", float64(st.TotalAlloc)/1024/1024/1024)
+	deltaAlloc = st.TotalAlloc - lastAlloc
+	lastAlloc = st.TotalAlloc
+	fmt.Printf("%0.2fG total alloc, %0.2fG delta\n", float64(st.TotalAlloc)/1024/1024/1024, float64(deltaAlloc)/1024/1024/1024)
 }
 
 func createKeys(seed int64, clients int, valuesPerClient int) [][]byte {
