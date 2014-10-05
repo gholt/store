@@ -1,1 +1,1 @@
-![Overview of store.go](store.go.overview.png)
+Work In Progress
