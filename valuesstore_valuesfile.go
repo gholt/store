@@ -33,7 +33,7 @@ type wbuf struct {
 	seq    int
 	buf    []byte
 	offset uint32
-	mbs    []*memBlock
+	vms    []*valuesMem
 }
 
 func newValuesFile(vs *ValuesStore) *valuesFile {
@@ -103,19 +103,19 @@ func (vf *valuesFile) readValue(keyA uint64, keyB uint64, value []byte, seq uint
 	return value, seq, nil
 }
 
-func (vf *valuesFile) write(mb *memBlock) {
-	if mb == nil {
+func (vf *valuesFile) write(vm *valuesMem) {
+	if vm == nil {
 		return
 	}
-	if len(mb.data) < 1 {
-		vf.vs.clearableMemBlockChan <- mb
+	if len(vm.values) < 1 {
+		vf.vs.clearableVMChan <- vm
 		return
 	}
-	mb.vfID = vf.id
-	mb.vfOffset = atomic.LoadUint32(&vf.atOffset)
-	left := len(mb.data)
+	vm.vfID = vf.id
+	vm.vfOffset = atomic.LoadUint32(&vf.atOffset)
+	left := len(vm.values)
 	for left > 0 {
-		n := copy(vf.buf.buf[vf.buf.offset:vf.vs.checksumInterval], mb.data[len(mb.data)-left:])
+		n := copy(vf.buf.buf[vf.buf.offset:vf.vs.checksumInterval], vm.values[len(vm.values)-left:])
 		atomic.AddUint32(&vf.atOffset, uint32(n))
 		vf.buf.offset += uint32(n)
 		if vf.buf.offset >= vf.vs.checksumInterval {
@@ -127,9 +127,9 @@ func (vf *valuesFile) write(mb *memBlock) {
 		left -= n
 	}
 	if vf.buf.offset == 0 {
-		vf.vs.clearableMemBlockChan <- mb
+		vf.vs.clearableVMChan <- vm
 	} else {
-		vf.buf.mbs = append(vf.buf.mbs, mb)
+		vf.buf.vms = append(vf.buf.vms, vm)
 	}
 }
 
@@ -157,8 +157,8 @@ func (vf *valuesFile) close() {
 	if err := vf.writerFP.Close(); err != nil {
 		panic(err)
 	}
-	for _, bmb := range vf.buf.mbs {
-		vf.vs.clearableMemBlockChan <- bmb
+	for _, vm := range vf.buf.vms {
+		vf.vs.clearableVMChan <- vm
 	}
 	vf.writerFP = nil
 	vf.freeChan = nil
@@ -201,11 +201,11 @@ func (vf *valuesFile) writer() {
 		if _, err := vf.writerFP.Write(buf.buf); err != nil {
 			panic(err)
 		}
-		if len(buf.mbs) > 0 {
-			for _, bmb := range buf.mbs {
-				vf.vs.clearableMemBlockChan <- bmb
+		if len(buf.vms) > 0 {
+			for _, vm := range buf.vms {
+				vf.vs.clearableVMChan <- vm
 			}
-			buf.mbs = buf.mbs[:0]
+			buf.vms = buf.vms[:0]
 		}
 		buf.offset = 0
 		vf.freeChan <- buf

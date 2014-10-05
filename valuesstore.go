@@ -8,7 +8,6 @@ import (
 	"os"
 	"runtime"
 	"strconv"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -105,11 +104,11 @@ func NewValuesStoreOpts() *ValuesStoreOpts {
 
 // ValuesStore will store []byte values referenced by 128 bit keys.
 type ValuesStore struct {
-	clearableMemBlockChan chan *memBlock
-	clearedMemBlockChan   chan *memBlock
-	freeWreqChans         []chan *wreq
-	pendingWreqChans      []chan *wreq
-	vfMBChan              chan *memBlock
+	clearableVMChan       chan *valuesMem
+	clearedVMChan         chan *valuesMem
+	freeVWRChans          []chan *valueWriteReq
+	pendingVWRChans       []chan *valueWriteReq
+	vfVMChan              chan *valuesMem
 	freeTOCBlockChan      chan []byte
 	pendingTOCBlockChan   chan []byte
 	memWriterDoneChans    []chan struct{}
@@ -176,52 +175,52 @@ func NewValuesStore(opts *ValuesStoreOpts) *ValuesStore {
 		checksumInterval:  uint32(checksumInterval),
 		valuesFileReaders: valuesFileReaders,
 	}
-	vs.clearableMemBlockChan = make(chan *memBlock, vs.cores)
-	vs.clearedMemBlockChan = make(chan *memBlock, vs.cores)
-	vs.freeWreqChans = make([]chan *wreq, vs.cores)
-	vs.pendingWreqChans = make([]chan *wreq, vs.cores)
-	vs.vfMBChan = make(chan *memBlock, vs.cores)
+	vs.clearableVMChan = make(chan *valuesMem, vs.cores)
+	vs.clearedVMChan = make(chan *valuesMem, vs.cores)
+	vs.freeVWRChans = make([]chan *valueWriteReq, vs.cores)
+	vs.pendingVWRChans = make([]chan *valueWriteReq, vs.cores)
+	vs.vfVMChan = make(chan *valuesMem, vs.cores)
 	vs.freeTOCBlockChan = make(chan []byte, vs.cores)
 	vs.pendingTOCBlockChan = make(chan []byte, vs.cores)
 	vs.memWriterDoneChans = make([]chan struct{}, vs.cores)
 	vs.memClearerDoneChans = make([]chan struct{}, vs.cores)
 	vs.vfDoneChan = make(chan struct{}, 1)
 	vs.tocWriterDoneChan = make(chan struct{}, 1)
-	for i := 0; i < cap(vs.clearableMemBlockChan); i++ {
-		mb := &memBlock{
-			vs:   vs,
-			toc:  make([]byte, 0, vs.memTOCPageSize),
-			data: make([]byte, 0, vs.memValuesPageSize),
+	for i := 0; i < cap(vs.clearableVMChan); i++ {
+		vm := &valuesMem{
+			vs:     vs,
+			toc:    make([]byte, 0, vs.memTOCPageSize),
+			values: make([]byte, 0, vs.memValuesPageSize),
 		}
-		mb.id = vs.addValuesLocBock(mb)
-		vs.clearableMemBlockChan <- mb
+		vm.id = vs.addValuesLocBock(vm)
+		vs.clearableVMChan <- vm
 	}
-	for i := 0; i < cap(vs.clearedMemBlockChan); i++ {
-		mb := &memBlock{
-			vs:   vs,
-			toc:  make([]byte, 0, vs.memTOCPageSize),
-			data: make([]byte, 0, vs.memValuesPageSize),
+	for i := 0; i < cap(vs.clearedVMChan); i++ {
+		vm := &valuesMem{
+			vs:     vs,
+			toc:    make([]byte, 0, vs.memTOCPageSize),
+			values: make([]byte, 0, vs.memValuesPageSize),
 		}
-		mb.id = vs.addValuesLocBock(mb)
-		vs.clearedMemBlockChan <- mb
+		vm.id = vs.addValuesLocBock(vm)
+		vs.clearedVMChan <- vm
 	}
-	for i := 0; i < len(vs.freeWreqChans); i++ {
-		vs.freeWreqChans[i] = make(chan *wreq, vs.cores)
+	for i := 0; i < len(vs.freeVWRChans); i++ {
+		vs.freeVWRChans[i] = make(chan *valueWriteReq, vs.cores)
 		for j := 0; j < vs.cores; j++ {
-			vs.freeWreqChans[i] <- &wreq{errChan: make(chan error, 1)}
+			vs.freeVWRChans[i] <- &valueWriteReq{errChan: make(chan error, 1)}
 		}
 	}
-	for i := 0; i < len(vs.pendingWreqChans); i++ {
-		vs.pendingWreqChans[i] = make(chan *wreq)
+	for i := 0; i < len(vs.pendingVWRChans); i++ {
+		vs.pendingVWRChans[i] = make(chan *valueWriteReq)
 	}
-	for i := 0; i < cap(vs.vfMBChan); i++ {
-		mb := &memBlock{
-			vs:   vs,
-			toc:  make([]byte, 0, vs.memTOCPageSize),
-			data: make([]byte, 0, vs.memValuesPageSize),
+	for i := 0; i < cap(vs.vfVMChan); i++ {
+		vm := &valuesMem{
+			vs:     vs,
+			toc:    make([]byte, 0, vs.memTOCPageSize),
+			values: make([]byte, 0, vs.memValuesPageSize),
 		}
-		mb.id = vs.addValuesLocBock(mb)
-		vs.vfMBChan <- mb
+		vm.id = vs.addValuesLocBock(vm)
+		vs.vfVMChan <- vm
 	}
 	for i := 0; i < cap(vs.freeTOCBlockChan); i++ {
 		vs.freeTOCBlockChan <- make([]byte, 0, vs.memTOCPageSize)
@@ -240,8 +239,8 @@ func NewValuesStore(opts *ValuesStoreOpts) *ValuesStore {
 	for i := 0; i < len(vs.memClearerDoneChans); i++ {
 		go vs.memClearer(vs.memClearerDoneChans[i])
 	}
-	for i := 0; i < len(vs.pendingWreqChans); i++ {
-		go vs.memWriter(vs.pendingWreqChans[i], vs.memWriterDoneChans[i])
+	for i := 0; i < len(vs.pendingVWRChans); i++ {
+		go vs.memWriter(vs.pendingVWRChans[i], vs.memWriterDoneChans[i])
 	}
 	return vs
 }
@@ -251,7 +250,7 @@ func (vs *ValuesStore) MaxValueSize() int {
 }
 
 func (vs *ValuesStore) Close() {
-	for _, c := range vs.pendingWreqChans {
+	for _, c := range vs.pendingVWRChans {
 		c <- nil
 	}
 	<-vs.tocWriterDoneChan
@@ -274,16 +273,16 @@ func (vs *ValuesStore) ReadValue(keyA uint64, keyB uint64, value []byte) ([]byte
 // WriteValue stores value, seq for keyA, keyB or returns any error; a newer
 // seq already in place is not reported as an error.
 func (vs *ValuesStore) WriteValue(keyA uint64, keyB uint64, value []byte, seq uint64) error {
-	i := int(keyA>>1) % len(vs.freeWreqChans)
-	w := <-vs.freeWreqChans[i]
-	w.keyA = keyA
-	w.keyB = keyB
-	w.value = value
-	w.seq = seq
-	vs.pendingWreqChans[i] <- w
-	err := <-w.errChan
-	w.value = nil
-	vs.freeWreqChans[i] <- w
+	i := int(keyA>>1) % len(vs.freeVWRChans)
+	vwr := <-vs.freeVWRChans[i]
+	vwr.keyA = keyA
+	vwr.keyB = keyB
+	vwr.value = value
+	vwr.seq = seq
+	vs.pendingVWRChans[i] <- vwr
+	err := <-vwr.errChan
+	vwr.value = nil
+	vs.freeVWRChans[i] <- vwr
 	return err
 }
 
@@ -305,8 +304,8 @@ func (vs *ValuesStore) memClearer(memClearerDoneChan chan struct{}) {
 	var tbTS int64
 	var tbOffset int
 	for {
-		mb := <-vs.clearableMemBlockChan
-		if mb == nil {
+		vm := <-vs.clearableVMChan
+		if vm == nil {
 			if tb != nil {
 				binary.BigEndian.PutUint32(tb, uint32(len(tb)-4))
 				vs.pendingTOCBlockChan <- tb
@@ -316,18 +315,18 @@ func (vs *ValuesStore) memClearer(memClearerDoneChan chan struct{}) {
 			<-vs.freeTOCBlockChan
 			break
 		}
-		vf := vs.valuesLocBlock(mb.vfID)
+		vf := vs.valuesLocBlock(vm.vfID)
 		if tb != nil && tbTS != vf.timestamp() {
 			binary.BigEndian.PutUint32(tb, uint32(len(tb)-4))
 			vs.pendingTOCBlockChan <- tb
 			tb = nil
 		}
-		for mbTOCOffset := 0; mbTOCOffset < len(mb.toc); mbTOCOffset += 28 {
-			mbDataOffset := binary.BigEndian.Uint32(mb.toc[mbTOCOffset:])
-			a := binary.BigEndian.Uint64(mb.toc[mbTOCOffset+4:])
-			b := binary.BigEndian.Uint64(mb.toc[mbTOCOffset+12:])
-			q := binary.BigEndian.Uint64(mb.toc[mbTOCOffset+20:])
-			vs.vlm.set(mb.vfID, mb.vfOffset+mbDataOffset, a, b, q)
+		for vmTOCOffset := 0; vmTOCOffset < len(vm.toc); vmTOCOffset += 28 {
+			vmMemOffset := binary.BigEndian.Uint32(vm.toc[vmTOCOffset:])
+			a := binary.BigEndian.Uint64(vm.toc[vmTOCOffset+4:])
+			b := binary.BigEndian.Uint64(vm.toc[vmTOCOffset+12:])
+			q := binary.BigEndian.Uint64(vm.toc[vmTOCOffset+20:])
+			vs.vlm.set(vm.vfID, vm.vfOffset+vmMemOffset, a, b, q)
 			if tb != nil && tbOffset+28 > cap(tb) {
 				binary.BigEndian.PutUint32(tb, uint32(len(tb)-4))
 				vs.pendingTOCBlockChan <- tb
@@ -341,66 +340,66 @@ func (vs *ValuesStore) memClearer(memClearerDoneChan chan struct{}) {
 				tbOffset = 12
 			}
 			tb = tb[:tbOffset+28]
-			binary.BigEndian.PutUint32(tb[tbOffset:], mb.vfOffset+uint32(mbDataOffset))
+			binary.BigEndian.PutUint32(tb[tbOffset:], vm.vfOffset+uint32(vmMemOffset))
 			binary.BigEndian.PutUint64(tb[tbOffset+4:], a)
 			binary.BigEndian.PutUint64(tb[tbOffset+12:], b)
 			binary.BigEndian.PutUint64(tb[tbOffset+20:], q)
 			tbOffset += 28
 		}
-		mb.discardLock.Lock()
-		mb.vfID = 0
-		mb.vfOffset = 0
-		mb.toc = mb.toc[:0]
-		mb.data = mb.data[:0]
-		mb.discardLock.Unlock()
-		vs.clearedMemBlockChan <- mb
+		vm.discardLock.Lock()
+		vm.vfID = 0
+		vm.vfOffset = 0
+		vm.toc = vm.toc[:0]
+		vm.values = vm.values[:0]
+		vm.discardLock.Unlock()
+		vs.clearedVMChan <- vm
 	}
 	memClearerDoneChan <- struct{}{}
 }
 
-func (vs *ValuesStore) memWriter(wreqChan chan *wreq, memWriterDoneChan chan struct{}) {
-	var mb *memBlock
-	var mbTOCOffset int
-	var mbDataOffset int
+func (vs *ValuesStore) memWriter(VWRChan chan *valueWriteReq, memWriterDoneChan chan struct{}) {
+	var vm *valuesMem
+	var vmTOCOffset int
+	var vmMemOffset int
 	for {
-		w := <-wreqChan
-		if w == nil {
-			if mb != nil && len(mb.toc) > 0 {
-				vs.vfMBChan <- mb
-				<-vs.clearedMemBlockChan
+		vwr := <-VWRChan
+		if vwr == nil {
+			if vm != nil && len(vm.toc) > 0 {
+				vs.vfVMChan <- vm
+				<-vs.clearedVMChan
 			}
-			vs.vfMBChan <- nil
-			<-vs.clearedMemBlockChan
+			vs.vfVMChan <- nil
+			<-vs.clearedVMChan
 			break
 		}
-		vz := len(w.value)
+		vz := len(vwr.value)
 		if vz > vs.maxValueSize {
-			w.errChan <- fmt.Errorf("value length of %d > %d", vz, vs.maxValueSize)
+			vwr.errChan <- fmt.Errorf("value length of %d > %d", vz, vs.maxValueSize)
 			continue
 		}
-		if mb != nil && (mbTOCOffset+28 > cap(mb.toc) || mbDataOffset+4+vz > cap(mb.data)) {
-			vs.vfMBChan <- mb
-			mb = nil
+		if vm != nil && (vmTOCOffset+28 > cap(vm.toc) || vmMemOffset+4+vz > cap(vm.values)) {
+			vs.vfVMChan <- vm
+			vm = nil
 		}
-		if mb == nil {
-			mb = <-vs.clearedMemBlockChan
-			mbTOCOffset = 0
-			mbDataOffset = 0
+		if vm == nil {
+			vm = <-vs.clearedVMChan
+			vmTOCOffset = 0
+			vmMemOffset = 0
 		}
-		mb.toc = mb.toc[:mbTOCOffset+28]
-		binary.BigEndian.PutUint32(mb.toc[mbTOCOffset:], uint32(mbDataOffset))
-		binary.BigEndian.PutUint64(mb.toc[mbTOCOffset+4:], w.keyA)
-		binary.BigEndian.PutUint64(mb.toc[mbTOCOffset+12:], w.keyB)
-		binary.BigEndian.PutUint64(mb.toc[mbTOCOffset+20:], w.seq)
-		mbTOCOffset += 28
-		mb.discardLock.Lock()
-		mb.data = mb.data[:mbDataOffset+4+vz]
-		mb.discardLock.Unlock()
-		binary.BigEndian.PutUint32(mb.data[mbDataOffset:], uint32(vz))
-		copy(mb.data[mbDataOffset+4:], w.value)
-		vs.vlm.set(mb.id, uint32(mbDataOffset), w.keyA, w.keyB, w.seq)
-		mbDataOffset += 4 + vz
-		w.errChan <- nil
+		vm.toc = vm.toc[:vmTOCOffset+28]
+		binary.BigEndian.PutUint32(vm.toc[vmTOCOffset:], uint32(vmMemOffset))
+		binary.BigEndian.PutUint64(vm.toc[vmTOCOffset+4:], vwr.keyA)
+		binary.BigEndian.PutUint64(vm.toc[vmTOCOffset+12:], vwr.keyB)
+		binary.BigEndian.PutUint64(vm.toc[vmTOCOffset+20:], vwr.seq)
+		vmTOCOffset += 28
+		vm.discardLock.Lock()
+		vm.values = vm.values[:vmMemOffset+4+vz]
+		vm.discardLock.Unlock()
+		binary.BigEndian.PutUint32(vm.values[vmMemOffset:], uint32(vz))
+		copy(vm.values[vmMemOffset+4:], vwr.value)
+		vs.vlm.set(vm.id, uint32(vmMemOffset), vwr.keyA, vwr.keyB, vwr.seq)
+		vmMemOffset += 4 + vz
+		vwr.errChan <- nil
 	}
 	memWriterDoneChan <- struct{}{}
 }
@@ -409,28 +408,28 @@ func (vs *ValuesStore) vfWriter() {
 	var vf *valuesFile
 	memWritersLeft := vs.cores
 	for {
-		mb := <-vs.vfMBChan
-		if mb == nil {
+		vm := <-vs.vfVMChan
+		if vm == nil {
 			memWritersLeft--
 			if memWritersLeft < 1 {
 				if vf != nil {
 					vf.close()
 				}
 				for i := 0; i <= vs.cores; i++ {
-					vf.vs.clearableMemBlockChan <- nil
+					vf.vs.clearableVMChan <- nil
 				}
 				break
 			}
 			continue
 		}
-		if vf != nil && int(atomic.LoadUint32(&vf.atOffset))+len(mb.data) > vs.valuesFileSize {
+		if vf != nil && int(atomic.LoadUint32(&vf.atOffset))+len(vm.values) > vs.valuesFileSize {
 			vf.close()
 			vf = nil
 		}
 		if vf == nil {
 			vf = newValuesFile(vs)
 		}
-		vf.write(mb)
+		vf.write(vm)
 	}
 	vs.vfDoneChan <- struct{}{}
 }
@@ -527,7 +526,7 @@ func (vs *ValuesStore) tocWriter() {
 	vs.tocWriterDoneChan <- struct{}{}
 }
 
-type wreq struct {
+type valueWriteReq struct {
 	keyA    uint64
 	keyB    uint64
 	value   []byte
@@ -538,34 +537,4 @@ type wreq struct {
 type valuesLocBlock interface {
 	timestamp() int64
 	readValue(keyA uint64, keyB uint64, value []byte, seq uint64, offset uint32) ([]byte, uint64, error)
-}
-
-type memBlock struct {
-	vs          *ValuesStore
-	id          uint16
-	vfID        uint16
-	vfOffset    uint32
-	toc         []byte
-	data        []byte
-	discardLock sync.RWMutex
-}
-
-func (mb *memBlock) timestamp() int64 {
-	return math.MaxInt64
-}
-
-func (mb *memBlock) readValue(keyA uint64, keyB uint64, value []byte, seq uint64, offset uint32) ([]byte, uint64, error) {
-	mb.discardLock.RLock()
-	id, offset, seq := mb.vs.vlm.get(keyA, keyB)
-	if id < _VALUESBLOCK_IDOFFSET {
-		mb.discardLock.RUnlock()
-		return value, seq, ErrValueNotFound
-	}
-	if id != mb.id {
-		mb.discardLock.RUnlock()
-		mb.vs.valuesLocBlock(id).readValue(keyA, keyB, value, seq, offset)
-	}
-	value = append(value, mb.data[offset+4:offset+4+binary.BigEndian.Uint32(mb.data[offset:])]...)
-	mb.discardLock.RUnlock()
-	return value, seq, nil
 }
