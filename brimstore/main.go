@@ -159,19 +159,9 @@ func writeValues(vs *brimstore.ValuesStore, keys [][]byte, value []byte, clients
 	wg.Add(clients)
 	for i := 0; i < clients; i++ {
 		go func(keys []byte, seq uint64) {
-			var err error
-			w := &brimstore.WriteValue{
-				Value:       value,
-				WrittenChan: make(chan error, 1),
-				Seq:         seq,
-			}
 			for o := 0; o < len(keys); o += 16 {
-				w.KeyA = binary.BigEndian.Uint64(keys[o:])
-				w.KeyB = binary.BigEndian.Uint64(keys[o+8:])
-				w.Seq++
-				vs.WriteValue(w)
-				err = <-w.WrittenChan
-				if err != nil {
+				seq++
+				if err := vs.WriteValue(binary.BigEndian.Uint64(keys[o:]), binary.BigEndian.Uint64(keys[o+8:]), value, seq); err != nil {
 					panic(err)
 				}
 			}

@@ -18,7 +18,7 @@ import (
 
 var ErrValueNotFound error = fmt.Errorf("value not found")
 
-type WriteValue struct {
+type writeValue struct {
 	KeyA        uint64
 	KeyB        uint64
 	Value       []byte
@@ -115,7 +115,7 @@ func NewValuesStoreOpts() *ValuesStoreOpts {
 type ValuesStore struct {
 	clearableMemBlockChan chan *memBlock
 	clearedMemBlockChan   chan *memBlock
-	writeValueChans       []chan *WriteValue
+	writeValueChans       []chan *writeValue
 	vfMBChan              chan *memBlock
 	freeTOCBlockChan      chan []byte
 	pendingTOCBlockChan   chan []byte
@@ -185,7 +185,7 @@ func NewValuesStore(opts *ValuesStoreOpts) *ValuesStore {
 	}
 	vs.clearableMemBlockChan = make(chan *memBlock, vs.cores)
 	vs.clearedMemBlockChan = make(chan *memBlock, vs.cores)
-	vs.writeValueChans = make([]chan *WriteValue, vs.cores)
+	vs.writeValueChans = make([]chan *writeValue, vs.cores)
 	vs.vfMBChan = make(chan *memBlock, vs.cores)
 	vs.freeTOCBlockChan = make(chan []byte, vs.cores)
 	vs.pendingTOCBlockChan = make(chan []byte, vs.cores)
@@ -212,7 +212,7 @@ func NewValuesStore(opts *ValuesStoreOpts) *ValuesStore {
 		vs.clearedMemBlockChan <- mb
 	}
 	for i := 0; i < len(vs.writeValueChans); i++ {
-		vs.writeValueChans[i] = make(chan *WriteValue, vs.cores)
+		vs.writeValueChans[i] = make(chan *writeValue, vs.cores)
 	}
 	for i := 0; i < cap(vs.vfMBChan); i++ {
 		mb := &memBlock{
@@ -271,12 +271,18 @@ func (vs *ValuesStore) ReadValue(keyA uint64, keyB uint64, value []byte) ([]byte
 	return vs.valuesLocBlock(id).readValue(keyA, keyB, value, seq, offset)
 }
 
-// WriteValue stores w.Value, w.Seq for r.KeyA, r.KeyB and sends any error or
-// nil to w.WrittenChan.
-func (vs *ValuesStore) WriteValue(w *WriteValue) {
-	if w != nil {
-		vs.writeValueChans[int(w.KeyA>>1)%len(vs.writeValueChans)] <- w
+// WriteValue stores value, seq for keyA, keyB or returns any error; a newer
+// seq already in place is not reported as an error.
+func (vs *ValuesStore) WriteValue(keyA uint64, keyB uint64, value []byte, seq uint64) error {
+	c := make(chan error, 1)
+	vs.writeValueChans[int(keyA>>1)%len(vs.writeValueChans)] <- &writeValue{
+		KeyA:        keyA,
+		KeyB:        keyB,
+		Value:       value,
+		Seq:         seq,
+		WrittenChan: c,
 	}
+	return <-c
 }
 
 func (vs *ValuesStore) valuesLocBlock(valuesLocBlockID uint16) valuesLocBlock {
@@ -350,7 +356,7 @@ func (vs *ValuesStore) memClearer(memClearerDoneChan chan struct{}) {
 	memClearerDoneChan <- struct{}{}
 }
 
-func (vs *ValuesStore) memWriter(writeValueChan chan *WriteValue, memWriterDoneChan chan struct{}) {
+func (vs *ValuesStore) memWriter(writeValueChan chan *writeValue, memWriterDoneChan chan struct{}) {
 	var mb *memBlock
 	var mbTOCOffset int
 	var mbDataOffset int
