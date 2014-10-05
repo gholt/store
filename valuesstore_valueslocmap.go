@@ -1,4 +1,4 @@
-package valuesstore
+package brimstore
 
 import (
 	"math"

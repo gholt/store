@@ -1,10 +1,11 @@
-package valuesstore
+package brimstore
 
 import (
 	"encoding/binary"
 	"fmt"
 	"io"
 	"os"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -24,6 +25,9 @@ type valuesFile struct {
 	doneChan       chan struct{}
 	buf            *wbuf
 	readValueChans []chan *ReadValue
+	readerFPs      []brimutil.ChecksummedReader
+	readerLocks    []sync.Mutex
+	readerLens     [][]byte
 }
 
 type wbuf struct {
@@ -35,7 +39,8 @@ type wbuf struct {
 
 func newValuesFile(vs *ValuesStore) *valuesFile {
 	vf := &valuesFile{vs: vs, ts: time.Now().UnixNano()}
-	fp, err := os.Create(fmt.Sprintf("%d.values", vf.ts))
+	name := fmt.Sprintf("%d.values", vf.ts)
+	fp, err := os.Create(name)
 	if err != nil {
 		panic(err)
 	}
@@ -56,14 +61,25 @@ func newValuesFile(vs *ValuesStore) *valuesFile {
 	for i := 0; i < vs.cores; i++ {
 		go vf.checksummer()
 	}
-	vf.readValueChans = make([]chan *ReadValue, vs.readersPerValuesFile)
+	vf.readValueChans = make([]chan *ReadValue, vs.valuesFileReaders)
 	for i := 0; i < len(vf.readValueChans); i++ {
-		fp, err := os.Open(fmt.Sprintf("%d.values", vf.ts))
+		fp, err := os.Open(name)
 		if err != nil {
 			panic(err)
 		}
 		vf.readValueChans[i] = make(chan *ReadValue, vs.cores)
 		go reader(brimutil.NewChecksummedReader(fp, int(vs.checksumInterval), murmur3.New32), vf.readValueChans[i])
+	}
+	vf.readerFPs = make([]brimutil.ChecksummedReader, vs.valuesFileReaders)
+	vf.readerLocks = make([]sync.Mutex, len(vf.readerFPs))
+	vf.readerLens = make([][]byte, len(vf.readerFPs))
+	for i := 0; i < len(vf.readerFPs); i++ {
+		fp, err := os.Open(name)
+		if err != nil {
+			panic(err)
+		}
+		vf.readerFPs[i] = brimutil.NewChecksummedReader(fp, int(vs.checksumInterval), murmur3.New32)
+		vf.readerLens[i] = make([]byte, 4)
 	}
 	vf.id = vs.addValuesLocBock(vf)
 	return vf
@@ -75,6 +91,30 @@ func (vf *valuesFile) timestamp() int64 {
 
 func (vf *valuesFile) readValue(r *ReadValue) {
 	vf.readValueChans[int(r.KeyA>>1)%len(vf.readValueChans)] <- r
+}
+
+func (vf *valuesFile) readValue2(keyA uint64, keyB uint64, value []byte, seq uint64, offset uint32) ([]byte, uint64, error) {
+	i := int(keyA>>1) % len(vf.readerFPs)
+	vf.readerLocks[i].Lock()
+	vf.readerFPs[i].Seek(int64(offset), 0)
+	if _, err := io.ReadFull(vf.readerFPs[i], vf.readerLens[i]); err != nil {
+		vf.readerLocks[i].Unlock()
+		return value, seq, err
+	}
+	z := int(binary.BigEndian.Uint32(vf.readerLens[i]))
+	if len(value)+z < cap(value) {
+		value = value[:len(value)+z]
+	} else {
+		value2 := make([]byte, len(value)+z)
+		copy(value2, value)
+		value = value2
+	}
+	if _, err := io.ReadFull(vf.readerFPs[i], value[-z:]); err != nil {
+		vf.readerLocks[i].Unlock()
+		return value, seq, err
+	}
+	vf.readerLocks[i].Unlock()
+	return value, seq, nil
 }
 
 func (vf *valuesFile) write(mb *memBlock) {

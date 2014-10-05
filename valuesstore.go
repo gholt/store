@@ -1,5 +1,4 @@
-// Package valuesstore will store []byte values referenced by 128 bit keys.
-package valuesstore
+package brimstore
 
 import (
 	"encoding/binary"
@@ -48,8 +47,9 @@ type ValuesStoreOpts struct {
 	MemTOCPageSize       int
 	MemValuesPageSize    int
 	ValuesLocMapPageSize int
+	ValuesFileSize       int
+	ValuesFileReaders    int
 	ChecksumInterval     int
-	ReadersPerValuesFile int
 }
 
 func NewValuesStoreOpts() *ValuesStoreOpts {
@@ -94,6 +94,25 @@ func NewValuesStoreOpts() *ValuesStoreOpts {
 	if opts.ValuesLocMapPageSize <= 0 {
 		opts.ValuesLocMapPageSize = 4 * 1024 * 1024
 	}
+	if env := os.Getenv("BRIMSTORE_VALUESSTORE_VALUESFILE_SIZE"); env != "" {
+		if val, err := strconv.Atoi(env); err == nil {
+			opts.ValuesFileSize = val
+		}
+	}
+	if opts.ValuesFileSize <= 0 {
+		opts.ValuesFileSize = math.MaxUint32
+	}
+	if env := os.Getenv("BRIMSTORE_VALUESSTORE_VALUESFILE_READERS"); env != "" {
+		if val, err := strconv.Atoi(env); err == nil {
+			opts.ValuesFileReaders = val
+		}
+	}
+	if opts.ValuesFileReaders <= 0 {
+		opts.ValuesFileReaders = opts.Cores
+		if opts.Cores > 8 {
+			opts.ValuesFileReaders = 8
+		}
+	}
 	if env := os.Getenv("BRIMSTORE_VALUESSTORE_CHECKSUMINTERVAL"); env != "" {
 		if val, err := strconv.Atoi(env); err == nil {
 			opts.ChecksumInterval = val
@@ -102,20 +121,10 @@ func NewValuesStoreOpts() *ValuesStoreOpts {
 	if opts.ChecksumInterval <= 0 {
 		opts.ChecksumInterval = 65532
 	}
-	if env := os.Getenv("BRIMSTORE_VALUESSTORE_READERSPERVALUESFILE"); env != "" {
-		if val, err := strconv.Atoi(env); err == nil {
-			opts.ReadersPerValuesFile = val
-		}
-	}
-	if opts.ReadersPerValuesFile <= 0 {
-		opts.ReadersPerValuesFile = opts.Cores
-		if opts.Cores > 8 {
-			opts.ReadersPerValuesFile = 8
-		}
-	}
 	return opts
 }
 
+// ValuesStore will store []byte values referenced by 128 bit keys.
 type ValuesStore struct {
 	clearableMemBlockChan chan *memBlock
 	clearedMemBlockChan   chan *memBlock
@@ -134,8 +143,9 @@ type ValuesStore struct {
 	maxValueSize          int
 	memTOCPageSize        int
 	memValuesPageSize     int
+	valuesFileSize        int
+	valuesFileReaders     int
 	checksumInterval      uint32
-	readersPerValuesFile  int
 }
 
 // NewValuesStore initializes a ValuesStore for use; opts may be nil to use the
@@ -160,26 +170,31 @@ func NewValuesStore(opts *ValuesStoreOpts) *ValuesStore {
 	if memValuesPageSize < 4096 {
 		memValuesPageSize = 4096
 	}
+	valuesFileSize := opts.ValuesFileSize
+	if valuesFileSize <= 0 || valuesFileSize > math.MaxUint32 {
+		valuesFileSize = math.MaxUint32
+	}
+	valuesFileReaders := opts.ValuesFileReaders
+	if valuesFileReaders < 1 {
+		valuesFileReaders = 1
+	}
 	checksumInterval := opts.ChecksumInterval
 	if checksumInterval < 1024 {
 		checksumInterval = 1024
 	} else if checksumInterval >= 4294967296 {
 		checksumInterval = 4294967295
 	}
-	readersPerValuesFile := opts.ReadersPerValuesFile
-	if readersPerValuesFile < 1 {
-		readersPerValuesFile = 1
-	}
 	vs := &ValuesStore{
 		valuesLocBlocks:       make([]valuesLocBlock, 65536),
 		atValuesLocBlocksIDer: _VALUESBLOCK_IDOFFSET - 1,
-		vlm:                  newValuesLocMap(opts),
-		cores:                cores,
-		maxValueSize:         maxValueSize,
-		memTOCPageSize:       memTOCPageSize,
-		memValuesPageSize:    memValuesPageSize,
-		checksumInterval:     uint32(checksumInterval),
-		readersPerValuesFile: readersPerValuesFile,
+		vlm:               newValuesLocMap(opts),
+		cores:             cores,
+		maxValueSize:      maxValueSize,
+		memTOCPageSize:    memTOCPageSize,
+		memValuesPageSize: memValuesPageSize,
+		valuesFileSize:    valuesFileSize,
+		checksumInterval:  uint32(checksumInterval),
+		valuesFileReaders: valuesFileReaders,
 	}
 	vs.clearableMemBlockChan = make(chan *memBlock, vs.cores)
 	vs.clearedMemBlockChan = make(chan *memBlock, vs.cores)
@@ -275,6 +290,14 @@ func (vs *ValuesStore) ReadValue(r *ReadValue) {
 	} else {
 		vs.valuesLocBlock(id).readValue(r)
 	}
+}
+
+func (vs *ValuesStore) ReadValue2(keyA uint64, keyB uint64, value []byte) ([]byte, uint64, error) {
+	id, offset, seq := vs.vlm.get(keyA, keyB)
+	if id < _VALUESBLOCK_IDOFFSET {
+		return value, 0, ErrValueNotFound
+	}
+	return vs.valuesLocBlock(id).readValue2(keyA, keyB, value, seq, offset)
 }
 
 // WriteValue stores w.Value, w.Seq for r.KeyA, r.KeyB and sends any error or
@@ -421,7 +444,7 @@ func (vs *ValuesStore) vfWriter() {
 			}
 			continue
 		}
-		if vf != nil && int(atomic.LoadUint32(&vf.atOffset))+len(mb.data) > math.MaxUint32 {
+		if vf != nil && int(atomic.LoadUint32(&vf.atOffset))+len(mb.data) > vs.valuesFileSize {
 			vf.close()
 			vf = nil
 		}
@@ -528,6 +551,7 @@ func (vs *ValuesStore) tocWriter() {
 type valuesLocBlock interface {
 	timestamp() int64
 	readValue(r *ReadValue)
+	readValue2(keyA uint64, keyB uint64, value []byte, seq uint64, offset uint32) ([]byte, uint64, error)
 }
 
 type memBlock struct {
@@ -540,37 +564,53 @@ type memBlock struct {
 	discardLock sync.RWMutex
 }
 
-func (m *memBlock) timestamp() int64 {
+func (mb *memBlock) timestamp() int64 {
 	return math.MaxInt64
 }
 
-func (m *memBlock) readValue(r *ReadValue) {
-	m.discardLock.RLock()
+func (mb *memBlock) readValue(r *ReadValue) {
+	mb.discardLock.RLock()
 	var id uint16
-	id, r.offset, r.Seq = m.vs.vlm.get(r.KeyA, r.KeyB)
+	id, r.offset, r.Seq = mb.vs.vlm.get(r.KeyA, r.KeyB)
 	if id < _VALUESBLOCK_IDOFFSET {
-		m.discardLock.RUnlock()
+		mb.discardLock.RUnlock()
 		r.ReadChan <- ErrValueNotFound
-	} else if id != m.id {
-		m.discardLock.RUnlock()
-		m.vs.valuesLocBlock(id).readValue(r)
+	} else if id != mb.id {
+		mb.discardLock.RUnlock()
+		mb.vs.valuesLocBlock(id).readValue(r)
 	} else {
-		if r.offset+4 > uint32(len(m.data)) {
-			fmt.Println("A", r.offset, len(m.data))
-			m.discardLock.RUnlock()
+		if r.offset+4 > uint32(len(mb.data)) {
+			fmt.Println("A", r.offset, len(mb.data))
+			mb.discardLock.RUnlock()
 			r.ReadChan <- ErrValueNotFound
 		} else {
-			z := binary.BigEndian.Uint32(m.data[r.offset:])
-			if r.offset+4+z > uint32(len(m.data)) {
-				fmt.Println("B", r.offset, len(m.data))
-				m.discardLock.RUnlock()
+			z := binary.BigEndian.Uint32(mb.data[r.offset:])
+			if r.offset+4+z > uint32(len(mb.data)) {
+				fmt.Println("B", r.offset, len(mb.data))
+				mb.discardLock.RUnlock()
 				r.ReadChan <- ErrValueNotFound
 			} else {
 				r.Value = r.Value[:z]
-				copy(r.Value, m.data[r.offset+4:])
-				m.discardLock.RUnlock()
+				copy(r.Value, mb.data[r.offset+4:])
+				mb.discardLock.RUnlock()
 				r.ReadChan <- nil
 			}
 		}
 	}
+}
+
+func (mb *memBlock) readValue2(keyA uint64, keyB uint64, value []byte, seq uint64, offset uint32) ([]byte, uint64, error) {
+	mb.discardLock.RLock()
+	id, offset, seq := mb.vs.vlm.get(keyA, keyB)
+	if id < _VALUESBLOCK_IDOFFSET {
+		mb.discardLock.RUnlock()
+		return value, seq, ErrValueNotFound
+	}
+	if id != mb.id {
+		mb.discardLock.RUnlock()
+		mb.vs.valuesLocBlock(id).readValue2(keyA, keyB, value, seq, offset)
+	}
+	value = append(value, mb.data[offset+4:offset+4+binary.BigEndian.Uint32(mb.data[offset:])]...)
+	mb.discardLock.RUnlock()
+	return value, seq, nil
 }

@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/gholt/brimstore/valuesstore"
+	"github.com/gholt/brimstore"
 	"github.com/gholt/brimutil"
 )
 
@@ -44,7 +44,7 @@ func main() {
 
 	fmt.Println()
 	start := time.Now()
-	vs := valuesstore.NewValuesStore(nil)
+	vs := brimstore.NewValuesStore(nil)
 	dur := time.Now().Sub(start)
 	fmt.Println(dur, "to start ValuesStore")
 	runtime.ReadMemStats(&st)
@@ -154,13 +154,13 @@ func createKeys(seed int64, clients int, valuesPerClient int) [][]byte {
 	return keys
 }
 
-func writeValues(vs *valuesstore.ValuesStore, keys [][]byte, value []byte, clients int, valuesPerClient int) {
+func writeValues(vs *brimstore.ValuesStore, keys [][]byte, value []byte, clients int, valuesPerClient int) {
 	wg := &sync.WaitGroup{}
 	wg.Add(clients)
 	for i := 0; i < clients; i++ {
 		go func(keys []byte, seq uint64) {
 			var err error
-			w := &valuesstore.WriteValue{
+			w := &brimstore.WriteValue{
 				Value:       value,
 				WrittenChan: make(chan error, 1),
 				Seq:         seq,
@@ -181,25 +181,22 @@ func writeValues(vs *valuesstore.ValuesStore, keys [][]byte, value []byte, clien
 	wg.Wait()
 }
 
-func readValues(vs *valuesstore.ValuesStore, keys [][][]byte, value []byte, clients int, valuesPerClient int) int {
+func readValues(vs *brimstore.ValuesStore, keys [][][]byte, value []byte, clients int, valuesPerClient int) int {
 	c := make([]chan int, clients)
 	for i := 0; i < clients; i++ {
 		c[i] = make(chan int)
 		go func(i int, c chan int) {
-			r := vs.NewReadValue()
+			v := make([]byte, 0, 128)
 			m := 0
 			for _, keysB := range keys {
 				for o := 0; o < len(keysB[i]); o += 16 {
-					r.KeyA = binary.BigEndian.Uint64(keysB[i][o:])
-					r.KeyB = binary.BigEndian.Uint64(keysB[i][o+8:])
-					vs.ReadValue(r)
-					err := <-r.ReadChan
-					if err == valuesstore.ErrValueNotFound {
+					v, _, err := vs.ReadValue2(binary.BigEndian.Uint64(keysB[i][o:]), binary.BigEndian.Uint64(keysB[i][o+8:]), v[:0])
+					if err == brimstore.ErrValueNotFound {
 						m++
 					} else if err != nil {
 						panic(err)
-					} else if !bytes.Equal(r.Value, value) {
-						panic(fmt.Sprintf("%#v != %#v", string(r.Value), string(value)))
+					} else if !bytes.Equal(v, value) {
+						panic(fmt.Sprintf("%#v != %#v", string(v), string(value)))
 					}
 				}
 			}
@@ -213,7 +210,7 @@ func readValues(vs *valuesstore.ValuesStore, keys [][][]byte, value []byte, clie
 	return m
 }
 
-func readAndWriteValues(vs *valuesstore.ValuesStore, keys [][]byte, keys2 [][]byte, value []byte, clients int, valuesPerClient int) (chan int, chan struct{}) {
+func readAndWriteValues(vs *brimstore.ValuesStore, keys [][]byte, keys2 [][]byte, value []byte, clients int, valuesPerClient int) (chan int, chan struct{}) {
 	readChan := make(chan int, 1)
 	writeChan := make(chan struct{}, 1)
 	go func() {
