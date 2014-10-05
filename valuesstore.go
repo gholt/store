@@ -191,15 +191,6 @@ func NewValuesStore(opts *ValuesStoreOpts) *ValuesStore {
 	vs.freeTOCBlockChan = make(chan []byte, vs.cores)
 	vs.pendingTOCBlockChan = make(chan []byte, vs.cores)
 	vs.tocWriterDoneChan = make(chan struct{}, 1)
-	//for i := 0; i < cap(vs.freeableVMChan); i++ {
-	//	vm := &valuesMem{
-	//		vs:     vs,
-	//		toc:    make([]byte, 0, vs.memTOCPageSize),
-	//		values: make([]byte, 0, vs.memValuesPageSize),
-	//	}
-	//	vm.id = vs.addValuesLocBock(vm)
-	//	vs.freeableVMChan <- vm
-	//}
 	for i := 0; i < cap(vs.freeVMChan); i++ {
 		vm := &valuesMem{
 			vs:     vs,
@@ -218,15 +209,6 @@ func NewValuesStore(opts *ValuesStoreOpts) *ValuesStore {
 	for i := 0; i < len(vs.pendingVWRChans); i++ {
 		vs.pendingVWRChans[i] = make(chan *valueWriteReq)
 	}
-	//for i := 0; i < cap(vs.vfVMChan); i++ {
-	//	vm := &valuesMem{
-	//		vs:     vs,
-	//		toc:    make([]byte, 0, vs.memTOCPageSize),
-	//		values: make([]byte, 0, vs.memValuesPageSize),
-	//	}
-	//	vm.id = vs.addValuesLocBock(vm)
-	//	vs.vfVMChan <- vm
-	//}
 	for i := 0; i < cap(vs.freeTOCBlockChan); i++ {
 		vs.freeTOCBlockChan <- make([]byte, 0, vs.memTOCPageSize)
 	}
