@@ -2,6 +2,7 @@ package brimstore
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -15,7 +16,7 @@ import (
 	"github.com/spaolacci/murmur3"
 )
 
-var ErrValueNotFound error = fmt.Errorf("value not found")
+var ErrValueNotFound error = errors.New("value not found")
 
 // ValuesStoreOpts allows configuration of the ValuesStore, although normally
 // the defaults are best.
