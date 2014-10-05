@@ -111,9 +111,6 @@ type ValuesStore struct {
 	vfVMChan              chan *valuesMem
 	freeTOCBlockChan      chan []byte
 	pendingTOCBlockChan   chan []byte
-	memWriterDoneChans    []chan struct{}
-	memClearerDoneChans   []chan struct{}
-	vfDoneChan            chan struct{}
 	tocWriterDoneChan     chan struct{}
 	valuesLocBlocks       []valuesLocBlock
 	atValuesLocBlocksIDer int32
@@ -182,9 +179,6 @@ func NewValuesStore(opts *ValuesStoreOpts) *ValuesStore {
 	vs.vfVMChan = make(chan *valuesMem, vs.cores)
 	vs.freeTOCBlockChan = make(chan []byte, vs.cores)
 	vs.pendingTOCBlockChan = make(chan []byte, vs.cores)
-	vs.memWriterDoneChans = make([]chan struct{}, vs.cores)
-	vs.memClearerDoneChans = make([]chan struct{}, vs.cores)
-	vs.vfDoneChan = make(chan struct{}, 1)
 	vs.tocWriterDoneChan = make(chan struct{}, 1)
 	for i := 0; i < cap(vs.clearableVMChan); i++ {
 		vm := &valuesMem{
@@ -228,19 +222,13 @@ func NewValuesStore(opts *ValuesStoreOpts) *ValuesStore {
 	for i := 0; i < cap(vs.pendingTOCBlockChan); i++ {
 		vs.pendingTOCBlockChan <- make([]byte, 0, vs.memTOCPageSize)
 	}
-	for i := 0; i < len(vs.memWriterDoneChans); i++ {
-		vs.memWriterDoneChans[i] = make(chan struct{}, 1)
-	}
-	for i := 0; i < len(vs.memClearerDoneChans); i++ {
-		vs.memClearerDoneChans[i] = make(chan struct{}, 1)
-	}
 	go vs.tocWriter()
 	go vs.vfWriter()
-	for i := 0; i < len(vs.memClearerDoneChans); i++ {
-		go vs.memClearer(vs.memClearerDoneChans[i])
+	for i := 0; i < vs.cores; i++ {
+		go vs.memClearer()
 	}
 	for i := 0; i < len(vs.pendingVWRChans); i++ {
-		go vs.memWriter(vs.pendingVWRChans[i], vs.memWriterDoneChans[i])
+		go vs.memWriter(vs.pendingVWRChans[i])
 	}
 	return vs
 }
@@ -299,7 +287,7 @@ func (vs *ValuesStore) addValuesLocBock(block valuesLocBlock) uint16 {
 	return uint16(id)
 }
 
-func (vs *ValuesStore) memClearer(memClearerDoneChan chan struct{}) {
+func (vs *ValuesStore) memClearer() {
 	var tb []byte
 	var tbTS int64
 	var tbOffset int
@@ -354,10 +342,9 @@ func (vs *ValuesStore) memClearer(memClearerDoneChan chan struct{}) {
 		vm.discardLock.Unlock()
 		vs.clearedVMChan <- vm
 	}
-	memClearerDoneChan <- struct{}{}
 }
 
-func (vs *ValuesStore) memWriter(VWRChan chan *valueWriteReq, memWriterDoneChan chan struct{}) {
+func (vs *ValuesStore) memWriter(VWRChan chan *valueWriteReq) {
 	var vm *valuesMem
 	var vmTOCOffset int
 	var vmMemOffset int
@@ -401,7 +388,6 @@ func (vs *ValuesStore) memWriter(VWRChan chan *valueWriteReq, memWriterDoneChan 
 		vmMemOffset += 4 + vz
 		vwr.errChan <- nil
 	}
-	memWriterDoneChan <- struct{}{}
 }
 
 func (vs *ValuesStore) vfWriter() {
@@ -431,7 +417,6 @@ func (vs *ValuesStore) vfWriter() {
 		}
 		vf.write(vm)
 	}
-	vs.vfDoneChan <- struct{}{}
 }
 
 func (vs *ValuesStore) tocWriter() {
