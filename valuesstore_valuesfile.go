@@ -19,17 +19,17 @@ type valuesFile struct {
 	ts           int64
 	writerFP     io.WriteCloser
 	atOffset     uint32
-	freeChan     chan *wbuf
-	checksumChan chan *wbuf
-	writeChan    chan *wbuf
+	freeChan     chan *valuesFileWriteBuf
+	checksumChan chan *valuesFileWriteBuf
+	writeChan    chan *valuesFileWriteBuf
 	doneChan     chan struct{}
-	buf          *wbuf
+	buf          *valuesFileWriteBuf
 	readerFPs    []brimutil.ChecksummedReader
 	readerLocks  []sync.Mutex
 	readerLens   [][]byte
 }
 
-type wbuf struct {
+type valuesFileWriteBuf struct {
 	seq    int
 	buf    []byte
 	offset uint32
@@ -44,12 +44,12 @@ func newValuesFile(vs *ValuesStore) *valuesFile {
 		panic(err)
 	}
 	vf.writerFP = fp
-	vf.freeChan = make(chan *wbuf, vs.cores)
+	vf.freeChan = make(chan *valuesFileWriteBuf, vs.cores)
 	for i := 0; i < vs.cores; i++ {
-		vf.freeChan <- &wbuf{buf: make([]byte, vs.checksumInterval+4)}
+		vf.freeChan <- &valuesFileWriteBuf{buf: make([]byte, vs.checksumInterval+4)}
 	}
-	vf.checksumChan = make(chan *wbuf, vs.cores)
-	vf.writeChan = make(chan *wbuf, vs.cores)
+	vf.checksumChan = make(chan *valuesFileWriteBuf, vs.cores)
+	vf.writeChan = make(chan *valuesFileWriteBuf, vs.cores)
 	vf.doneChan = make(chan struct{})
 	vf.buf = <-vf.freeChan
 	head := []byte("BRIMSTORE VALUES v0             ")
