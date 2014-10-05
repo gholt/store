@@ -36,7 +36,24 @@ type valuesFileWriteBuf struct {
 	vms    []*valuesMem
 }
 
-func newValuesFile(vs *ValuesStore) *valuesFile {
+func newValuesFile(vs *ValuesStore, ts int64) *valuesFile {
+	vf := &valuesFile{vs: vs, ts: ts}
+	name := fmt.Sprintf("%d.values", vf.ts)
+	vf.readerFPs = make([]brimutil.ChecksummedReader, vs.valuesFileReaders)
+	vf.readerLocks = make([]sync.Mutex, len(vf.readerFPs))
+	vf.readerLens = make([][]byte, len(vf.readerFPs))
+	for i := 0; i < len(vf.readerFPs); i++ {
+		fp, err := os.Open(name)
+		if err != nil {
+			panic(err)
+		}
+		vf.readerFPs[i] = brimutil.NewChecksummedReader(fp, int(vs.checksumInterval), murmur3.New32)
+		vf.readerLens[i] = make([]byte, 4)
+	}
+	vf.id = vs.addValuesLocBock(vf)
+	return vf
+}
+func createValuesFile(vs *ValuesStore) *valuesFile {
 	vf := &valuesFile{vs: vs, ts: time.Now().UnixNano()}
 	name := fmt.Sprintf("%d.values", vf.ts)
 	fp, err := os.Create(name)

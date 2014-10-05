@@ -8,7 +8,9 @@ import (
 	"math"
 	"os"
 	"runtime"
+	"sort"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -220,47 +222,89 @@ func NewValuesStore(opts *ValuesStoreOpts) *ValuesStore {
 	for i := 0; i < len(vs.pendingVWRChans); i++ {
 		go vs.memWriter(vs.pendingVWRChans[i])
 	}
-	//fp, err := os.Open("1412518284291556122.toc")
-	//if err != nil {
-	//    panic(err)
-	//}
-	//buf := make([]byte, vs.checksumInterval + 4)
-	//first := true
-	//for {
-	//    n, err := io.ReadFull(fp, buf)
-	//    if n < 4 {
-	//        if err != io.EOF || err != io.ErrUnexpectedEOF {
-	//            fmt.Println(err)
-	//        }
-	//        break
-	//    }
-	//    n-=4
-	//    c := murmur3.Sum32(buf[:n])
-	//    if c == binary.BigEndian.Uint32(buf[n:]) {
-	//        i := 0
-	//        if first {
-	//            i += 32
-	//            first = false
-	//        }
-	//        for ;i+28 < n;i+=28 {
-	//            offset := binary.BigEndian.Uint32(buf[i:])
-	//            a := binary.BigEndian.Uint64(buf[i+4:])
-	//            b := binary.BigEndian.Uint64(buf[i+12:])
-	//            q := binary.BigEndian.Uint64(buf[i+20:])
-	//            vs.vlm.set(10, offset, a, b, q)
-	//        }
-	//    } else {
-	//        fmt.Println("checksum fail")
-	//    }
-	//    if err == io.EOF || err == io.ErrUnexpectedEOF {
-	//        break
-	//    }
-	//    if err != nil {
-	//        fmt.Println(err)
-	//        break
-	//    }
-	//}
-	//fp.Close()
+	dfp, err := os.Open(".")
+	if err != nil {
+		panic(err)
+	}
+	names, err := dfp.Readdirnames(-1)
+	if err != nil {
+		panic(err)
+	}
+	sort.Strings(names)
+	count := 0
+	for i := len(names) - 1; i >= 0; i-- {
+		if !strings.HasSuffix(names[i], ".toc") {
+			continue
+		}
+		fmt.Println("reading", names[i])
+		ts := int64(0)
+		if ts, err = strconv.ParseInt(names[i][:len(names[i])-4], 10, 64); err != nil {
+			panic(err)
+		}
+		if ts == 0 {
+			panic(ts)
+		}
+		vf := newValuesFile(vs, ts)
+		fp, err := os.Open(names[i])
+		if err != nil {
+			panic(err)
+		}
+		buf := make([]byte, vs.checksumInterval+4)
+		overflow := make([]byte, 0, 28)
+		first := true
+		for {
+			n, err := io.ReadFull(fp, buf)
+			if n < 4 {
+				if err != io.EOF || err != io.ErrUnexpectedEOF {
+					fmt.Println(err)
+				}
+				break
+			}
+			n -= 4
+			c := murmur3.Sum32(buf[:n])
+			if c == binary.BigEndian.Uint32(buf[n:]) {
+				i := 0
+				if first {
+					i += 32
+					first = false
+				}
+				if len(overflow) > 0 {
+					i += 28 - len(overflow)
+					overflow = append(overflow, buf[i-28+len(overflow):i]...)
+					offset := binary.BigEndian.Uint32(overflow)
+					a := binary.BigEndian.Uint64(overflow[4:])
+					b := binary.BigEndian.Uint64(overflow[12:])
+					q := binary.BigEndian.Uint64(overflow[20:])
+					vs.vlm.set(vf.id, offset, a, b, q)
+					count++
+					overflow = overflow[:0]
+				}
+				for ; i+28 <= n; i += 28 {
+					offset := binary.BigEndian.Uint32(buf[i:])
+					a := binary.BigEndian.Uint64(buf[i+4:])
+					b := binary.BigEndian.Uint64(buf[i+12:])
+					q := binary.BigEndian.Uint64(buf[i+20:])
+					vs.vlm.set(vf.id, offset, a, b, q)
+					count++
+				}
+				if i != n {
+					overflow = overflow[:n-i]
+					copy(overflow, buf[i-28:])
+				}
+			} else {
+				fmt.Println("checksum fail")
+			}
+			if err == io.EOF || err == io.ErrUnexpectedEOF {
+				break
+			}
+			if err != nil {
+				fmt.Println(err)
+				break
+			}
+		}
+		fp.Close()
+	}
+	fmt.Println(count, "count")
 	return vs
 }
 
@@ -437,7 +481,7 @@ func (vs *ValuesStore) vfWriter() {
 			vf = nil
 		}
 		if vf == nil {
-			vf = newValuesFile(vs)
+			vf = createValuesFile(vs)
 		}
 		vf.write(vm)
 	}
