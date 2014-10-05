@@ -18,19 +18,6 @@ import (
 
 var ErrValueNotFound error = fmt.Errorf("value not found")
 
-// ReadValue is used to store read request details (KeyA, KeyB) and the results
-// (Value, Seq). An instance can be made by using ValuesStore.NewReadValue().
-// If creating an instance yourself, ensure Value has enough capacity for
-// ValuesStore.MaxValueSize() and that ReadChan has a capacity of at least 1.
-type ReadValue struct {
-	KeyA     uint64
-	KeyB     uint64
-	Value    []byte
-	Seq      uint64
-	ReadChan chan error
-	offset   uint32
-}
-
 type WriteValue struct {
 	KeyA        uint64
 	KeyB        uint64
@@ -263,13 +250,6 @@ func (vs *ValuesStore) MaxValueSize() int {
 	return vs.maxValueSize
 }
 
-func (vs *ValuesStore) NewReadValue() *ReadValue {
-	return &ReadValue{
-		Value:    make([]byte, 0, vs.maxValueSize),
-		ReadChan: make(chan error, 1),
-	}
-}
-
 func (vs *ValuesStore) Close() {
 	for _, c := range vs.writeValueChans {
 		c <- nil
@@ -280,24 +260,15 @@ func (vs *ValuesStore) Close() {
 	}
 }
 
-// ReadValue retrieves r.Value, r.Seq for r.KeyA, r.KeyB and sends any error
-// or nil to r.ReadChan.
-func (vs *ValuesStore) ReadValue(r *ReadValue) {
-	var id uint16
-	id, r.offset, r.Seq = vs.vlm.get(r.KeyA, r.KeyB)
-	if id < _VALUESBLOCK_IDOFFSET {
-		r.ReadChan <- ErrValueNotFound
-	} else {
-		vs.valuesLocBlock(id).readValue(r)
-	}
-}
-
-func (vs *ValuesStore) ReadValue2(keyA uint64, keyB uint64, value []byte) ([]byte, uint64, error) {
+// ReadValue will return value, seq, err for keyA, keyB; if an incoming value
+// is provided, the read value will be appended to it and the whole returned
+// (useful to reuse an existing []byte).
+func (vs *ValuesStore) ReadValue(keyA uint64, keyB uint64, value []byte) ([]byte, uint64, error) {
 	id, offset, seq := vs.vlm.get(keyA, keyB)
 	if id < _VALUESBLOCK_IDOFFSET {
 		return value, 0, ErrValueNotFound
 	}
-	return vs.valuesLocBlock(id).readValue2(keyA, keyB, value, seq, offset)
+	return vs.valuesLocBlock(id).readValue(keyA, keyB, value, seq, offset)
 }
 
 // WriteValue stores w.Value, w.Seq for r.KeyA, r.KeyB and sends any error or
@@ -550,8 +521,7 @@ func (vs *ValuesStore) tocWriter() {
 
 type valuesLocBlock interface {
 	timestamp() int64
-	readValue(r *ReadValue)
-	readValue2(keyA uint64, keyB uint64, value []byte, seq uint64, offset uint32) ([]byte, uint64, error)
+	readValue(keyA uint64, keyB uint64, value []byte, seq uint64, offset uint32) ([]byte, uint64, error)
 }
 
 type memBlock struct {
@@ -568,38 +538,7 @@ func (mb *memBlock) timestamp() int64 {
 	return math.MaxInt64
 }
 
-func (mb *memBlock) readValue(r *ReadValue) {
-	mb.discardLock.RLock()
-	var id uint16
-	id, r.offset, r.Seq = mb.vs.vlm.get(r.KeyA, r.KeyB)
-	if id < _VALUESBLOCK_IDOFFSET {
-		mb.discardLock.RUnlock()
-		r.ReadChan <- ErrValueNotFound
-	} else if id != mb.id {
-		mb.discardLock.RUnlock()
-		mb.vs.valuesLocBlock(id).readValue(r)
-	} else {
-		if r.offset+4 > uint32(len(mb.data)) {
-			fmt.Println("A", r.offset, len(mb.data))
-			mb.discardLock.RUnlock()
-			r.ReadChan <- ErrValueNotFound
-		} else {
-			z := binary.BigEndian.Uint32(mb.data[r.offset:])
-			if r.offset+4+z > uint32(len(mb.data)) {
-				fmt.Println("B", r.offset, len(mb.data))
-				mb.discardLock.RUnlock()
-				r.ReadChan <- ErrValueNotFound
-			} else {
-				r.Value = r.Value[:z]
-				copy(r.Value, mb.data[r.offset+4:])
-				mb.discardLock.RUnlock()
-				r.ReadChan <- nil
-			}
-		}
-	}
-}
-
-func (mb *memBlock) readValue2(keyA uint64, keyB uint64, value []byte, seq uint64, offset uint32) ([]byte, uint64, error) {
+func (mb *memBlock) readValue(keyA uint64, keyB uint64, value []byte, seq uint64, offset uint32) ([]byte, uint64, error) {
 	mb.discardLock.RLock()
 	id, offset, seq := mb.vs.vlm.get(keyA, keyB)
 	if id < _VALUESBLOCK_IDOFFSET {
@@ -608,7 +547,7 @@ func (mb *memBlock) readValue2(keyA uint64, keyB uint64, value []byte, seq uint6
 	}
 	if id != mb.id {
 		mb.discardLock.RUnlock()
-		mb.vs.valuesLocBlock(id).readValue2(keyA, keyB, value, seq, offset)
+		mb.vs.valuesLocBlock(id).readValue(keyA, keyB, value, seq, offset)
 	}
 	value = append(value, mb.data[offset+4:offset+4+binary.BigEndian.Uint32(mb.data[offset:])]...)
 	mb.discardLock.RUnlock()

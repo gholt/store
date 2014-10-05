@@ -14,20 +14,19 @@ import (
 )
 
 type valuesFile struct {
-	vs             *ValuesStore
-	id             uint16
-	ts             int64
-	writerFP       io.WriteCloser
-	atOffset       uint32
-	freeChan       chan *wbuf
-	checksumChan   chan *wbuf
-	writeChan      chan *wbuf
-	doneChan       chan struct{}
-	buf            *wbuf
-	readValueChans []chan *ReadValue
-	readerFPs      []brimutil.ChecksummedReader
-	readerLocks    []sync.Mutex
-	readerLens     [][]byte
+	vs           *ValuesStore
+	id           uint16
+	ts           int64
+	writerFP     io.WriteCloser
+	atOffset     uint32
+	freeChan     chan *wbuf
+	checksumChan chan *wbuf
+	writeChan    chan *wbuf
+	doneChan     chan struct{}
+	buf          *wbuf
+	readerFPs    []brimutil.ChecksummedReader
+	readerLocks  []sync.Mutex
+	readerLens   [][]byte
 }
 
 type wbuf struct {
@@ -61,15 +60,6 @@ func newValuesFile(vs *ValuesStore) *valuesFile {
 	for i := 0; i < vs.cores; i++ {
 		go vf.checksummer()
 	}
-	vf.readValueChans = make([]chan *ReadValue, vs.valuesFileReaders)
-	for i := 0; i < len(vf.readValueChans); i++ {
-		fp, err := os.Open(name)
-		if err != nil {
-			panic(err)
-		}
-		vf.readValueChans[i] = make(chan *ReadValue, vs.cores)
-		go reader(brimutil.NewChecksummedReader(fp, int(vs.checksumInterval), murmur3.New32), vf.readValueChans[i])
-	}
 	vf.readerFPs = make([]brimutil.ChecksummedReader, vs.valuesFileReaders)
 	vf.readerLocks = make([]sync.Mutex, len(vf.readerFPs))
 	vf.readerLens = make([][]byte, len(vf.readerFPs))
@@ -89,11 +79,7 @@ func (vf *valuesFile) timestamp() int64 {
 	return vf.ts
 }
 
-func (vf *valuesFile) readValue(r *ReadValue) {
-	vf.readValueChans[int(r.KeyA>>1)%len(vf.readValueChans)] <- r
-}
-
-func (vf *valuesFile) readValue2(keyA uint64, keyB uint64, value []byte, seq uint64, offset uint32) ([]byte, uint64, error) {
+func (vf *valuesFile) readValue(keyA uint64, keyB uint64, value []byte, seq uint64, offset uint32) ([]byte, uint64, error) {
 	i := int(keyA>>1) % len(vf.readerFPs)
 	vf.readerLocks[i].Lock()
 	vf.readerFPs[i].Seek(int64(offset), 0)
@@ -109,7 +95,7 @@ func (vf *valuesFile) readValue2(keyA uint64, keyB uint64, value []byte, seq uin
 		copy(value2, value)
 		value = value2
 	}
-	if _, err := io.ReadFull(vf.readerFPs[i], value[-z:]); err != nil {
+	if _, err := io.ReadFull(vf.readerFPs[i], value[len(value)-z:]); err != nil {
 		vf.readerLocks[i].Unlock()
 		return value, seq, err
 	}
@@ -144,25 +130,6 @@ func (vf *valuesFile) write(mb *memBlock) {
 		vf.vs.clearableMemBlockChan <- mb
 	} else {
 		vf.buf.mbs = append(vf.buf.mbs, mb)
-	}
-}
-
-func reader(cr brimutil.ChecksummedReader, c chan *ReadValue) {
-	zb := make([]byte, 4)
-	for {
-		r := <-c
-		cr.Seek(int64(r.offset), 0)
-		if _, err := io.ReadFull(cr, zb); err != nil {
-			r.ReadChan <- err
-		} else {
-			z := binary.BigEndian.Uint32(zb)
-			r.Value = r.Value[:z]
-			if _, err := io.ReadFull(cr, r.Value); err != nil {
-				r.ReadChan <- err
-			} else {
-				r.ReadChan <- nil
-			}
-		}
 	}
 }
 

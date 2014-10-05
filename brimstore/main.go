@@ -190,7 +190,7 @@ func readValues(vs *brimstore.ValuesStore, keys [][][]byte, value []byte, client
 			m := 0
 			for _, keysB := range keys {
 				for o := 0; o < len(keysB[i]); o += 16 {
-					v, _, err := vs.ReadValue2(binary.BigEndian.Uint64(keysB[i][o:]), binary.BigEndian.Uint64(keysB[i][o+8:]), v[:0])
+					v, _, err := vs.ReadValue(binary.BigEndian.Uint64(keysB[i][o:]), binary.BigEndian.Uint64(keysB[i][o+8:]), v[:0])
 					if err == brimstore.ErrValueNotFound {
 						m++
 					} else if err != nil {
