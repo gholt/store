@@ -128,7 +128,7 @@ func (vlms *valuesLocMapSection) set(sectionMask uint64, bucketIndex int, lockIn
 	} else if storageB == nil {
 		count := vlms.setSingle(storageA, bucketIndex, lockIndex, valuesLocBlockID, offset, keyA, keyB, seq)
 		if count > int32(len(storageA.buckets)) {
-			vlms.split(sectionMask)
+			go vlms.split(sectionMask)
 		}
 	} else {
 		sectionMask >>= 1
