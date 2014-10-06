@@ -224,7 +224,7 @@ func NewValuesStore(opts *ValuesStoreOpts) *ValuesStore {
 	for i := 0; i < len(vs.pendingVWRChans); i++ {
 		go vs.memWriter(vs.pendingVWRChans[i])
 	}
-	vs.recover()
+	vs.recovery()
 	return vs
 }
 
@@ -496,7 +496,7 @@ func (vs *ValuesStore) tocWriter() {
 	vs.tocWriterDoneChan <- struct{}{}
 }
 
-func (vs *ValuesStore) recover() {
+func (vs *ValuesStore) recovery() {
 	start := time.Now()
 	dfp, err := os.Open(".")
 	if err != nil {
@@ -541,8 +541,7 @@ func (vs *ValuesStore) recover() {
 				break
 			}
 			n -= 4
-			c := murmur3.Sum32(buf[:n])
-			if c != binary.BigEndian.Uint32(buf[n:]) {
+			if murmur3.Sum32(buf[:n]) != binary.BigEndian.Uint32(buf[n:]) {
 				checksumFailures++
 			} else {
 				i := 0

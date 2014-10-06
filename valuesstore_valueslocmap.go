@@ -43,6 +43,9 @@ func newValuesLocMap(opts *ValuesStoreOpts) *valuesLocMap {
 	}
 	bucketCount := 1 << brimutil.PowerOfTwoNeeded(uint64(valuesLocMapPageSize)/uint64(unsafe.Sizeof(valueLoc{})))
 	lockCount := 1 << brimutil.PowerOfTwoNeeded(uint64(cores*cores))
+	if lockCount > bucketCount {
+		lockCount = bucketCount
+	}
 	return &valuesLocMap{
 		a:          newValuesLocMapSection(bucketCount, lockCount),
 		b:          newValuesLocMapSection(bucketCount, lockCount),
