@@ -30,6 +30,7 @@ func old() {
 	brimutil.NewSeededScrambled(seed).Read(value)
 	keys := createKeys(seed, clients, valuesPerClient)
 	keys2 := createKeys(seed+int64(totalValues), clients, valuesPerClient)
+	keys3 := createKeys(seed+int64(totalValues*2), clients, valuesPerClient)
 
 	fmt.Println(cores, "cores")
 	fmt.Println(bytesPerValue, "bytes per value")
@@ -130,6 +131,19 @@ func old() {
 
 	fmt.Println()
 	start = time.Now()
+	m = readValues(vs, [][][]byte{keys3}, value, clients, valuesPerClient)
+	dur = time.Now().Sub(start)
+	fmt.Printf("%s %.0f/s %dns each, to read %d non-existent values\n", dur, float64(totalValues)/(float64(dur)/float64(time.Second)), int(dur)/(totalValues), totalValues)
+	if m != 0 {
+		fmt.Println(m, "MISSING KEYS!")
+	}
+	runtime.ReadMemStats(&st)
+	deltaAlloc = st.TotalAlloc - lastAlloc
+	lastAlloc = st.TotalAlloc
+	fmt.Printf("%0.2fG total alloc, %0.2fG delta\n", float64(st.TotalAlloc)/1024/1024/1024, float64(deltaAlloc)/1024/1024/1024)
+
+	fmt.Println()
+	start = time.Now()
 	vs.Close()
 	dur = time.Now().Sub(start)
 	fmt.Println(dur, "to close ValuesStore")
@@ -157,6 +171,7 @@ func createKeys(seed int64, clients int, valuesPerClient int) [][]byte {
 func writeValues(vs *brimstore.ValuesStore, keys [][]byte, value []byte, clients int, valuesPerClient int) {
 	wg := &sync.WaitGroup{}
 	wg.Add(clients)
+	seqstart := uint64(time.Now().UnixNano())
 	for i := 0; i < clients; i++ {
 		go func(keys []byte, seq uint64) {
 			for o := 0; o < len(keys); o += 16 {
@@ -166,7 +181,7 @@ func writeValues(vs *brimstore.ValuesStore, keys [][]byte, value []byte, clients
 				}
 			}
 			wg.Done()
-		}(keys[i], uint64(i*valuesPerClient))
+		}(keys[i], seqstart+uint64(i*valuesPerClient))
 	}
 	wg.Wait()
 }
