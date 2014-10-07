@@ -13,9 +13,11 @@ import (
 	"github.com/gholt/brimutil"
 )
 
+const VALUE_SIZE = 512
+
 func old() {
 	seed := int64(1)
-	bytesPerValue := 128
+	bytesPerValue := VALUE_SIZE
 	targetBytes := 4 * 1024 * 1024 * 1024
 	cores := runtime.GOMAXPROCS(0)
 	if os.Getenv("GOMAXPROCS") == "" {
@@ -192,11 +194,12 @@ func readValues(vs *brimstore.ValuesStore, keys [][][]byte, value []byte, client
 	for i := 0; i < clients; i++ {
 		c[i] = make(chan int)
 		go func(i int, c chan int) {
-			v := make([]byte, 0, 128)
+			var err error
+			v := make([]byte, 0, VALUE_SIZE)
 			m := 0
 			for _, keysB := range keys {
 				for o := 0; o < len(keysB[i]); o += 16 {
-					v, _, err := vs.ReadValue(binary.BigEndian.Uint64(keysB[i][o:]), binary.BigEndian.Uint64(keysB[i][o+8:]), v[:0])
+					v, _, err = vs.ReadValue(binary.BigEndian.Uint64(keysB[i][o:]), binary.BigEndian.Uint64(keysB[i][o+8:]), v[:0])
 					if err == brimstore.ErrValueNotFound {
 						m++
 					} else if err != nil {
