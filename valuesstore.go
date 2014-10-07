@@ -392,6 +392,9 @@ func (vs *ValuesStore) memWriter(VWRChan chan *valueWriteReq) {
 func (vs *ValuesStore) vfWriter() {
 	var vf *valuesFile
 	memWritersLeft := vs.cores
+	// Just loosely tracks toc size to switch vfs if the toc reaches about
+	// vs.valuesFileSize, in case a lot of tiny values (<32) are in use.
+	tocLen := 0
 	for {
 		vm := <-vs.vfVMChan
 		if vm == nil {
@@ -407,7 +410,7 @@ func (vs *ValuesStore) vfWriter() {
 			}
 			continue
 		}
-		if vf != nil && int(atomic.LoadUint32(&vf.atOffset))+len(vm.values) > vs.valuesFileSize {
+		if vf != nil && int(atomic.LoadUint32(&vf.atOffset))+len(vm.values) > vs.valuesFileSize || tocLen >= vs.valuesFileSize {
 			vf.close()
 			vf = nil
 		}
@@ -415,6 +418,7 @@ func (vs *ValuesStore) vfWriter() {
 			vf = createValuesFile(vs)
 		}
 		vf.write(vm)
+		tocLen += len(vm.toc)
 	}
 }
 
