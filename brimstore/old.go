@@ -176,8 +176,10 @@ func writeValues(vs *brimstore.ValuesStore, keys [][]byte, value []byte, clients
 		go func(keys []byte, seq uint64) {
 			for o := 0; o < len(keys); o += 16 {
 				seq++
-				if err := vs.WriteValue(binary.BigEndian.Uint64(keys[o:]), binary.BigEndian.Uint64(keys[o+8:]), value, seq); err != nil {
+				if newSeq, err := vs.WriteValue(binary.BigEndian.Uint64(keys[o:]), binary.BigEndian.Uint64(keys[o+8:]), value, seq); err != nil {
 					panic(err)
+				} else if newSeq != seq {
+					panic(newSeq)
 				}
 			}
 			wg.Done()

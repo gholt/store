@@ -255,7 +255,7 @@ func (vs *ValuesStore) ReadValue(keyA uint64, keyB uint64, value []byte) ([]byte
 
 // WriteValue stores value, seq for keyA, keyB or returns any error; a newer
 // seq already in place is not reported as an error.
-func (vs *ValuesStore) WriteValue(keyA uint64, keyB uint64, value []byte, seq uint64) error {
+func (vs *ValuesStore) WriteValue(keyA uint64, keyB uint64, value []byte, seq uint64) (uint64, error) {
 	i := int(keyA>>1) % len(vs.freeVWRChans)
 	vwr := <-vs.freeVWRChans[i]
 	vwr.keyA = keyA
@@ -266,7 +266,7 @@ func (vs *ValuesStore) WriteValue(keyA uint64, keyB uint64, value []byte, seq ui
 	err := <-vwr.errChan
 	vwr.value = nil
 	vs.freeVWRChans[i] <- vwr
-	return err
+	return vwr.seq, err
 }
 
 func (vs *ValuesStore) valuesLocBlock(valuesLocBlockID uint16) valuesLocBlock {
@@ -305,7 +305,10 @@ func (vs *ValuesStore) memClearer() {
 			a := binary.BigEndian.Uint64(vm.toc[vmTOCOffset+4:])
 			b := binary.BigEndian.Uint64(vm.toc[vmTOCOffset+12:])
 			q := binary.BigEndian.Uint64(vm.toc[vmTOCOffset+20:])
-			vs.vlm.set(vm.vfID, vm.vfOffset+vmMemOffset, a, b, q)
+			nq := vs.vlm.set(vm.vfID, vm.vfOffset+vmMemOffset, a, b, q)
+			if nq != q {
+				continue
+			}
 			if tb != nil && tbOffset+28 > cap(tb) {
 				vs.pendingTOCBlockChan <- tb
 				tb = nil
@@ -372,8 +375,12 @@ func (vs *ValuesStore) memWriter(VWRChan chan *valueWriteReq) {
 		vm.discardLock.Unlock()
 		binary.BigEndian.PutUint32(vm.values[vmMemOffset:], uint32(vz))
 		copy(vm.values[vmMemOffset+4:], vwr.value)
-		vs.vlm.set(vm.id, uint32(vmMemOffset), vwr.keyA, vwr.keyB, vwr.seq)
-		vmMemOffset += 4 + vz
+		newSeq := vs.vlm.set(vm.id, uint32(vmMemOffset), vwr.keyA, vwr.keyB, vwr.seq)
+		if newSeq == vwr.seq {
+			vmMemOffset += 4 + vz
+		} else {
+			vwr.seq = newSeq
+		}
 		vwr.errChan <- nil
 	}
 }

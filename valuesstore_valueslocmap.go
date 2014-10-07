@@ -65,14 +65,14 @@ func (vlm *valuesLocMap) get(keyA uint64, keyB uint64) (uint16, uint32, uint64) 
 	}
 }
 
-func (vlm *valuesLocMap) set(valuesLocBlockID uint16, offset uint32, keyA uint64, keyB uint64, seq uint64) {
+func (vlm *valuesLocMap) set(valuesLocBlockID uint16, offset uint32, keyA uint64, keyB uint64, seq uint64) uint64 {
 	sectionMask := uint64(1) << 63
 	bucketIndex := int(keyB & vlm.bucketMask)
 	lockIndex := int(keyB & vlm.lockMask)
 	if keyA&sectionMask == 0 {
-		vlm.a.set(sectionMask, bucketIndex, lockIndex, valuesLocBlockID, offset, keyA, keyB, seq)
+		return vlm.a.set(sectionMask, bucketIndex, lockIndex, valuesLocBlockID, offset, keyA, keyB, seq)
 	} else {
-		vlm.b.set(sectionMask, bucketIndex, lockIndex, valuesLocBlockID, offset, keyA, keyB, seq)
+		return vlm.b.set(sectionMask, bucketIndex, lockIndex, valuesLocBlockID, offset, keyA, keyB, seq)
 	}
 }
 
@@ -115,27 +115,29 @@ func (vlms *valuesLocMapSection) get(sectionMask uint64, bucketIndex int, lockIn
 	}
 }
 
-func (vlms *valuesLocMapSection) set(sectionMask uint64, bucketIndex int, lockIndex int, valuesLocBlockID uint16, offset uint32, keyA uint64, keyB uint64, seq uint64) {
+func (vlms *valuesLocMapSection) set(sectionMask uint64, bucketIndex int, lockIndex int, valuesLocBlockID uint16, offset uint32, keyA uint64, keyB uint64, seq uint64) uint64 {
 	storageA := vlms.storageA
 	storageB := vlms.storageB
 	if storageA == nil {
 		sectionMask >>= 1
 		if keyA&sectionMask == 0 {
-			vlms.a.set(sectionMask, bucketIndex, lockIndex, valuesLocBlockID, offset, keyA, keyB, seq)
+			return vlms.a.set(sectionMask, bucketIndex, lockIndex, valuesLocBlockID, offset, keyA, keyB, seq)
 		} else {
-			vlms.b.set(sectionMask, bucketIndex, lockIndex, valuesLocBlockID, offset, keyA, keyB, seq)
+			return vlms.b.set(sectionMask, bucketIndex, lockIndex, valuesLocBlockID, offset, keyA, keyB, seq)
 		}
 	} else if storageB == nil {
-		count := vlms.setSingle(storageA, bucketIndex, lockIndex, valuesLocBlockID, offset, keyA, keyB, seq)
+		seq, count := vlms.setSingle(storageA, bucketIndex, lockIndex, valuesLocBlockID, offset, keyA, keyB, seq)
 		if count > int32(len(storageA.buckets)) {
 			go vlms.split(sectionMask)
 		}
+		return seq
 	} else {
 		sectionMask >>= 1
 		if keyA&sectionMask == 0 {
-			vlms.setSingle(storageA, bucketIndex, lockIndex, valuesLocBlockID, offset, keyA, keyB, seq)
+			seq, _ := vlms.setSingle(storageA, bucketIndex, lockIndex, valuesLocBlockID, offset, keyA, keyB, seq)
+			return seq
 		} else {
-			vlms.setWithFallback(storageB, storageA, bucketIndex, lockIndex, valuesLocBlockID, offset, keyA, keyB, seq)
+			return vlms.setWithFallback(storageB, storageA, bucketIndex, lockIndex, valuesLocBlockID, offset, keyA, keyB, seq)
 		}
 	}
 }
@@ -152,7 +154,8 @@ func (vlms *valuesLocMapSection) getSingle(storage *valuesLocMapSectionStorage, 
 	return _VALUESBLOCK_UNUSED, 0, 0
 }
 
-func (vlms *valuesLocMapSection) setSingle(storage *valuesLocMapSectionStorage, bucketIndex int, lockIndex int, valuesLocBlockID uint16, offset uint32, keyA uint64, keyB uint64, seq uint64) int32 {
+func (vlms *valuesLocMapSection) setSingle(storage *valuesLocMapSectionStorage, bucketIndex int, lockIndex int, valuesLocBlockID uint16, offset uint32, keyA uint64, keyB uint64, seq uint64) (uint64, int32) {
+	var newSeq uint64
 	var count int32
 	var done bool
 	var unusedItem *valueLoc
@@ -166,20 +169,29 @@ func (vlms *valuesLocMapSection) setSingle(storage *valuesLocMapSectionStorage, 
 		}
 		if item.keyA == keyA && item.keyB == keyB {
 			if valuesLocBlockID == _VALUESBLOCK_UNUSED {
+				newSeq = item.seq
 				if item.seq == seq {
 					count = atomic.AddInt32(&storage.count, -1)
 					item.valuesLocBlockID = _VALUESBLOCK_UNUSED
+				} else {
+					count = atomic.LoadInt32(&storage.count)
 				}
 			} else if item.seq <= seq {
+				newSeq = seq
+				count = atomic.LoadInt32(&storage.count)
 				item.valuesLocBlockID = valuesLocBlockID
 				item.offset = offset
 				item.seq = seq
+			} else {
+				newSeq = item.seq
+				count = atomic.LoadInt32(&storage.count)
 			}
 			done = true
 			break
 		}
 	}
 	if !done && valuesLocBlockID != _VALUESBLOCK_UNUSED {
+		newSeq = seq
 		count = atomic.AddInt32(&storage.count, 1)
 		if unusedItem != nil {
 			unusedItem.valuesLocBlockID = valuesLocBlockID
@@ -199,7 +211,7 @@ func (vlms *valuesLocMapSection) setSingle(storage *valuesLocMapSectionStorage, 
 		}
 	}
 	storage.locks[lockIndex].Unlock()
-	return count
+	return newSeq, count
 }
 
 func (vlms *valuesLocMapSection) getWithFallback(storage *valuesLocMapSectionStorage, fallback *valuesLocMapSectionStorage, bucketIndex int, lockIndex int, keyA uint64, keyB uint64) (uint16, uint32, uint64) {
@@ -224,7 +236,8 @@ func (vlms *valuesLocMapSection) getWithFallback(storage *valuesLocMapSectionSto
 	return _VALUESBLOCK_UNUSED, 0, 0
 }
 
-func (vlms *valuesLocMapSection) setWithFallback(storage *valuesLocMapSectionStorage, fallback *valuesLocMapSectionStorage, bucketIndex int, lockIndex int, valuesLocBlockID uint16, offset uint32, keyA uint64, keyB uint64, seq uint64) {
+func (vlms *valuesLocMapSection) setWithFallback(storage *valuesLocMapSectionStorage, fallback *valuesLocMapSectionStorage, bucketIndex int, lockIndex int, valuesLocBlockID uint16, offset uint32, keyA uint64, keyB uint64, seq uint64) uint64 {
+	var newSeq uint64
 	var done bool
 	var unusedItem *valueLoc
 	storage.locks[lockIndex].Lock()
@@ -238,14 +251,18 @@ func (vlms *valuesLocMapSection) setWithFallback(storage *valuesLocMapSectionSto
 		}
 		if item.keyA == keyA && item.keyB == keyB {
 			if valuesLocBlockID == _VALUESBLOCK_UNUSED {
+				newSeq = item.seq
 				if item.seq == seq {
 					atomic.AddInt32(&storage.count, -1)
 					item.valuesLocBlockID = _VALUESBLOCK_UNUSED
 				}
 			} else if item.seq <= seq {
+				newSeq = seq
 				item.valuesLocBlockID = valuesLocBlockID
 				item.offset = offset
 				item.seq = seq
+			} else {
+				newSeq = item.seq
 			}
 			done = true
 			break
@@ -258,6 +275,7 @@ func (vlms *valuesLocMapSection) setWithFallback(storage *valuesLocMapSectionSto
 			}
 			if fallbackItem.keyA == keyA && fallbackItem.keyB == keyB {
 				if valuesLocBlockID == _VALUESBLOCK_UNUSED {
+					newSeq = fallbackItem.seq
 					if fallbackItem.seq == seq {
 						atomic.AddInt32(&fallback.count, -1)
 						fallbackItem.valuesLocBlockID = _VALUESBLOCK_UNUSED
@@ -267,6 +285,7 @@ func (vlms *valuesLocMapSection) setWithFallback(storage *valuesLocMapSectionSto
 					atomic.AddInt32(&fallback.count, -1)
 					fallbackItem.valuesLocBlockID = _VALUESBLOCK_UNUSED
 				} else {
+					newSeq = fallbackItem.seq
 					done = true
 				}
 				break
@@ -274,6 +293,7 @@ func (vlms *valuesLocMapSection) setWithFallback(storage *valuesLocMapSectionSto
 		}
 	}
 	if !done && valuesLocBlockID != _VALUESBLOCK_UNUSED {
+		newSeq = seq
 		atomic.AddInt32(&storage.count, 1)
 		if unusedItem != nil {
 			unusedItem.valuesLocBlockID = valuesLocBlockID
@@ -294,6 +314,7 @@ func (vlms *valuesLocMapSection) setWithFallback(storage *valuesLocMapSectionSto
 	}
 	fallback.locks[lockIndex].Unlock()
 	storage.locks[lockIndex].Unlock()
+	return newSeq
 }
 
 func (vlms *valuesLocMapSection) isResizing() bool {
