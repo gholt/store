@@ -171,19 +171,18 @@ func createKeys(seed int64, clients int, valuesPerClient int) [][]byte {
 func writeValues(vs *brimstore.ValuesStore, keys [][]byte, value []byte, clients int, valuesPerClient int) {
 	wg := &sync.WaitGroup{}
 	wg.Add(clients)
-	seqstart := uint64(time.Now().UnixNano())
 	for i := 0; i < clients; i++ {
 		go func(keys []byte, seq uint64) {
 			for o := 0; o < len(keys); o += 16 {
 				seq++
-				if newSeq, err := vs.WriteValue(binary.BigEndian.Uint64(keys[o:]), binary.BigEndian.Uint64(keys[o+8:]), value, seq); err != nil {
+				if oldSeq, err := vs.WriteValue(binary.BigEndian.Uint64(keys[o:]), binary.BigEndian.Uint64(keys[o+8:]), value, seq); err != nil {
 					panic(err)
-				} else if newSeq != seq {
-					panic(newSeq)
+				} else if oldSeq > seq {
+					panic(fmt.Sprintf("%d > %d\n", oldSeq, seq))
 				}
 			}
 			wg.Done()
-		}(keys[i], seqstart+uint64(i*valuesPerClient))
+		}(keys[i], 123)
 	}
 	wg.Wait()
 }

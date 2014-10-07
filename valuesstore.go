@@ -264,9 +264,10 @@ func (vs *ValuesStore) WriteValue(keyA uint64, keyB uint64, value []byte, seq ui
 	vwr.seq = seq
 	vs.pendingVWRChans[i] <- vwr
 	err := <-vwr.errChan
+	oldSeq := vwr.seq
 	vwr.value = nil
 	vs.freeVWRChans[i] <- vwr
-	return vwr.seq, err
+	return oldSeq, err
 }
 
 func (vs *ValuesStore) valuesLocBlock(valuesLocBlockID uint16) valuesLocBlock {
@@ -305,7 +306,7 @@ func (vs *ValuesStore) memClearer() {
 			a := binary.BigEndian.Uint64(vm.toc[vmTOCOffset+4:])
 			b := binary.BigEndian.Uint64(vm.toc[vmTOCOffset+12:])
 			q := binary.BigEndian.Uint64(vm.toc[vmTOCOffset+20:])
-			nq := vs.vlm.set(vm.vfID, vm.vfOffset+vmMemOffset, a, b, q)
+			nq := vs.vlm.set(vm.vfID, vm.vfOffset+vmMemOffset, a, b, q, true)
 			if nq != q {
 				continue
 			}
@@ -364,23 +365,26 @@ func (vs *ValuesStore) memWriter(VWRChan chan *valueWriteReq) {
 			vmTOCOffset = 0
 			vmMemOffset = 0
 		}
-		vm.toc = vm.toc[:vmTOCOffset+28]
-		binary.BigEndian.PutUint32(vm.toc[vmTOCOffset:], uint32(vmMemOffset))
-		binary.BigEndian.PutUint64(vm.toc[vmTOCOffset+4:], vwr.keyA)
-		binary.BigEndian.PutUint64(vm.toc[vmTOCOffset+12:], vwr.keyB)
-		binary.BigEndian.PutUint64(vm.toc[vmTOCOffset+20:], vwr.seq)
-		vmTOCOffset += 28
 		vm.discardLock.Lock()
 		vm.values = vm.values[:vmMemOffset+4+vz]
 		vm.discardLock.Unlock()
 		binary.BigEndian.PutUint32(vm.values[vmMemOffset:], uint32(vz))
 		copy(vm.values[vmMemOffset+4:], vwr.value)
-		newSeq := vs.vlm.set(vm.id, uint32(vmMemOffset), vwr.keyA, vwr.keyB, vwr.seq)
-		if newSeq == vwr.seq {
+		oldSeq := vs.vlm.set(vm.id, uint32(vmMemOffset), vwr.keyA, vwr.keyB, vwr.seq, false)
+		if oldSeq < vwr.seq {
+			vm.toc = vm.toc[:vmTOCOffset+28]
+			binary.BigEndian.PutUint32(vm.toc[vmTOCOffset:], uint32(vmMemOffset))
+			binary.BigEndian.PutUint64(vm.toc[vmTOCOffset+4:], vwr.keyA)
+			binary.BigEndian.PutUint64(vm.toc[vmTOCOffset+12:], vwr.keyB)
+			binary.BigEndian.PutUint64(vm.toc[vmTOCOffset+20:], vwr.seq)
+			vmTOCOffset += 28
 			vmMemOffset += 4 + vz
 		} else {
-			vwr.seq = newSeq
+			vm.discardLock.Lock()
+			vm.values = vm.values[:vmMemOffset]
+			vm.discardLock.Unlock()
 		}
+		vwr.seq = oldSeq
 		vwr.errChan <- nil
 	}
 }
@@ -583,7 +587,7 @@ func (vs *ValuesStore) recovery() {
 					a := binary.BigEndian.Uint64(overflow[4:])
 					b := binary.BigEndian.Uint64(overflow[12:])
 					q := binary.BigEndian.Uint64(overflow[20:])
-					vs.vlm.set(vf.id, offset, a, b, q)
+					vs.vlm.set(vf.id, offset, a, b, q, false)
 					count++
 					overflow = overflow[:0]
 				}
@@ -592,7 +596,7 @@ func (vs *ValuesStore) recovery() {
 					a := binary.BigEndian.Uint64(buf[i+4:])
 					b := binary.BigEndian.Uint64(buf[i+12:])
 					q := binary.BigEndian.Uint64(buf[i+20:])
-					vs.vlm.set(vf.id, offset, a, b, q)
+					vs.vlm.set(vf.id, offset, a, b, q, false)
 					count++
 				}
 				if i != n {
