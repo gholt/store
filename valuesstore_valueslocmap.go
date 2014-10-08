@@ -80,10 +80,6 @@ func (vlm *valuesLocMap) isResizing() bool {
 	return vlm.a.isResizing() || vlm.b.isResizing()
 }
 
-func (vlm *valuesLocMap) totalValueLength() uint64 {
-	return vlm.a.totalValueLength() + vlm.b.totalValueLength()
-}
-
 type valuesLocMapSection struct {
 	storageA   *valuesLocMapSectionStorage
 	storageB   *valuesLocMapSectionStorage
@@ -130,8 +126,8 @@ func (vlms *valuesLocMapSection) set(sectionMask uint64, bucketIndex int, lockIn
 			return vlms.b.set(sectionMask, bucketIndex, lockIndex, keyA, keyB, seq, valuesLocBlockID, offset, length, evenIfSameSeq)
 		}
 	} else if storageB == nil {
-		seq, atBucketsInUse := vlms.setSingle(storageA, bucketIndex, lockIndex, keyA, keyB, seq, valuesLocBlockID, offset, length, evenIfSameSeq)
-		if atBucketsInUse > int32(len(storageA.buckets)) {
+		seq, count := vlms.setSingle(storageA, bucketIndex, lockIndex, keyA, keyB, seq, valuesLocBlockID, offset, length, evenIfSameSeq)
+		if count > int32(len(storageA.buckets)) {
 			go vlms.split(sectionMask)
 		}
 		return seq
@@ -161,7 +157,7 @@ func (vlms *valuesLocMapSection) getSingle(storage *valuesLocMapSectionStorage, 
 
 func (vlms *valuesLocMapSection) setSingle(storage *valuesLocMapSectionStorage, bucketIndex int, lockIndex int, keyA uint64, keyB uint64, seq uint64, valuesLocBlockID uint16, offset uint32, length uint32, evenIfSameSeq bool) (uint64, int32) {
 	var oldSeq uint64
-	var atBucketsInUse int32
+	var count int32
 	var done bool
 	var unusedItem *valueLoc
 	storage.locks[lockIndex].Lock()
@@ -176,35 +172,23 @@ func (vlms *valuesLocMapSection) setSingle(storage *valuesLocMapSectionStorage, 
 			oldSeq = item.seq
 			if (evenIfSameSeq && item.seq == seq) || item.seq < seq {
 				if valuesLocBlockID == _VALUESBLOCK_UNUSED {
-					if item.length > 0 {
-						atomic.AddUint64(&storage.atTotalValueLength, ^uint64(item.length-1))
-					}
-					atBucketsInUse = atomic.AddInt32(&storage.atBucketsInUse, -1)
-					item.valuesLocBlockID = _VALUESBLOCK_UNUSED
+					count = atomic.AddInt32(&storage.count, -1)
 				} else {
-					if length > item.length {
-						atomic.AddUint64(&storage.atTotalValueLength, uint64(length-item.length))
-					} else if length < item.length {
-						atomic.AddUint64(&storage.atTotalValueLength, ^uint64(item.length-length-1))
-					}
-					atBucketsInUse = atomic.LoadInt32(&storage.atBucketsInUse)
-					item.seq = seq
-					item.valuesLocBlockID = valuesLocBlockID
-					item.offset = offset
-					item.length = length
+					count = atomic.LoadInt32(&storage.count)
 				}
+				item.seq = seq
+				item.valuesLocBlockID = valuesLocBlockID
+				item.offset = offset
+				item.length = length
 			} else {
-				atBucketsInUse = atomic.LoadInt32(&storage.atBucketsInUse)
+				count = atomic.LoadInt32(&storage.count)
 			}
 			done = true
 			break
 		}
 	}
 	if !done && valuesLocBlockID != _VALUESBLOCK_UNUSED {
-		if length > 0 {
-			atomic.AddUint64(&storage.atTotalValueLength, uint64(length))
-		}
-		atBucketsInUse = atomic.AddInt32(&storage.atBucketsInUse, 1)
+		count = atomic.AddInt32(&storage.count, 1)
 		if unusedItem != nil {
 			unusedItem.keyA = keyA
 			unusedItem.keyB = keyB
@@ -225,7 +209,7 @@ func (vlms *valuesLocMapSection) setSingle(storage *valuesLocMapSectionStorage, 
 		}
 	}
 	storage.locks[lockIndex].Unlock()
-	return oldSeq, atBucketsInUse
+	return oldSeq, count
 }
 
 func (vlms *valuesLocMapSection) getWithFallback(storage *valuesLocMapSectionStorage, fallback *valuesLocMapSectionStorage, bucketIndex int, lockIndex int, keyA uint64, keyB uint64) (uint64, uint16, uint32, uint32) {
@@ -269,22 +253,12 @@ func (vlms *valuesLocMapSection) setWithFallback(storage *valuesLocMapSectionSto
 			oldSeq = item.seq
 			if (evenIfSameSeq && item.seq == seq) || item.seq < seq {
 				if valuesLocBlockID == _VALUESBLOCK_UNUSED {
-					if item.length > 0 {
-						atomic.AddUint64(&storage.atTotalValueLength, ^uint64(item.length-1))
-					}
-					atomic.AddInt32(&storage.atBucketsInUse, -1)
-					item.valuesLocBlockID = _VALUESBLOCK_UNUSED
-				} else {
-					if length > item.length {
-						atomic.AddUint64(&storage.atTotalValueLength, uint64(length-item.length))
-					} else if length < item.length {
-						atomic.AddUint64(&storage.atTotalValueLength, ^uint64(item.length-length-1))
-					}
-					item.seq = seq
-					item.valuesLocBlockID = valuesLocBlockID
-					item.offset = offset
-					item.length = length
+					atomic.AddInt32(&storage.count, -1)
 				}
+				item.seq = seq
+				item.valuesLocBlockID = valuesLocBlockID
+				item.offset = offset
+				item.length = length
 			}
 			done = true
 			break
@@ -298,10 +272,7 @@ func (vlms *valuesLocMapSection) setWithFallback(storage *valuesLocMapSectionSto
 			if fallbackItem.keyA == keyA && fallbackItem.keyB == keyB {
 				oldSeq = fallbackItem.seq
 				if (evenIfSameSeq && fallbackItem.seq == seq) || fallbackItem.seq < seq {
-					if fallbackItem.length > 0 {
-						atomic.AddUint64(&fallback.atTotalValueLength, ^uint64(fallbackItem.length-1))
-					}
-					atomic.AddInt32(&fallback.atBucketsInUse, -1)
+					atomic.AddInt32(&fallback.count, -1)
 					fallbackItem.valuesLocBlockID = _VALUESBLOCK_UNUSED
 				} else {
 					done = true
@@ -311,10 +282,7 @@ func (vlms *valuesLocMapSection) setWithFallback(storage *valuesLocMapSectionSto
 		}
 	}
 	if !done && valuesLocBlockID != _VALUESBLOCK_UNUSED {
-		if length > 0 {
-			atomic.AddUint64(&storage.atTotalValueLength, uint64(length))
-		}
-		atomic.AddInt32(&storage.atBucketsInUse, 1)
+		atomic.AddInt32(&storage.count, 1)
 		if unusedItem != nil {
 			unusedItem.keyA = keyA
 			unusedItem.keyB = keyB
@@ -343,27 +311,6 @@ func (vlms *valuesLocMapSection) isResizing() bool {
 	return vlms.resizing || (vlms.a != nil && vlms.a.isResizing()) || (vlms.b != nil && vlms.b.isResizing())
 }
 
-func (vlms *valuesLocMapSection) totalValueLength() uint64 {
-	var totalValueLength uint64
-	storageA := vlms.storageA
-	storageB := vlms.storageB
-	a := vlms.a
-	b := vlms.b
-	if storageA != nil {
-		totalValueLength += atomic.LoadUint64(&storageA.atTotalValueLength)
-	}
-	if storageB != nil {
-		totalValueLength += atomic.LoadUint64(&storageB.atTotalValueLength)
-	}
-	if a != nil {
-		totalValueLength += a.totalValueLength()
-	}
-	if b != nil {
-		totalValueLength += b.totalValueLength()
-	}
-	return totalValueLength
-}
-
 func (vlms *valuesLocMapSection) split(sectionMask uint64) {
 	if vlms.resizing {
 		return
@@ -371,7 +318,7 @@ func (vlms *valuesLocMapSection) split(sectionMask uint64) {
 	vlms.resizeLock.Lock()
 	storageA := vlms.storageA
 	storageB := vlms.storageB
-	if vlms.resizing || storageA == nil || storageB != nil || atomic.LoadInt32(&storageA.atBucketsInUse) < int32(len(storageA.buckets)) {
+	if vlms.resizing || storageA == nil || storageB != nil || atomic.LoadInt32(&storageA.count) < int32(len(storageA.buckets)) {
 		vlms.resizeLock.Unlock()
 		return
 	}
@@ -409,11 +356,6 @@ func (vlms *valuesLocMapSection) split(sectionMask uint64) {
 							}
 							if itemA.keyA == itemB.keyA && itemA.keyB == itemB.keyB {
 								if itemA.seq > itemB.seq {
-									if itemA.length > itemB.length {
-										atomic.AddUint64(&storageB.atTotalValueLength, uint64(itemA.length-itemB.length))
-									} else if itemB.length > itemA.length {
-										atomic.AddUint64(&storageB.atTotalValueLength, ^uint64(itemB.length-itemA.length-1))
-									}
 									itemB.keyA = itemA.keyA
 									itemB.keyB = itemA.keyB
 									itemB.seq = itemA.seq
@@ -421,18 +363,12 @@ func (vlms *valuesLocMapSection) split(sectionMask uint64) {
 									itemB.offset = itemA.offset
 									itemB.length = itemA.length
 								}
-								if itemA.length > 0 {
-									atomic.AddUint64(&storageA.atTotalValueLength, ^uint64(itemA.length-1))
-								}
-								atomic.AddInt32(&storageA.atBucketsInUse, -1)
+								atomic.AddInt32(&storageA.count, -1)
 								itemA.valuesLocBlockID = _VALUESBLOCK_UNUSED
 								continue NEXT_ITEM_A
 							}
 						}
-						if itemA.length > 0 {
-							atomic.AddUint64(&storageB.atTotalValueLength, uint64(itemA.length))
-						}
-						atomic.AddInt32(&storageB.atBucketsInUse, 1)
+						atomic.AddInt32(&storageB.count, 1)
 						if unusedItemB != nil {
 							unusedItemB.keyA = itemA.keyA
 							unusedItemB.keyB = itemA.keyB
@@ -451,10 +387,7 @@ func (vlms *valuesLocMapSection) split(sectionMask uint64) {
 								length:           itemA.length,
 							}
 						}
-						if itemA.length > 0 {
-							atomic.AddUint64(&storageA.atTotalValueLength, ^uint64(itemA.length-1))
-						}
-						atomic.AddInt32(&storageA.atBucketsInUse, -1)
+						atomic.AddInt32(&storageA.count, -1)
 						itemA.valuesLocBlockID = 0
 					}
 					storageA.locks[lockIndex].Unlock()
@@ -476,10 +409,9 @@ type valuesLocMapSectionStorage struct {
 	// The first level of each bucket is preallocated with a valueLoc rather
 	// than a *valueLoc. This trades memory usage for keeping the Go garbage
 	// collector sane.
-	buckets            []valueLoc
-	locks              []sync.RWMutex
-	atTotalValueLength uint64
-	atBucketsInUse     int32
+	buckets []valueLoc
+	count   int32
+	locks   []sync.RWMutex
 }
 
 func newValuesLocMapSectionStorage(bucketCount int, lockCount int) *valuesLocMapSectionStorage {

@@ -149,7 +149,6 @@ func old() {
 	vs.Close()
 	dur = time.Now().Sub(start)
 	fmt.Println(dur, "to close ValuesStore")
-	fmt.Println(vs.TotalValueLength(), "ValuesStore TotalValueLength")
 	runtime.ReadMemStats(&st)
 	deltaAlloc = st.TotalAlloc - lastAlloc
 	lastAlloc = st.TotalAlloc

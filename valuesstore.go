@@ -251,10 +251,6 @@ func (vs *ValuesStore) Close() {
 	}
 }
 
-func (vs *ValuesStore) TotalValueLength() uint64 {
-	return vs.vlm.totalValueLength()
-}
-
 // ReadValue will return seq, value, err for keyA, keyB; if an incoming value
 // is provided, the read value will be appended to it and the whole returned
 // (useful to reuse an existing []byte).
