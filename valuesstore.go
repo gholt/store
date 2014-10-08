@@ -397,6 +397,7 @@ func (vs *ValuesStore) vfWriter() {
 	// Just loosely tracks toc size to switch vfs if the toc reaches about
 	// vs.valuesFileSize, in case a lot of tiny values (<32) are in use.
 	tocLen := 0
+	valuesLen := 0
 	for {
 		vm := <-vs.vfVMChan
 		if vm == nil {
@@ -412,16 +413,18 @@ func (vs *ValuesStore) vfWriter() {
 			}
 			continue
 		}
-		if vf != nil && int(atomic.LoadUint32(&vf.atOffset))+len(vm.values) > vs.valuesFileSize || tocLen >= vs.valuesFileSize {
+		if vf != nil && (tocLen+len(vm.toc) >= vs.valuesFileSize || valuesLen+len(vm.values) > vs.valuesFileSize) {
 			vf.close()
 			vf = nil
 		}
 		if vf == nil {
 			vf = createValuesFile(vs)
 			tocLen = 0
+			valuesLen = 0
 		}
 		vf.write(vm)
 		tocLen += len(vm.toc)
+		valuesLen += len(vm.values)
 	}
 }
 

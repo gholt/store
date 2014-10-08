@@ -53,6 +53,7 @@ func newValuesFile(vs *ValuesStore, ts int64) *valuesFile {
 	vf.id = vs.addValuesLocBock(vf)
 	return vf
 }
+
 func createValuesFile(vs *ValuesStore) *valuesFile {
 	vf := &valuesFile{vs: vs, ts: time.Now().UnixNano()}
 	name := fmt.Sprintf("%d.values", vf.ts)
