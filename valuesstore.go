@@ -118,13 +118,13 @@ type ValuesStore struct {
 	pendingTOCBlockChan   chan []byte
 	tocWriterDoneChan     chan struct{}
 	valuesLocBlocks       []valuesLocBlock
-	atValuesLocBlocksIDer int32
+	atValuesLocBlocksIDer uint32
 	vlm                   *valuesLocMap
 	cores                 int
-	maxValueSize          int
-	memTOCPageSize        int
-	memValuesPageSize     int
-	valuesFileSize        int
+	maxValueSize          uint32
+	memTOCPageSize        uint32
+	memValuesPageSize     uint32
+	valuesFileSize        uint32
 	valuesFileReaders     int
 	checksumInterval      uint32
 }
@@ -146,6 +146,9 @@ func NewValuesStore(opts *ValuesStoreOpts) *ValuesStore {
 	maxValueSize := opts.MaxValueSize
 	if maxValueSize < 0 {
 		maxValueSize = 0
+	}
+	if maxValueSize > math.MaxUint32 {
+		maxValueSize = math.MaxUint32
 	}
 	memTOCPageSize := opts.MemTOCPageSize
 	if memTOCPageSize < 4096 {
@@ -172,18 +175,24 @@ func NewValuesStore(opts *ValuesStoreOpts) *ValuesStore {
 	if memTOCPageSize < checksumInterval/2+1 {
 		memTOCPageSize = checksumInterval/2 + 1
 	}
+	if memTOCPageSize > math.MaxUint32 {
+		memTOCPageSize = math.MaxUint32
+	}
 	if memValuesPageSize < checksumInterval/2+1 {
 		memValuesPageSize = checksumInterval/2 + 1
+	}
+	if memValuesPageSize > math.MaxUint32 {
+		memValuesPageSize = math.MaxUint32
 	}
 	vs := &ValuesStore{
 		valuesLocBlocks:       make([]valuesLocBlock, 65536),
 		atValuesLocBlocksIDer: _VALUESBLOCK_IDOFFSET - 1,
 		vlm:               newValuesLocMap(opts),
 		cores:             cores,
-		maxValueSize:      maxValueSize,
-		memTOCPageSize:    memTOCPageSize,
-		memValuesPageSize: memValuesPageSize,
-		valuesFileSize:    valuesFileSize,
+		maxValueSize:      uint32(maxValueSize),
+		memTOCPageSize:    uint32(memTOCPageSize),
+		memValuesPageSize: uint32(memValuesPageSize),
+		valuesFileSize:    uint32(valuesFileSize),
 		checksumInterval:  uint32(checksumInterval),
 		valuesFileReaders: valuesFileReaders,
 	}
@@ -228,7 +237,7 @@ func NewValuesStore(opts *ValuesStoreOpts) *ValuesStore {
 	return vs
 }
 
-func (vs *ValuesStore) MaxValueSize() int {
+func (vs *ValuesStore) MaxValueSize() uint32 {
 	return vs.maxValueSize
 }
 
@@ -275,7 +284,7 @@ func (vs *ValuesStore) valuesLocBlock(valuesLocBlockID uint16) valuesLocBlock {
 }
 
 func (vs *ValuesStore) addValuesLocBock(block valuesLocBlock) uint16 {
-	id := atomic.AddInt32(&vs.atValuesLocBlocksIDer, 1)
+	id := atomic.AddUint32(&vs.atValuesLocBlocksIDer, 1)
 	if id >= 65536 {
 		panic("too many valuesLocBlocks")
 	}
@@ -354,7 +363,7 @@ func (vs *ValuesStore) memWriter(VWRChan chan *valueWriteReq) {
 			break
 		}
 		z := len(vwr.value)
-		if z > vs.maxValueSize {
+		if z > int(vs.maxValueSize) {
 			vwr.errChan <- fmt.Errorf("value length of %d > %d", z, vs.maxValueSize)
 			continue
 		}
@@ -394,10 +403,8 @@ func (vs *ValuesStore) memWriter(VWRChan chan *valueWriteReq) {
 func (vs *ValuesStore) vfWriter() {
 	var vf *valuesFile
 	memWritersLeft := vs.cores
-	// Just loosely tracks toc size to switch vfs if the toc reaches about
-	// vs.valuesFileSize, in case a lot of tiny values (<32) are in use.
-	tocLen := 0
-	valuesLen := 0
+	var tocLen uint64
+	var valuesLen uint64
 	for {
 		vm := <-vs.vfVMChan
 		if vm == nil {
@@ -413,18 +420,18 @@ func (vs *ValuesStore) vfWriter() {
 			}
 			continue
 		}
-		if vf != nil && (tocLen+len(vm.toc) >= vs.valuesFileSize || valuesLen+len(vm.values) > vs.valuesFileSize) {
+		if vf != nil && (tocLen+uint64(len(vm.toc)) >= uint64(vs.valuesFileSize) || valuesLen+uint64(len(vm.values)) > uint64(vs.valuesFileSize)) {
 			vf.close()
 			vf = nil
 		}
 		if vf == nil {
 			vf = createValuesFile(vs)
-			tocLen = 0
-			valuesLen = 0
+			tocLen = 32
+			valuesLen = 32
 		}
 		vf.write(vm)
-		tocLen += len(vm.toc)
-		valuesLen += len(vm.values)
+		tocLen += uint64(len(vm.toc))
+		valuesLen += uint64(len(vm.values))
 	}
 }
 
