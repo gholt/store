@@ -242,26 +242,26 @@ func (vs *ValuesStore) Close() {
 	}
 }
 
-// ReadValue will return value, seq, err for keyA, keyB; if an incoming value
+// ReadValue will return seq, value, err for keyA, keyB; if an incoming value
 // is provided, the read value will be appended to it and the whole returned
 // (useful to reuse an existing []byte).
-func (vs *ValuesStore) ReadValue(keyA uint64, keyB uint64, value []byte) ([]byte, uint64, error) {
-	id, offset, length, seq := vs.vlm.get(keyA, keyB)
+func (vs *ValuesStore) ReadValue(keyA uint64, keyB uint64, value []byte) (uint64, []byte, error) {
+	seq, id, offset, length := vs.vlm.get(keyA, keyB)
 	if id < _VALUESBLOCK_IDOFFSET {
-		return value, 0, ErrValueNotFound
+		return 0, value, ErrValueNotFound
 	}
-	return vs.valuesLocBlock(id).readValue(keyA, keyB, value, seq, offset, length)
+	return vs.valuesLocBlock(id).readValue(keyA, keyB, seq, offset, length, value)
 }
 
 // WriteValue stores value, seq for keyA, keyB or returns any error; a newer
 // seq already in place is not reported as an error.
-func (vs *ValuesStore) WriteValue(keyA uint64, keyB uint64, value []byte, seq uint64) (uint64, error) {
+func (vs *ValuesStore) WriteValue(keyA uint64, keyB uint64, seq uint64, value []byte) (uint64, error) {
 	i := int(keyA>>1) % len(vs.freeVWRChans)
 	vwr := <-vs.freeVWRChans[i]
 	vwr.keyA = keyA
 	vwr.keyB = keyB
-	vwr.value = value
 	vwr.seq = seq
+	vwr.value = value
 	vs.pendingVWRChans[i] <- vwr
 	err := <-vwr.errChan
 	oldSeq := vwr.seq
@@ -302,12 +302,12 @@ func (vs *ValuesStore) memClearer() {
 			tb = nil
 		}
 		for vmTOCOffset := 0; vmTOCOffset < len(vm.toc); vmTOCOffset += 32 {
-			vmMemOffset := binary.BigEndian.Uint32(vm.toc[vmTOCOffset:])
-			a := binary.BigEndian.Uint64(vm.toc[vmTOCOffset+4:])
-			b := binary.BigEndian.Uint64(vm.toc[vmTOCOffset+12:])
-			q := binary.BigEndian.Uint64(vm.toc[vmTOCOffset+20:])
+			a := binary.BigEndian.Uint64(vm.toc[vmTOCOffset:])
+			b := binary.BigEndian.Uint64(vm.toc[vmTOCOffset+8:])
+			q := binary.BigEndian.Uint64(vm.toc[vmTOCOffset+16:])
+			vmMemOffset := binary.BigEndian.Uint32(vm.toc[vmTOCOffset+24:])
 			z := binary.BigEndian.Uint32(vm.toc[vmTOCOffset+28:])
-			nq := vs.vlm.set(vm.vfID, vm.vfOffset+vmMemOffset, z, a, b, q, true)
+			nq := vs.vlm.set(a, b, q, vm.vfID, vm.vfOffset+vmMemOffset, z, true)
 			if nq != q {
 				continue
 			}
@@ -323,10 +323,10 @@ func (vs *ValuesStore) memClearer() {
 				tbOffset = 8
 			}
 			tb = tb[:tbOffset+32]
-			binary.BigEndian.PutUint32(tb[tbOffset:], vm.vfOffset+uint32(vmMemOffset))
-			binary.BigEndian.PutUint64(tb[tbOffset+4:], a)
-			binary.BigEndian.PutUint64(tb[tbOffset+12:], b)
-			binary.BigEndian.PutUint64(tb[tbOffset+20:], q)
+			binary.BigEndian.PutUint64(tb[tbOffset:], a)
+			binary.BigEndian.PutUint64(tb[tbOffset+8:], b)
+			binary.BigEndian.PutUint64(tb[tbOffset+16:], q)
+			binary.BigEndian.PutUint32(tb[tbOffset+24:], vm.vfOffset+uint32(vmMemOffset))
 			binary.BigEndian.PutUint32(tb[tbOffset+28:], z)
 			tbOffset += 32
 		}
@@ -371,13 +371,13 @@ func (vs *ValuesStore) memWriter(VWRChan chan *valueWriteReq) {
 		vm.values = vm.values[:vmMemOffset+z]
 		vm.discardLock.Unlock()
 		copy(vm.values[vmMemOffset:], vwr.value)
-		oldSeq := vs.vlm.set(vm.id, uint32(vmMemOffset), uint32(z), vwr.keyA, vwr.keyB, vwr.seq, false)
+		oldSeq := vs.vlm.set(vwr.keyA, vwr.keyB, vwr.seq, vm.id, uint32(vmMemOffset), uint32(z), false)
 		if oldSeq < vwr.seq {
 			vm.toc = vm.toc[:vmTOCOffset+32]
-			binary.BigEndian.PutUint32(vm.toc[vmTOCOffset:], uint32(vmMemOffset))
-			binary.BigEndian.PutUint64(vm.toc[vmTOCOffset+4:], vwr.keyA)
-			binary.BigEndian.PutUint64(vm.toc[vmTOCOffset+12:], vwr.keyB)
-			binary.BigEndian.PutUint64(vm.toc[vmTOCOffset+20:], vwr.seq)
+			binary.BigEndian.PutUint64(vm.toc[vmTOCOffset:], vwr.keyA)
+			binary.BigEndian.PutUint64(vm.toc[vmTOCOffset+8:], vwr.keyB)
+			binary.BigEndian.PutUint64(vm.toc[vmTOCOffset+16:], vwr.seq)
+			binary.BigEndian.PutUint32(vm.toc[vmTOCOffset+24:], uint32(vmMemOffset))
 			binary.BigEndian.PutUint32(vm.toc[vmTOCOffset+28:], uint32(z))
 			vmTOCOffset += 32
 			vmMemOffset += z
@@ -590,22 +590,22 @@ func (vs *ValuesStore) recovery() {
 				if len(overflow) > 0 {
 					i += 32 - len(overflow)
 					overflow = append(overflow, buf[i-32+len(overflow):i]...)
-					offset := binary.BigEndian.Uint32(overflow)
-					a := binary.BigEndian.Uint64(overflow[4:])
-					b := binary.BigEndian.Uint64(overflow[12:])
-					q := binary.BigEndian.Uint64(overflow[20:])
+					a := binary.BigEndian.Uint64(overflow)
+					b := binary.BigEndian.Uint64(overflow[8:])
+					q := binary.BigEndian.Uint64(overflow[16:])
+					offset := binary.BigEndian.Uint32(overflow[24:])
 					z := binary.BigEndian.Uint32(overflow[28:])
-					vs.vlm.set(vf.id, offset, z, a, b, q, false)
+					vs.vlm.set(a, b, q, vf.id, offset, z, false)
 					count++
 					overflow = overflow[:0]
 				}
 				for ; i+32 <= n; i += 32 {
-					offset := binary.BigEndian.Uint32(buf[i:])
-					a := binary.BigEndian.Uint64(buf[i+4:])
-					b := binary.BigEndian.Uint64(buf[i+12:])
-					q := binary.BigEndian.Uint64(buf[i+20:])
+					a := binary.BigEndian.Uint64(buf[i:])
+					b := binary.BigEndian.Uint64(buf[i+8:])
+					q := binary.BigEndian.Uint64(buf[i+16:])
+					offset := binary.BigEndian.Uint32(buf[i+24:])
 					z := binary.BigEndian.Uint32(buf[i+28:])
-					vs.vlm.set(vf.id, offset, z, a, b, q, false)
+					vs.vlm.set(a, b, q, vf.id, offset, z, false)
 					count++
 				}
 				if i != n {
@@ -635,12 +635,12 @@ func (vs *ValuesStore) recovery() {
 type valueWriteReq struct {
 	keyA    uint64
 	keyB    uint64
-	value   []byte
 	seq     uint64
+	value   []byte
 	errChan chan error
 }
 
 type valuesLocBlock interface {
 	timestamp() int64
-	readValue(keyA uint64, keyB uint64, value []byte, seq uint64, offset uint32, length uint32) ([]byte, uint64, error)
+	readValue(keyA uint64, keyB uint64, seq uint64, offset uint32, length uint32, value []byte) (uint64, []byte, error)
 }

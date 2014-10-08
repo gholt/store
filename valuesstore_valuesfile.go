@@ -96,7 +96,7 @@ func (vf *valuesFile) timestamp() int64 {
 	return vf.ts
 }
 
-func (vf *valuesFile) readValue(keyA uint64, keyB uint64, value []byte, seq uint64, offset uint32, length uint32) ([]byte, uint64, error) {
+func (vf *valuesFile) readValue(keyA uint64, keyB uint64, seq uint64, offset uint32, length uint32, value []byte) (uint64, []byte, error) {
 	i := int(keyA>>1) % len(vf.readerFPs)
 	vf.readerLocks[i].Lock()
 	vf.readerFPs[i].Seek(int64(offset), 0)
@@ -110,10 +110,10 @@ func (vf *valuesFile) readValue(keyA uint64, keyB uint64, value []byte, seq uint
 	}
 	if _, err := io.ReadFull(vf.readerFPs[i], value[len(value)-int(length):]); err != nil {
 		vf.readerLocks[i].Unlock()
-		return value, seq, err
+		return seq, value, err
 	}
 	vf.readerLocks[i].Unlock()
-	return value, seq, nil
+	return seq, value, nil
 }
 
 func (vf *valuesFile) write(vm *valuesMem) {

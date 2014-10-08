@@ -177,7 +177,7 @@ func writeValues(vs *brimstore.ValuesStore, keys [][]byte, value []byte, clients
 		go func(keys []byte, seq uint64) {
 			for o := 0; o < len(keys); o += 16 {
 				seq++
-				if oldSeq, err := vs.WriteValue(binary.BigEndian.Uint64(keys[o:]), binary.BigEndian.Uint64(keys[o+8:]), value, seq); err != nil {
+				if oldSeq, err := vs.WriteValue(binary.BigEndian.Uint64(keys[o:]), binary.BigEndian.Uint64(keys[o+8:]), seq, value); err != nil {
 					panic(err)
 				} else if oldSeq > seq {
 					panic(fmt.Sprintf("%d > %d\n", oldSeq, seq))
@@ -199,7 +199,7 @@ func readValues(vs *brimstore.ValuesStore, keys [][][]byte, value []byte, client
 			m := 0
 			for _, keysB := range keys {
 				for o := 0; o < len(keysB[i]); o += 16 {
-					v, _, err = vs.ReadValue(binary.BigEndian.Uint64(keysB[i][o:]), binary.BigEndian.Uint64(keysB[i][o+8:]), v[:0])
+					_, v, err = vs.ReadValue(binary.BigEndian.Uint64(keysB[i][o:]), binary.BigEndian.Uint64(keysB[i][o+8:]), v[:0])
 					if err == brimstore.ErrValueNotFound {
 						m++
 					} else if err != nil {

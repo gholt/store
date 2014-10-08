@@ -19,18 +19,18 @@ func (vm *valuesMem) timestamp() int64 {
 	return math.MaxInt64
 }
 
-func (vm *valuesMem) readValue(keyA uint64, keyB uint64, value []byte, seq uint64, offset uint32, length uint32) ([]byte, uint64, error) {
+func (vm *valuesMem) readValue(keyA uint64, keyB uint64, seq uint64, offset uint32, length uint32, value []byte) (uint64, []byte, error) {
 	vm.discardLock.RLock()
-	id, offset, length, seq := vm.vs.vlm.get(keyA, keyB)
+	seq, id, offset, length := vm.vs.vlm.get(keyA, keyB)
 	if id < _VALUESBLOCK_IDOFFSET {
 		vm.discardLock.RUnlock()
-		return value, seq, ErrValueNotFound
+		return seq, value, ErrValueNotFound
 	}
 	if id != vm.id {
 		vm.discardLock.RUnlock()
-		vm.vs.valuesLocBlock(id).readValue(keyA, keyB, value, seq, offset, length)
+		vm.vs.valuesLocBlock(id).readValue(keyA, keyB, seq, offset, length, value)
 	}
 	value = append(value, vm.values[offset:offset+length]...)
 	vm.discardLock.RUnlock()
-	return value, seq, nil
+	return seq, value, nil
 }
