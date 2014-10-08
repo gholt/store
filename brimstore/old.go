@@ -13,7 +13,7 @@ import (
 	"github.com/gholt/brimutil"
 )
 
-const VALUE_SIZE = 512
+const VALUE_SIZE = 128
 
 func old() {
 	seed := int64(1)

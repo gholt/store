@@ -418,6 +418,7 @@ func (vs *ValuesStore) vfWriter() {
 		}
 		if vf == nil {
 			vf = createValuesFile(vs)
+			tocLen = 0
 		}
 		vf.write(vm)
 		tocLen += len(vm.toc)
