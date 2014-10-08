@@ -96,23 +96,19 @@ func (vf *valuesFile) timestamp() int64 {
 	return vf.ts
 }
 
-func (vf *valuesFile) readValue(keyA uint64, keyB uint64, value []byte, seq uint64, offset uint32) ([]byte, uint64, error) {
+func (vf *valuesFile) readValue(keyA uint64, keyB uint64, value []byte, seq uint64, offset uint32, length uint32) ([]byte, uint64, error) {
 	i := int(keyA>>1) % len(vf.readerFPs)
 	vf.readerLocks[i].Lock()
 	vf.readerFPs[i].Seek(int64(offset), 0)
-	if _, err := io.ReadFull(vf.readerFPs[i], vf.readerLens[i]); err != nil {
-		vf.readerLocks[i].Unlock()
-		return value, seq, err
-	}
-	z := int(binary.BigEndian.Uint32(vf.readerLens[i]))
-	if len(value)+z <= cap(value) {
-		value = value[:len(value)+z]
+	end := len(value) + int(length)
+	if end <= cap(value) {
+		value = value[:end]
 	} else {
-		value2 := make([]byte, len(value)+z)
+		value2 := make([]byte, end)
 		copy(value2, value)
 		value = value2
 	}
-	if _, err := io.ReadFull(vf.readerFPs[i], value[len(value)-z:]); err != nil {
+	if _, err := io.ReadFull(vf.readerFPs[i], value[len(value)-int(length):]); err != nil {
 		vf.readerLocks[i].Unlock()
 		return value, seq, err
 	}
