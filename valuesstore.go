@@ -132,9 +132,9 @@ type ValuesStore struct {
 // NewValuesStore creates a ValuesStore for use in storing []byte values
 // referenced by 128 bit keys; opts may be nil to use the defaults.
 //
-// Note that a lot of buffering and multiple cores can be in use and Close
-// should be called prior to the process exiting to ensure all processing is
-// done and the buffers are flushed.
+// Note that a lot of buffering and multiple cores can be in use and therefore
+// Close should be called prior to the process exiting to ensure all processing
+// is done and the buffers are flushed.
 func NewValuesStore(opts *ValuesStoreOpts) *ValuesStore {
 	if opts == nil {
 		opts = NewValuesStoreOpts()
@@ -253,7 +253,7 @@ func (vs *ValuesStore) ReadValue(keyA uint64, keyB uint64, value []byte) (uint64
 	return vs.valuesLocBlock(id).readValue(keyA, keyB, seq, offset, length, value)
 }
 
-// WriteValue stores value, seq for keyA, keyB or returns any error; a newer
+// WriteValue stores seq, value for keyA, keyB or returns any error; a newer
 // seq already in place is not reported as an error.
 func (vs *ValuesStore) WriteValue(keyA uint64, keyB uint64, seq uint64, value []byte) (uint64, error) {
 	i := int(keyA>>1) % len(vs.freeVWRChans)
