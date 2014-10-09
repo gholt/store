@@ -16,6 +16,7 @@ type valuesLocMap struct {
 	b          *valuesLocMapSection
 	bucketMask uint64
 	lockMask   uint64
+	splitCount int32
 }
 
 const (
@@ -46,11 +47,13 @@ func newValuesLocMap(opts *ValuesStoreOpts) *valuesLocMap {
 	if lockCount > bucketCount {
 		lockCount = bucketCount
 	}
+	splitCount := int32(bucketCount)
 	return &valuesLocMap{
-		a:          newValuesLocMapSection(bucketCount, lockCount),
-		b:          newValuesLocMapSection(bucketCount, lockCount),
+		a:          newValuesLocMapSection(bucketCount, lockCount, splitCount),
+		b:          newValuesLocMapSection(bucketCount, lockCount, splitCount),
 		bucketMask: uint64(bucketCount) - 1,
 		lockMask:   uint64(lockCount) - 1,
+		splitCount: splitCount,
 	}
 }
 
@@ -63,6 +66,21 @@ func (vlm *valuesLocMap) get(keyA uint64, keyB uint64) (uint64, uint16, uint32, 
 	} else {
 		return vlm.b.get(sectionMask, bucketIndex, lockIndex, keyA, keyB)
 	}
+}
+
+type valuesLocMapSetReq struct {
+	keyA             uint64
+	keyB             uint64
+	seq              uint64
+	valuesLocBlockID uint16
+	offset           uint32
+	length           uint32
+	evenIfSameSeq    bool
+	sectionMask      uint64
+	bucketIndex      int
+	lockIndex        int
+	storage          *valuesLocMapSectionStorage
+	fallback         *valuesLocMapSectionStorage
 }
 
 func (vlm *valuesLocMap) set(keyA uint64, keyB uint64, seq uint64, valuesLocBlockID uint16, offset uint32, length uint32, evenIfSameSeq bool) uint64 {
@@ -81,21 +99,36 @@ func (vlm *valuesLocMap) isResizing() bool {
 }
 
 type valuesLocMapStats struct {
-	depth    uint64
-	sections uint64
-	storages uint64
-	locs     uint64
-	unused   uint64
-	tombs    uint64
-	used     uint64
-	length   uint64
+	depth        uint64
+	depthCounts  []uint64
+	sections     uint64
+	storages     uint64
+	buckets      uint64
+	bucketCounts []uint64
+	splitCount   uint64
+	locs         uint64
+	pointerLocs  uint64
+	unused       uint64
+	tombs        uint64
+	used         uint64
+	length       uint64
 }
 
 func (vlm *valuesLocMap) gatherStats() *valuesLocMapStats {
-	stats := &valuesLocMapStats{}
-	stats.depth++
+	stats := &valuesLocMapStats{
+		depthCounts:  []uint64{0},
+		buckets:      vlm.bucketMask + 1,
+		bucketCounts: make([]uint64, vlm.bucketMask+1),
+		splitCount:   uint64(vlm.splitCount),
+	}
 	vlm.a.gatherStats(stats)
+	depthA := stats.depth
+	stats.depth = 0
 	vlm.b.gatherStats(stats)
+	if depthA > stats.depth {
+		stats.depth = depthA
+	}
+	stats.depthCounts = stats.depthCounts[1:]
 	return stats
 }
 
@@ -106,10 +139,14 @@ type valuesLocMapSection struct {
 	resizeLock sync.Mutex
 	a          *valuesLocMapSection
 	b          *valuesLocMapSection
+	splitCount int32
 }
 
-func newValuesLocMapSection(bucketCount int, lockCount int) *valuesLocMapSection {
-	return &valuesLocMapSection{storageA: newValuesLocMapSectionStorage(bucketCount, lockCount)}
+func newValuesLocMapSection(bucketCount int, lockCount int, splitCount int32) *valuesLocMapSection {
+	return &valuesLocMapSection{
+		storageA:   newValuesLocMapSectionStorage(bucketCount, lockCount),
+		splitCount: splitCount,
+	}
 }
 
 func (vlms *valuesLocMapSection) get(sectionMask uint64, bucketIndex int, lockIndex int, keyA uint64, keyB uint64) (uint64, uint16, uint32, uint32) {
@@ -146,7 +183,7 @@ func (vlms *valuesLocMapSection) set(sectionMask uint64, bucketIndex int, lockIn
 		}
 	} else if storageB == nil {
 		seq, bucketsInUse := vlms.setSingle(storageA, bucketIndex, lockIndex, keyA, keyB, seq, valuesLocBlockID, offset, length, evenIfSameSeq)
-		if bucketsInUse > int32(len(storageA.buckets)) {
+		if bucketsInUse > vlms.splitCount {
 			go vlms.split(sectionMask)
 		}
 		return seq
@@ -344,13 +381,24 @@ func (vlms *valuesLocMapSection) gatherStats(stats *valuesLocMapStats) {
 	if storageB != nil {
 		vlms.gatherStatsFromStorage(storageB, stats)
 	}
+	stats.depth++
+	if stats.depth < uint64(len(stats.depthCounts)) {
+		stats.depthCounts[stats.depth]++
+	} else {
+		stats.depthCounts = append(stats.depthCounts, 1)
+	}
 	if a != nil || b != nil {
-		stats.depth++
+		depth := stats.depth
 		if a != nil {
 			a.gatherStats(stats)
 		}
 		if b != nil {
+			depthA := stats.depth
+			stats.depth = depth
 			b.gatherStats(stats)
+			if depthA > stats.depth {
+				stats.depth = depthA
+			}
 		}
 	}
 }
@@ -362,6 +410,10 @@ func (vlms *valuesLocMapSection) gatherStatsFromStorage(storage *valuesLocMapSec
 		lockIndex := bucketIndex & lockMask
 		storage.locks[lockIndex].RLock()
 		for item := &storage.buckets[bucketIndex]; item != nil; item = item.next {
+			stats.bucketCounts[bucketIndex]++
+			if item.next != nil {
+				stats.pointerLocs++
+			}
 			stats.locs++
 			switch item.valuesLocBlockID {
 			case _VALUESBLOCK_UNUSED:
@@ -464,8 +516,8 @@ func (vlms *valuesLocMapSection) split(sectionMask uint64) {
 		}(core)
 	}
 	wg.Wait()
-	vlms.a = &valuesLocMapSection{storageA: storageA}
-	vlms.b = &valuesLocMapSection{storageA: storageB}
+	vlms.a = &valuesLocMapSection{storageA: storageA, splitCount: vlms.splitCount}
+	vlms.b = &valuesLocMapSection{storageA: storageB, splitCount: vlms.splitCount}
 	vlms.storageA = nil
 	vlms.storageB = nil
 	vlms.resizing = false
