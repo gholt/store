@@ -120,7 +120,7 @@ type ValuesStore struct {
 	tocWriterDoneChan     chan struct{}
 	valuesLocBlocks       []valuesLocBlock
 	atValuesLocBlocksIDer uint32
-	vlm                   *valuesLocMap
+	vlm                   *locMap
 	cores                 int
 	maxValueSize          uint32
 	memTOCPageSize        uint32
@@ -188,7 +188,7 @@ func NewValuesStore(opts *ValuesStoreOpts) *ValuesStore {
 	vs := &ValuesStore{
 		valuesLocBlocks:       make([]valuesLocBlock, 65536),
 		atValuesLocBlocksIDer: _VALUESBLOCK_IDOFFSET - 1,
-		vlm:               newValuesLocMap(opts),
+		vlm:               newLocMap(opts),
 		cores:             cores,
 		maxValueSize:      uint32(maxValueSize),
 		memTOCPageSize:    uint32(memTOCPageSize),
