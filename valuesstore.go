@@ -551,34 +551,35 @@ func (vs *ValuesStore) recovery() {
 		offset  uint32
 		length  uint32
 	}
-	freeChans := make([]chan *writeReq, vs.cores)
-	pendingChans := make([]chan *writeReq, vs.cores)
-	for i := 0; i < len(freeChans); i++ {
-		freeChans[i] = make(chan *writeReq, vs.cores*2)
-		for j := 0; j < cap(freeChans[i]); j++ {
-			freeChans[i] <- &writeReq{}
-		}
-	}
-	for i := 0; i < len(pendingChans); i++ {
-		pendingChans[i] = make(chan *writeReq, vs.cores)
+	pendingChan := make(chan []writeReq, vs.cores)
+	freeChan := make(chan []writeReq, cap(pendingChan)*2)
+	for i := 0; i < cap(freeChan); i++ {
+		freeChan <- make([]writeReq, 0, 65536)
 	}
 	wg := &sync.WaitGroup{}
-	wg.Add(len(freeChans))
-	for i := 0; i < len(pendingChans); i++ {
-		go func(pendingChan chan *writeReq, freeChan chan *writeReq) {
+	wg.Add(cap(pendingChan))
+	for i := 0; i < cap(pendingChan); i++ {
+		go func() {
 			for {
-				wr := <-pendingChan
-				if wr == nil {
+				wrs := <-pendingChan
+				if wrs == nil {
 					break
 				}
-				if vs.vlm.set(wr.keyA, wr.keyB, wr.seq, wr.blockID, wr.offset, wr.length, false) < wr.seq {
-					atomic.AddInt64(&count, 1)
+				for i := len(wrs) - 1; i >= 0; i-- {
+					wr := &wrs[i]
+					if vs.vlm.set(wr.keyA, wr.keyB, wr.seq, wr.blockID, wr.offset, wr.length, false) < wr.seq {
+						atomic.AddInt64(&count, 1)
+					}
 				}
-				freeChan <- wr
+				freeChan <- wrs[:0]
 			}
 			wg.Done()
-		}(pendingChans[i], freeChans[i])
+		}()
 	}
+	wrs := <-freeChan
+	wix := 0
+	maxwix := cap(wrs) - 1
+	wrs = wrs[:maxwix+1]
 	for i := len(names) - 1; i >= 0; i-- {
 		if !strings.HasSuffix(names[i], ".valuestoc") {
 			continue
@@ -643,27 +644,42 @@ func (vs *ValuesStore) recovery() {
 				if len(overflow) > 0 {
 					i += 32 - len(overflow)
 					overflow = append(overflow, buf[i-32+len(overflow):i]...)
-					cix := fromDiskCount % len(freeChans)
-					wr := <-freeChans[cix]
+					if wrs == nil {
+						wrs = (<-freeChan)[:maxwix+1]
+						wix = 0
+					}
+					wr := &wrs[wix]
 					wr.keyA = binary.BigEndian.Uint64(overflow)
 					wr.keyB = binary.BigEndian.Uint64(overflow[8:])
 					wr.seq = binary.BigEndian.Uint64(overflow[16:])
 					wr.blockID = vf.id
 					wr.offset = binary.BigEndian.Uint32(overflow[24:])
 					wr.length = binary.BigEndian.Uint32(overflow[28:])
-					pendingChans[cix] <- wr
+					wix++
+					if wix > maxwix {
+						pendingChan <- wrs
+						wrs = nil
+					}
 					fromDiskCount++
 					overflow = overflow[:0]
 				}
 				for ; i+32 <= n; i += 32 {
-					cix := fromDiskCount % len(freeChans)
-					wr := <-freeChans[cix]
+					if wrs == nil {
+						wrs = (<-freeChan)[:maxwix+1]
+						wix = 0
+					}
+					wr := &wrs[wix]
 					wr.keyA = binary.BigEndian.Uint64(buf[i:])
 					wr.keyB = binary.BigEndian.Uint64(buf[i+8:])
 					wr.seq = binary.BigEndian.Uint64(buf[i+16:])
+					wr.blockID = vf.id
 					wr.offset = binary.BigEndian.Uint32(buf[i+24:])
 					wr.length = binary.BigEndian.Uint32(buf[i+28:])
-					pendingChans[cix] <- wr
+					wix++
+					if wix > maxwix {
+						pendingChan <- wrs
+						wrs = nil
+					}
 					fromDiskCount++
 				}
 				if i != n {
@@ -684,8 +700,11 @@ func (vs *ValuesStore) recovery() {
 			log.Printf("%d checksum failures for %s\n", checksumFailures, names[i])
 		}
 	}
-	for i := 0; i < len(pendingChans); i++ {
-		pendingChans[i] <- nil
+	if wix > 0 {
+		pendingChan <- wrs[:wix]
+	}
+	for i := 0; i < cap(pendingChan); i++ {
+		pendingChan <- nil
 	}
 	wg.Wait()
 	if fromDiskCount > 0 {
@@ -754,9 +773,4 @@ func (vss *ValuesStoreStats) ValueCount() uint64 {
 
 func (vss *ValuesStoreStats) ValuesLength() uint64 {
 	return vss.vlmStats.length
-}
-
-// TODO: Remove, was for WIP
-func vs_vlm_set(keyA uint64, keyB uint64, seq uint64, blockID uint16, offset uint32, length uint32, evenIfSameSeq bool) uint64 {
-	return 0
 }
