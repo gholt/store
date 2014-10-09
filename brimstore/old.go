@@ -155,7 +155,7 @@ func old() {
 	fmt.Printf("%0.2fG total alloc, %0.2fG delta\n", float64(st.TotalAlloc)/1024/1024/1024, float64(deltaAlloc)/1024/1024/1024)
 
 	fmt.Println()
-	stats := vs.GatherStats()
+	stats := vs.GatherStats(true)
 	dur = time.Now().Sub(start)
 	fmt.Println(dur, "to gather stats")
 	fmt.Println(stats.ValueCount(), "ValueCount")

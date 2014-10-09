@@ -1,12 +1,15 @@
 package brimstore
 
 import (
+	"fmt"
+	"math"
 	"os"
 	"strconv"
 	"sync"
 	"sync/atomic"
 	"unsafe"
 
+	"github.com/gholt/brimtext"
 	"github.com/gholt/brimutil"
 )
 
@@ -45,6 +48,8 @@ type valueLoc struct {
 }
 
 type valuesLocMapStats struct {
+	extended     bool
+	wg           sync.WaitGroup
 	depth        uint64
 	depthCounts  []uint64
 	sections     uint64
@@ -258,33 +263,42 @@ func (vlm *valuesLocMap) isResizing() bool {
 	return vlm.resizing || (c != nil && c.isResizing()) || (d != nil && d.isResizing())
 }
 
-func (vlm *valuesLocMap) gatherStats() *valuesLocMapStats {
+func (vlm *valuesLocMap) gatherStats(extended bool) *valuesLocMapStats {
 	buckets := 0
-	for llm := vlm; llm != nil; llm = llm.c {
-		a := llm.a
-		if a != nil {
-			buckets = len(a.buckets)
-			break
+	if extended {
+		for llm := vlm; llm != nil; llm = llm.c {
+			a := llm.a
+			if a != nil {
+				buckets = len(a.buckets)
+				break
+			}
 		}
 	}
-	stats := &valuesLocMapStats{
-		depthCounts:  []uint64{0},
-		buckets:      uint64(buckets),
-		bucketCounts: make([]uint64, buckets),
-		splitCount:   uint64(vlm.splitCount),
+	stats := &valuesLocMapStats{}
+	if extended {
+		stats.extended = true
+		stats.depthCounts = []uint64{0}
+		stats.buckets = uint64(buckets)
+		stats.bucketCounts = make([]uint64, buckets)
+		stats.splitCount = uint64(vlm.splitCount)
 	}
 	vlm.gatherStatsHelper(stats)
-	stats.depthCounts = stats.depthCounts[1:]
+	stats.wg.Wait()
+	if extended {
+		stats.depthCounts = stats.depthCounts[1:]
+	}
 	return stats
 }
 
 func (vlm *valuesLocMap) gatherStatsHelper(stats *valuesLocMapStats) {
-	stats.sections++
-	stats.depth++
-	if stats.depth < uint64(len(stats.depthCounts)) {
-		stats.depthCounts[stats.depth]++
-	} else {
-		stats.depthCounts = append(stats.depthCounts, 1)
+	if stats.extended {
+		stats.sections++
+		stats.depth++
+		if stats.depth < uint64(len(stats.depthCounts)) {
+			stats.depthCounts[stats.depth]++
+		} else {
+			stats.depthCounts = append(stats.depthCounts, 1)
+		}
 	}
 	a := vlm.a
 	b := vlm.b
@@ -292,39 +306,124 @@ func (vlm *valuesLocMap) gatherStatsHelper(stats *valuesLocMapStats) {
 	d := vlm.d
 	for _, s := range []*valuesLocStore{a, b} {
 		if s != nil {
-			stats.storages++
-			for bix := len(s.buckets) - 1; bix >= 0; bix-- {
-				lix := bix % len(s.locks)
-				s.locks[lix].RLock()
-				for item := &s.buckets[bix]; item != nil; item = item.next {
-					stats.bucketCounts[bix]++
-					if item.next != nil {
-						stats.pointerLocs++
-					}
-					stats.locs++
-					switch item.blockID {
-					case _VALUESBLOCK_UNUSED:
-						stats.unused++
-					case _VALUESBLOCK_TOMB:
-						stats.tombs++
-					default:
-						stats.used++
-						stats.length += uint64(item.length)
-					}
+			stats.wg.Add(1)
+			go func(s *valuesLocStore) {
+				var bucketCounts []uint64
+				var pointerLocs uint64
+				var locs uint64
+				var unused uint64
+				var tombs uint64
+				var used uint64
+				var length uint64
+				if stats.extended {
+					bucketCounts = make([]uint64, len(s.buckets))
 				}
-				s.locks[lix].RUnlock()
-			}
+				for bix := len(s.buckets) - 1; bix >= 0; bix-- {
+					lix := bix % len(s.locks)
+					s.locks[lix].RLock()
+					if stats.extended {
+						for item := &s.buckets[bix]; item != nil; item = item.next {
+							bucketCounts[bix]++
+							if item.next != nil {
+								pointerLocs++
+							}
+							locs++
+							switch item.blockID {
+							case _VALUESBLOCK_UNUSED:
+								unused++
+							case _VALUESBLOCK_TOMB:
+								tombs++
+							default:
+								used++
+								length += uint64(item.length)
+							}
+						}
+					} else {
+						for item := &s.buckets[bix]; item != nil; item = item.next {
+							if item.blockID >= _VALUESBLOCK_IDOFFSET {
+								used++
+								length += uint64(item.length)
+							}
+						}
+					}
+					s.locks[lix].RUnlock()
+				}
+				if stats.extended {
+					atomic.AddUint64(&stats.storages, 1)
+					for bix := 0; bix < len(bucketCounts); bix++ {
+						atomic.AddUint64(&stats.bucketCounts[bix], bucketCounts[bix])
+					}
+					atomic.AddUint64(&stats.pointerLocs, pointerLocs)
+					atomic.AddUint64(&stats.locs, locs)
+					atomic.AddUint64(&stats.unused, unused)
+					atomic.AddUint64(&stats.tombs, tombs)
+				}
+				atomic.AddUint64(&stats.used, used)
+				atomic.AddUint64(&stats.length, length)
+				stats.wg.Done()
+			}(s)
 		}
 	}
-	depthOrig := stats.depth
-	if c != nil {
-		c.gatherStatsHelper(stats)
-		depthC := stats.depth
-		stats.depth = depthOrig
-		d.gatherStatsHelper(stats)
-		if depthC > stats.depth {
-			stats.depth = depthC
+	if stats.extended {
+		depthOrig := stats.depth
+		if c != nil {
+			c.gatherStatsHelper(stats)
+			depthC := stats.depth
+			stats.depth = depthOrig
+			d.gatherStatsHelper(stats)
+			if depthC > stats.depth {
+				stats.depth = depthC
+			}
 		}
+	} else {
+		if c != nil {
+			c.gatherStatsHelper(stats)
+			d.gatherStatsHelper(stats)
+		}
+	}
+}
+
+func (stats *valuesLocMapStats) String() string {
+	if stats.extended {
+		averageBucketCount := uint64(0)
+		minBucketCount := uint64(math.MaxUint64)
+		maxBucketCount := uint64(0)
+		for i := 0; i < len(stats.bucketCounts); i++ {
+			averageBucketCount += stats.bucketCounts[i]
+			if stats.bucketCounts[i] < minBucketCount {
+				minBucketCount = stats.bucketCounts[i]
+			}
+			if stats.bucketCounts[i] > maxBucketCount {
+				maxBucketCount = stats.bucketCounts[i]
+			}
+		}
+		averageBucketCount /= stats.buckets
+		depthCounts := fmt.Sprintf("%d", stats.depthCounts[0])
+		for i := 1; i < len(stats.depthCounts); i++ {
+			depthCounts += fmt.Sprintf(" %d", stats.depthCounts[i])
+		}
+		return brimtext.Align([][]string{
+			[]string{"depth", fmt.Sprintf("%d", stats.depth)},
+			[]string{"depthCounts", depthCounts},
+			[]string{"sections", fmt.Sprintf("%d", stats.sections)},
+			[]string{"storages", fmt.Sprintf("%d", stats.storages)},
+			[]string{"buckets", fmt.Sprintf("%d", stats.buckets)},
+			[]string{"averageBucketCount", fmt.Sprintf("%d", averageBucketCount)},
+			[]string{"minBucketCount", fmt.Sprintf("%d %.1f%%", minBucketCount, float64(averageBucketCount-minBucketCount)/float64(averageBucketCount)*100)},
+			[]string{"maxBucketCount", fmt.Sprintf("%d %.1f%%", maxBucketCount, float64(maxBucketCount-averageBucketCount)/float64(averageBucketCount)*100)},
+			[]string{"splitCount", fmt.Sprintf("%d", stats.splitCount)},
+			[]string{"locs", fmt.Sprintf("%d", stats.locs)},
+			[]string{"pointerLocs", fmt.Sprintf("%d %.1f%%", stats.pointerLocs, float64(stats.pointerLocs)/float64(stats.locs)*100)},
+			[]string{"unused", fmt.Sprintf("%d %.1f%%", stats.unused, float64(stats.unused)/float64(stats.locs)*100)},
+			[]string{"tombs", fmt.Sprintf("%d", stats.tombs)},
+			[]string{"used", fmt.Sprintf("%d", stats.used)},
+			[]string{"length", fmt.Sprintf("%d", stats.length)},
+		}, nil)
+	} else {
+		return brimtext.Align([][]string{
+			[]string{"used", fmt.Sprintf("%d", stats.used)},
+			[]string{"length", fmt.Sprintf("%d", stats.length)},
+		}, nil)
 	}
 }
 

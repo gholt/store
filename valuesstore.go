@@ -17,7 +17,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/gholt/brimtext"
 	"github.com/gholt/brimutil"
 	"github.com/spaolacci/murmur3"
 )
@@ -281,8 +280,8 @@ func (vs *ValuesStore) WriteValue(keyA uint64, keyB uint64, seq uint64, value []
 	return oldSeq, err
 }
 
-func (vs *ValuesStore) GatherStats() *ValuesStoreStats {
-	return &ValuesStoreStats{vlmStats: vs.vlm.gatherStats()}
+func (vs *ValuesStore) GatherStats(extended bool) *ValuesStoreStats {
+	return &ValuesStoreStats{vlmStats: vs.vlm.gatherStats(extended)}
 }
 
 func (vs *ValuesStore) valuesLocBlock(valuesLocBlockID uint16) valuesLocBlock {
@@ -731,40 +730,7 @@ type ValuesStoreStats struct {
 }
 
 func (vss *ValuesStoreStats) String() string {
-	averageBucketCount := uint64(0)
-	minBucketCount := uint64(math.MaxUint64)
-	maxBucketCount := uint64(0)
-	for i := 0; i < len(vss.vlmStats.bucketCounts); i++ {
-		averageBucketCount += vss.vlmStats.bucketCounts[i]
-		if vss.vlmStats.bucketCounts[i] < minBucketCount {
-			minBucketCount = vss.vlmStats.bucketCounts[i]
-		}
-		if vss.vlmStats.bucketCounts[i] > maxBucketCount {
-			maxBucketCount = vss.vlmStats.bucketCounts[i]
-		}
-	}
-	averageBucketCount /= vss.vlmStats.buckets
-	depthCounts := fmt.Sprintf("%d", vss.vlmStats.depthCounts[0])
-	for i := 1; i < len(vss.vlmStats.depthCounts); i++ {
-		depthCounts += fmt.Sprintf(" %d", vss.vlmStats.depthCounts[i])
-	}
-	return brimtext.Align([][]string{
-		[]string{"depth", fmt.Sprintf("%d", vss.vlmStats.depth)},
-		[]string{"depthCounts", depthCounts},
-		[]string{"sections", fmt.Sprintf("%d", vss.vlmStats.sections)},
-		[]string{"storages", fmt.Sprintf("%d", vss.vlmStats.storages)},
-		[]string{"buckets", fmt.Sprintf("%d", vss.vlmStats.buckets)},
-		[]string{"averageBucketCount", fmt.Sprintf("%d", averageBucketCount)},
-		[]string{"minBucketCount", fmt.Sprintf("%d %.1f%%", minBucketCount, float64(averageBucketCount-minBucketCount)/float64(averageBucketCount)*100)},
-		[]string{"maxBucketCount", fmt.Sprintf("%d %.1f%%", maxBucketCount, float64(maxBucketCount-averageBucketCount)/float64(averageBucketCount)*100)},
-		[]string{"splitCount", fmt.Sprintf("%d", vss.vlmStats.splitCount)},
-		[]string{"locs", fmt.Sprintf("%d", vss.vlmStats.locs)},
-		[]string{"pointerLocs", fmt.Sprintf("%d %.1f%%", vss.vlmStats.pointerLocs, float64(vss.vlmStats.pointerLocs)/float64(vss.vlmStats.locs)*100)},
-		[]string{"unused", fmt.Sprintf("%d %.1f%%", vss.vlmStats.unused, float64(vss.vlmStats.unused)/float64(vss.vlmStats.locs)*100)},
-		[]string{"tombs", fmt.Sprintf("%d", vss.vlmStats.tombs)},
-		[]string{"used", fmt.Sprintf("%d", vss.vlmStats.used)},
-		[]string{"length", fmt.Sprintf("%d", vss.vlmStats.length)},
-	}, nil)
+	return vss.vlmStats.String()
 }
 
 func (vss *ValuesStoreStats) ValueCount() uint64 {
