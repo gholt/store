@@ -89,7 +89,7 @@ func newValuesLocMap(opts *ValuesStoreOpts) *valuesLocMap {
 			locks:   make([]sync.RWMutex, lockCount),
 		},
 		cores:      cores,
-		splitCount: bucketCount * 2,
+		splitCount: bucketCount * 3,
 	}
 }
 
