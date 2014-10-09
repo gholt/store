@@ -80,6 +80,25 @@ func (vlm *valuesLocMap) isResizing() bool {
 	return vlm.a.isResizing() || vlm.b.isResizing()
 }
 
+type valuesLocMapStats struct {
+	depth    uint64
+	sections uint64
+	storages uint64
+	locs     uint64
+	unused   uint64
+	tombs    uint64
+	used     uint64
+	length   uint64
+}
+
+func (vlm *valuesLocMap) gatherStats() *valuesLocMapStats {
+	stats := &valuesLocMapStats{}
+	stats.depth++
+	vlm.a.gatherStats(stats)
+	vlm.b.gatherStats(stats)
+	return stats
+}
+
 type valuesLocMapSection struct {
 	storageA   *valuesLocMapSectionStorage
 	storageB   *valuesLocMapSectionStorage
@@ -308,7 +327,54 @@ func (vlms *valuesLocMapSection) setWithFallback(storage *valuesLocMapSectionSto
 }
 
 func (vlms *valuesLocMapSection) isResizing() bool {
-	return vlms.resizing || (vlms.a != nil && vlms.a.isResizing()) || (vlms.b != nil && vlms.b.isResizing())
+	a := vlms.a
+	b := vlms.b
+	return vlms.resizing || (a != nil && a.isResizing()) || (b != nil && b.isResizing())
+}
+
+func (vlms *valuesLocMapSection) gatherStats(stats *valuesLocMapStats) {
+	stats.sections++
+	storageA := vlms.storageA
+	storageB := vlms.storageB
+	a := vlms.a
+	b := vlms.b
+	if storageA != nil {
+		vlms.gatherStatsFromStorage(storageA, stats)
+	}
+	if storageB != nil {
+		vlms.gatherStatsFromStorage(storageB, stats)
+	}
+	if a != nil || b != nil {
+		stats.depth++
+		if a != nil {
+			a.gatherStats(stats)
+		}
+		if b != nil {
+			b.gatherStats(stats)
+		}
+	}
+}
+
+func (vlms *valuesLocMapSection) gatherStatsFromStorage(storage *valuesLocMapSectionStorage, stats *valuesLocMapStats) {
+	stats.storages++
+	lockMask := len(storage.locks) - 1
+	for bucketIndex := len(storage.buckets) - 1; bucketIndex >= 0; bucketIndex-- {
+		lockIndex := bucketIndex & lockMask
+		storage.locks[lockIndex].RLock()
+		for item := &storage.buckets[bucketIndex]; item != nil; item = item.next {
+			stats.locs++
+			switch item.valuesLocBlockID {
+			case _VALUESBLOCK_UNUSED:
+				stats.unused++
+			case _VALUESBLOCK_TOMB:
+				stats.tombs++
+			default:
+				stats.used++
+				stats.length += uint64(item.length)
+			}
+		}
+		storage.locks[lockIndex].RUnlock()
+	}
 }
 
 func (vlms *valuesLocMapSection) split(sectionMask uint64) {

@@ -279,6 +279,19 @@ func (vs *ValuesStore) WriteValue(keyA uint64, keyB uint64, seq uint64, value []
 	return oldSeq, err
 }
 
+type ValuesStoreStats struct {
+	ValueCount   uint64
+	ValuesLength uint64
+}
+
+func (vs *ValuesStore) GatherStats() *ValuesStoreStats {
+	stats := vs.vlm.gatherStats()
+	return &ValuesStoreStats{
+		ValueCount:   stats.used,
+		ValuesLength: stats.length,
+	}
+}
+
 func (vs *ValuesStore) valuesLocBlock(valuesLocBlockID uint16) valuesLocBlock {
 	return vs.valuesLocBlocks[valuesLocBlockID]
 }
