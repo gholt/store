@@ -17,6 +17,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/gholt/brimtext"
 	"github.com/gholt/brimutil"
 	"github.com/spaolacci/murmur3"
 )
@@ -26,19 +27,23 @@ var ErrValueNotFound error = errors.New("value not found")
 // ValuesStoreOpts allows configuration of the ValuesStore, although normally
 // the defaults are best.
 type ValuesStoreOpts struct {
-	Cores                int
-	MaxValueSize         int
-	MemTOCPageSize       int
-	MemValuesPageSize    int
-	ValuesLocMapPageSize int
-	ValuesFileSize       int
-	ValuesFileReaders    int
-	ChecksumInterval     int
+	Cores                       int
+	MaxValueSize                int
+	MemTOCPageSize              int
+	MemValuesPageSize           int
+	ValuesLocMapPageSize        int
+	ValuesLocMapSplitMultiplier float64
+	ValuesFileSize              int
+	ValuesFileReaders           int
+	ChecksumInterval            int
 }
 
-func NewValuesStoreOpts() *ValuesStoreOpts {
+func NewValuesStoreOpts(envPrefix string) *ValuesStoreOpts {
+	if envPrefix == "" {
+		envPrefix = "BRIMSTORE_VALUESSTORE_"
+	}
 	opts := &ValuesStoreOpts{}
-	if env := os.Getenv("BRIMSTORE_VALUESSTORE_CORES"); env != "" {
+	if env := os.Getenv(envPrefix + "CORES"); env != "" {
 		if val, err := strconv.Atoi(env); err == nil {
 			opts.Cores = val
 		}
@@ -46,7 +51,7 @@ func NewValuesStoreOpts() *ValuesStoreOpts {
 	if opts.Cores <= 0 {
 		opts.Cores = runtime.GOMAXPROCS(0)
 	}
-	if env := os.Getenv("BRIMSTORE_VALUESSTORE_MAX_VALUE_SIZE"); env != "" {
+	if env := os.Getenv(envPrefix + "MAX_VALUE_SIZE"); env != "" {
 		if val, err := strconv.Atoi(env); err == nil {
 			opts.MaxValueSize = val
 		}
@@ -54,31 +59,42 @@ func NewValuesStoreOpts() *ValuesStoreOpts {
 	if opts.MaxValueSize <= 0 {
 		opts.MaxValueSize = 4 * 1024 * 1024
 	}
-	if env := os.Getenv("BRIMSTORE_VALUESSTORE_MEMTOCPAGESIZE"); env != "" {
+	if env := os.Getenv(envPrefix + "MEM_TOC_PAGE_SIZE"); env != "" {
 		if val, err := strconv.Atoi(env); err == nil {
 			opts.MemTOCPageSize = val
 		}
 	}
 	if opts.MemTOCPageSize <= 0 {
-		opts.MemTOCPageSize = 1 << brimutil.PowerOfTwoNeeded(uint64(opts.MaxValueSize+4))
+		opts.MemTOCPageSize = 8 * 1024 * 1024
 	}
-	if env := os.Getenv("BRIMSTORE_VALUESSTORE_MEMVALUESPAGESIZE"); env != "" {
+	if env := os.Getenv(envPrefix + "MEM_VALUES_PAGE_SIZE"); env != "" {
 		if val, err := strconv.Atoi(env); err == nil {
 			opts.MemValuesPageSize = val
 		}
 	}
 	if opts.MemValuesPageSize <= 0 {
 		opts.MemValuesPageSize = 1 << brimutil.PowerOfTwoNeeded(uint64(opts.MaxValueSize+4))
+		if opts.MemValuesPageSize < 8*1024*1024 {
+			opts.MemValuesPageSize = 8 * 1024 * 1024
+		}
 	}
-	if env := os.Getenv("BRIMSTORE_VALUESSTORE_VALUESLOCMAP_PAGESIZE"); env != "" {
+	if env := os.Getenv(envPrefix + "VALUES_LOC_MAP_PAGE_SIZE"); env != "" {
 		if val, err := strconv.Atoi(env); err == nil {
 			opts.ValuesLocMapPageSize = val
 		}
 	}
 	if opts.ValuesLocMapPageSize <= 0 {
-		opts.ValuesLocMapPageSize = 4 * 1024 * 1024
+		opts.ValuesLocMapPageSize = 8 * 1024 * 1024
 	}
-	if env := os.Getenv("BRIMSTORE_VALUESSTORE_VALUESFILE_SIZE"); env != "" {
+	if env := os.Getenv(envPrefix + "VALUES_LOC_MAP_SPLIT_MULTIPLIER"); env != "" {
+		if val, err := strconv.ParseFloat(env, 64); err == nil {
+			opts.ValuesLocMapSplitMultiplier = val
+		}
+	}
+	if opts.ValuesLocMapSplitMultiplier <= 0 {
+		opts.ValuesLocMapSplitMultiplier = 3.0
+	}
+	if env := os.Getenv(envPrefix + "VALUES_FILE_SIZE"); env != "" {
 		if val, err := strconv.Atoi(env); err == nil {
 			opts.ValuesFileSize = val
 		}
@@ -86,7 +102,7 @@ func NewValuesStoreOpts() *ValuesStoreOpts {
 	if opts.ValuesFileSize <= 0 {
 		opts.ValuesFileSize = math.MaxUint32
 	}
-	if env := os.Getenv("BRIMSTORE_VALUESSTORE_VALUESFILE_READERS"); env != "" {
+	if env := os.Getenv(envPrefix + "VALUES_FILE_READERS"); env != "" {
 		if val, err := strconv.Atoi(env); err == nil {
 			opts.ValuesFileReaders = val
 		}
@@ -97,7 +113,7 @@ func NewValuesStoreOpts() *ValuesStoreOpts {
 			opts.ValuesFileReaders = 8
 		}
 	}
-	if env := os.Getenv("BRIMSTORE_VALUESSTORE_CHECKSUMINTERVAL"); env != "" {
+	if env := os.Getenv(envPrefix + "CHECKSUM_INTERVAL"); env != "" {
 		if val, err := strconv.Atoi(env); err == nil {
 			opts.ChecksumInterval = val
 		}
@@ -138,7 +154,7 @@ type ValuesStore struct {
 // is done and the buffers are flushed.
 func NewValuesStore(opts *ValuesStoreOpts) *ValuesStore {
 	if opts == nil {
-		opts = NewValuesStoreOpts()
+		opts = NewValuesStoreOpts("")
 	}
 	cores := opts.Cores
 	if cores < 1 {
@@ -281,7 +297,42 @@ func (vs *ValuesStore) WriteValue(keyA uint64, keyB uint64, seq uint64, value []
 }
 
 func (vs *ValuesStore) GatherStats(extended bool) *ValuesStoreStats {
-	return &ValuesStoreStats{vlmStats: vs.vlm.gatherStats(extended)}
+	stats := &ValuesStoreStats{}
+	if extended {
+		stats.extended = extended
+		stats.freeableVMChanCap = cap(vs.freeableVMChan)
+		stats.freeableVMChanIn = len(vs.freeableVMChan)
+		stats.freeVMChanCap = cap(vs.freeVMChan)
+		stats.freeVMChanIn = len(vs.freeVMChan)
+		stats.freeVWRChans = len(vs.freeVWRChans)
+		for i := 0; i < len(vs.freeVWRChans); i++ {
+			stats.freeVWRChansCap += cap(vs.freeVWRChans[i])
+			stats.freeVWRChansIn += len(vs.freeVWRChans[i])
+		}
+		stats.pendingVWRChans = len(vs.pendingVWRChans)
+		for i := 0; i < len(vs.pendingVWRChans); i++ {
+			stats.pendingVWRChansCap += cap(vs.pendingVWRChans[i])
+			stats.pendingVWRChansIn += len(vs.pendingVWRChans[i])
+		}
+		stats.vfVMChanCap = cap(vs.vfVMChan)
+		stats.vfVMChanIn = len(vs.vfVMChan)
+		stats.freeTOCBlockChanCap = cap(vs.freeTOCBlockChan)
+		stats.freeTOCBlockChanIn = len(vs.freeTOCBlockChan)
+		stats.pendingTOCBlockChanCap = cap(vs.pendingTOCBlockChan)
+		stats.pendingTOCBlockChanIn = len(vs.pendingTOCBlockChan)
+		stats.maxValuesLocBlockID = atomic.LoadUint32(&vs.atValuesLocBlocksIDer)
+		stats.cores = vs.cores
+		stats.maxValueSize = vs.maxValueSize
+		stats.memTOCPageSize = vs.memTOCPageSize
+		stats.memValuesPageSize = vs.memValuesPageSize
+		stats.valuesFileSize = vs.valuesFileSize
+		stats.valuesFileReaders = vs.valuesFileReaders
+		stats.checksumInterval = vs.checksumInterval
+		stats.vlmStats = vs.vlm.gatherStats(true)
+	} else {
+		stats.vlmStats = vs.vlm.gatherStats(false)
+	}
+	return stats
 }
 
 func (vs *ValuesStore) valuesLocBlock(valuesLocBlockID uint16) valuesLocBlock {
@@ -726,17 +777,74 @@ type valuesLocBlock interface {
 }
 
 type ValuesStoreStats struct {
-	vlmStats *valuesLocMapStats
+	extended               bool
+	freeableVMChanCap      int
+	freeableVMChanIn       int
+	freeVMChanCap          int
+	freeVMChanIn           int
+	freeVWRChans           int
+	freeVWRChansCap        int
+	freeVWRChansIn         int
+	pendingVWRChans        int
+	pendingVWRChansCap     int
+	pendingVWRChansIn      int
+	vfVMChanCap            int
+	vfVMChanIn             int
+	freeTOCBlockChanCap    int
+	freeTOCBlockChanIn     int
+	pendingTOCBlockChanCap int
+	pendingTOCBlockChanIn  int
+	maxValuesLocBlockID    uint32
+	cores                  int
+	maxValueSize           uint32
+	memTOCPageSize         uint32
+	memValuesPageSize      uint32
+	valuesFileSize         uint32
+	valuesFileReaders      int
+	checksumInterval       uint32
+	vlmStats               *valuesLocMapStats
 }
 
-func (vss *ValuesStoreStats) String() string {
-	return vss.vlmStats.String()
+func (stats *ValuesStoreStats) String() string {
+	if stats.extended {
+		return brimtext.Align([][]string{
+			[]string{"freeableVMChanCap", fmt.Sprintf("%d", stats.freeableVMChanCap)},
+			[]string{"freeableVMChanIn", fmt.Sprintf("%d", stats.freeableVMChanIn)},
+			[]string{"freeVMChanCap", fmt.Sprintf("%d", stats.freeVMChanCap)},
+			[]string{"freeVMChanIn", fmt.Sprintf("%d", stats.freeVMChanIn)},
+			[]string{"freeVWRChans", fmt.Sprintf("%d", stats.freeVWRChans)},
+			[]string{"freeVWRChansCap", fmt.Sprintf("%d", stats.freeVWRChansCap)},
+			[]string{"freeVWRChansIn", fmt.Sprintf("%d", stats.freeVWRChansIn)},
+			[]string{"pendingVWRChans", fmt.Sprintf("%d", stats.pendingVWRChans)},
+			[]string{"pendingVWRChansCap", fmt.Sprintf("%d", stats.pendingVWRChansCap)},
+			[]string{"pendingVWRChansIn", fmt.Sprintf("%d", stats.pendingVWRChansIn)},
+			[]string{"vfVMChanCap", fmt.Sprintf("%d", stats.vfVMChanCap)},
+			[]string{"vfVMChanIn", fmt.Sprintf("%d", stats.vfVMChanIn)},
+			[]string{"freeTOCBlockChanCap", fmt.Sprintf("%d", stats.freeTOCBlockChanCap)},
+			[]string{"freeTOCBlockChanIn", fmt.Sprintf("%d", stats.freeTOCBlockChanIn)},
+			[]string{"pendingTOCBlockChanCap", fmt.Sprintf("%d", stats.pendingTOCBlockChanCap)},
+			[]string{"pendingTOCBlockChanIn", fmt.Sprintf("%d", stats.pendingTOCBlockChanIn)},
+			[]string{"maxValuesLocBlockID", fmt.Sprintf("%d", stats.maxValuesLocBlockID)},
+			[]string{"cores", fmt.Sprintf("%d", stats.cores)},
+			[]string{"maxValueSize", fmt.Sprintf("%d", stats.maxValueSize)},
+			[]string{"memTOCPageSize", fmt.Sprintf("%d", stats.memTOCPageSize)},
+			[]string{"memValuesPageSize", fmt.Sprintf("%d", stats.memValuesPageSize)},
+			[]string{"valuesFileSize", fmt.Sprintf("%d", stats.valuesFileSize)},
+			[]string{"valuesFileReaders", fmt.Sprintf("%d", stats.valuesFileReaders)},
+			[]string{"checksumInterval", fmt.Sprintf("%d", stats.checksumInterval)},
+			[]string{"vlm", stats.vlmStats.String()},
+		}, nil)
+	} else {
+		return brimtext.Align([][]string{
+			[]string{"vlm", stats.vlmStats.String()},
+		}, nil)
+	}
 }
 
-func (vss *ValuesStoreStats) ValueCount() uint64 {
-	return vss.vlmStats.used
+func (stats *ValuesStoreStats) ValueCount() uint64 {
+	return stats.vlmStats.used
 }
 
-func (vss *ValuesStoreStats) ValuesLength() uint64 {
-	return vss.vlmStats.length
+func (stats *ValuesStoreStats) ValuesLength() uint64 {
+	return stats.vlmStats.length
 }

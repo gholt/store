@@ -3,14 +3,11 @@ package brimstore
 import (
 	"fmt"
 	"math"
-	"os"
-	"strconv"
 	"sync"
 	"sync/atomic"
 	"unsafe"
 
 	"github.com/gholt/brimtext"
-	"github.com/gholt/brimutil"
 )
 
 const (
@@ -67,25 +64,24 @@ type valuesLocMapStats struct {
 
 func newValuesLocMap(opts *ValuesStoreOpts) *valuesLocMap {
 	if opts == nil {
-		opts = NewValuesStoreOpts()
+		opts = NewValuesStoreOpts("")
 	}
 	cores := opts.Cores
 	if cores < 1 {
 		cores = 1
 	}
 	valuesLocMapPageSize := opts.ValuesLocMapPageSize
-	if env := os.Getenv("BRIMSTORE_VALUESSTORE_VALUESLOCMAP_PAGESIZE"); env != "" {
-		if val, err := strconv.Atoi(env); err == nil {
-			valuesLocMapPageSize = val
-		}
-	}
 	if valuesLocMapPageSize < 4096 {
 		valuesLocMapPageSize = 4096
 	}
-	bucketCount := 1 << brimutil.PowerOfTwoNeeded(uint64(valuesLocMapPageSize)/uint64(unsafe.Sizeof(valueLoc{})))
-	lockCount := 1 << brimutil.PowerOfTwoNeeded(uint64(cores*cores))
+	bucketCount := valuesLocMapPageSize / int(unsafe.Sizeof(valueLoc{}))
+	lockCount := cores
 	if lockCount > bucketCount {
 		lockCount = bucketCount
+	}
+	splitMultiplier := opts.ValuesLocMapSplitMultiplier
+	if splitMultiplier <= 0 {
+		splitMultiplier = 3.0
 	}
 	return &valuesLocMap{
 		leftMask: uint64(1) << 63,
@@ -94,7 +90,7 @@ func newValuesLocMap(opts *ValuesStoreOpts) *valuesLocMap {
 			locks:   make([]sync.RWMutex, lockCount),
 		},
 		cores:      cores,
-		splitCount: bucketCount * 3,
+		splitCount: int(float64(bucketCount) * splitMultiplier),
 	}
 }
 
