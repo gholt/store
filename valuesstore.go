@@ -694,7 +694,7 @@ func (vss *ValuesStoreStats) String() string {
 		[]string{"splitCount", fmt.Sprintf("%d", vss.vlmStats.splitCount)},
 		[]string{"locs", fmt.Sprintf("%d", vss.vlmStats.locs)},
 		[]string{"pointerLocs", fmt.Sprintf("%d %.1f%%", vss.vlmStats.pointerLocs, float64(vss.vlmStats.pointerLocs)/float64(vss.vlmStats.locs)*100)},
-		[]string{"unused", fmt.Sprintf("%d", vss.vlmStats.unused)},
+		[]string{"unused", fmt.Sprintf("%d %.1f%%", vss.vlmStats.unused, float64(vss.vlmStats.unused)/float64(vss.vlmStats.locs)*100)},
 		[]string{"tombs", fmt.Sprintf("%d", vss.vlmStats.tombs)},
 		[]string{"used", fmt.Sprintf("%d", vss.vlmStats.used)},
 		[]string{"length", fmt.Sprintf("%d", vss.vlmStats.length)},

@@ -18,7 +18,7 @@ const VALUE_SIZE = 128
 func old() {
 	seed := int64(1)
 	bytesPerValue := VALUE_SIZE
-	targetBytes := 4 * 1024 * 1024 * 1024
+	targetBytes := 32 * 1024 * 1024 * 1024
 	cores := runtime.GOMAXPROCS(0)
 	if os.Getenv("GOMAXPROCS") == "" {
 		runtime.GOMAXPROCS(runtime.NumCPU())
@@ -149,6 +149,18 @@ func old() {
 	vs.Close()
 	dur = time.Now().Sub(start)
 	fmt.Println(dur, "to close ValuesStore")
+	runtime.ReadMemStats(&st)
+	deltaAlloc = st.TotalAlloc - lastAlloc
+	lastAlloc = st.TotalAlloc
+	fmt.Printf("%0.2fG total alloc, %0.2fG delta\n", float64(st.TotalAlloc)/1024/1024/1024, float64(deltaAlloc)/1024/1024/1024)
+
+	fmt.Println()
+	stats := vs.GatherStats()
+	dur = time.Now().Sub(start)
+	fmt.Println(dur, "to gather stats")
+	fmt.Println(stats.ValueCount(), "ValueCount")
+	fmt.Println(stats.ValuesLength(), "ValuesLength")
+	fmt.Println(stats.String())
 	runtime.ReadMemStats(&st)
 	deltaAlloc = st.TotalAlloc - lastAlloc
 	lastAlloc = st.TotalAlloc
