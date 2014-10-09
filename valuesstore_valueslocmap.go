@@ -1,7 +1,6 @@
 package brimstore
 
 import (
-	"math"
 	"os"
 	"strconv"
 	"sync"
@@ -11,91 +10,37 @@ import (
 	"github.com/gholt/brimutil"
 )
 
-type valuesLocMap struct {
-	a          *valuesLocMapSection
-	b          *valuesLocMapSection
-	bucketMask uint64
-	lockMask   uint64
-	splitCount int32
-}
-
 const (
 	_VALUESBLOCK_UNUSED   = iota
 	_VALUESBLOCK_TOMB     = iota
 	_VALUESBLOCK_IDOFFSET = iota
 )
 
-func newValuesLocMap(opts *ValuesStoreOpts) *valuesLocMap {
-	if opts == nil {
-		opts = NewValuesStoreOpts()
-	}
-	cores := opts.Cores
-	if cores < 1 {
-		cores = 1
-	}
-	valuesLocMapPageSize := opts.ValuesLocMapPageSize
-	if env := os.Getenv("BRIMSTORE_VALUESSTORE_VALUESLOCMAP_PAGESIZE"); env != "" {
-		if val, err := strconv.Atoi(env); err == nil {
-			valuesLocMapPageSize = val
-		}
-	}
-	if valuesLocMapPageSize < 4096 {
-		valuesLocMapPageSize = 4096
-	}
-	bucketCount := 1 << brimutil.PowerOfTwoNeeded(uint64(valuesLocMapPageSize)/uint64(unsafe.Sizeof(valueLoc{})))
-	lockCount := 1 << brimutil.PowerOfTwoNeeded(uint64(cores*cores))
-	if lockCount > bucketCount {
-		lockCount = bucketCount
-	}
-	splitCount := int32(bucketCount)
-	return &valuesLocMap{
-		a:          newValuesLocMapSection(bucketCount, lockCount, splitCount),
-		b:          newValuesLocMapSection(bucketCount, lockCount, splitCount),
-		bucketMask: uint64(bucketCount) - 1,
-		lockMask:   uint64(lockCount) - 1,
-		splitCount: splitCount,
-	}
+type locMap struct {
+	leftMask   uint64
+	a          *locStore
+	b          *locStore
+	c          *locMap
+	d          *locMap
+	resizing   bool
+	resizeLock sync.Mutex
+	cores      int
 }
 
-func (vlm *valuesLocMap) get(keyA uint64, keyB uint64) (uint64, uint16, uint32, uint32) {
-	sectionMask := uint64(1) << 63
-	bucketIndex := int(keyB & vlm.bucketMask)
-	lockIndex := int(keyB & vlm.lockMask)
-	if keyA&sectionMask == 0 {
-		return vlm.a.get(sectionMask, bucketIndex, lockIndex, keyA, keyB)
-	} else {
-		return vlm.b.get(sectionMask, bucketIndex, lockIndex, keyA, keyB)
-	}
+type locStore struct {
+	buckets []loc
+	locks   []sync.RWMutex
+	used    int32
 }
 
-type valuesLocMapSetReq struct {
-	keyA             uint64
-	keyB             uint64
-	seq              uint64
-	valuesLocBlockID uint16
-	offset           uint32
-	length           uint32
-	evenIfSameSeq    bool
-	sectionMask      uint64
-	bucketIndex      int
-	lockIndex        int
-	storage          *valuesLocMapSectionStorage
-	fallback         *valuesLocMapSectionStorage
-}
-
-func (vlm *valuesLocMap) set(keyA uint64, keyB uint64, seq uint64, valuesLocBlockID uint16, offset uint32, length uint32, evenIfSameSeq bool) uint64 {
-	sectionMask := uint64(1) << 63
-	bucketIndex := int(keyB & vlm.bucketMask)
-	lockIndex := int(keyB & vlm.lockMask)
-	if keyA&sectionMask == 0 {
-		return vlm.a.set(sectionMask, bucketIndex, lockIndex, keyA, keyB, seq, valuesLocBlockID, offset, length, evenIfSameSeq)
-	} else {
-		return vlm.b.set(sectionMask, bucketIndex, lockIndex, keyA, keyB, seq, valuesLocBlockID, offset, length, evenIfSameSeq)
-	}
-}
-
-func (vlm *valuesLocMap) isResizing() bool {
-	return vlm.a.isResizing() || vlm.b.isResizing()
+type loc struct {
+	next    *loc
+	keyA    uint64
+	keyB    uint64
+	seq     uint64
+	blockID uint16
+	offset  uint32
+	length  uint32
 }
 
 type valuesLocMapStats struct {
@@ -114,222 +59,158 @@ type valuesLocMapStats struct {
 	length       uint64
 }
 
-func (vlm *valuesLocMap) gatherStats() *valuesLocMapStats {
-	stats := &valuesLocMapStats{
-		depthCounts:  []uint64{0},
-		buckets:      vlm.bucketMask + 1,
-		bucketCounts: make([]uint64, vlm.bucketMask+1),
-		splitCount:   uint64(vlm.splitCount),
+func newLocMap(opts *ValuesStoreOpts) *locMap {
+	if opts == nil {
+		opts = NewValuesStoreOpts()
 	}
-	vlm.a.gatherStats(stats)
-	depthA := stats.depth
-	stats.depth = 0
-	vlm.b.gatherStats(stats)
-	if depthA > stats.depth {
-		stats.depth = depthA
+	cores := opts.Cores
+	if cores < 1 {
+		cores = 1
 	}
-	stats.depthCounts = stats.depthCounts[1:]
-	return stats
-}
-
-type valuesLocMapSection struct {
-	storageA   *valuesLocMapSectionStorage
-	storageB   *valuesLocMapSectionStorage
-	resizing   bool
-	resizeLock sync.Mutex
-	a          *valuesLocMapSection
-	b          *valuesLocMapSection
-	splitCount int32
-}
-
-func newValuesLocMapSection(bucketCount int, lockCount int, splitCount int32) *valuesLocMapSection {
-	return &valuesLocMapSection{
-		storageA:   newValuesLocMapSectionStorage(bucketCount, lockCount),
-		splitCount: splitCount,
+	valuesLocMapPageSize := opts.ValuesLocMapPageSize
+	if env := os.Getenv("BRIMSTORE_VALUESSTORE_VALUESLOCMAP_PAGESIZE"); env != "" {
+		if val, err := strconv.Atoi(env); err == nil {
+			valuesLocMapPageSize = val
+		}
+	}
+	if valuesLocMapPageSize < 4096 {
+		valuesLocMapPageSize = 4096
+	}
+	bucketCount := 1 << brimutil.PowerOfTwoNeeded(uint64(valuesLocMapPageSize)/uint64(unsafe.Sizeof(loc{})))
+	lockCount := 1 << brimutil.PowerOfTwoNeeded(uint64(cores*cores))
+	if lockCount > bucketCount {
+		lockCount = bucketCount
+	}
+	return &locMap{
+		leftMask: uint64(1) << 63,
+		a: &locStore{
+			buckets: make([]loc, bucketCount),
+			locks:   make([]sync.RWMutex, lockCount),
+		},
+		cores: cores,
 	}
 }
 
-func (vlms *valuesLocMapSection) get(sectionMask uint64, bucketIndex int, lockIndex int, keyA uint64, keyB uint64) (uint64, uint16, uint32, uint32) {
-	storageA := vlms.storageA
-	storageB := vlms.storageB
-	if storageA == nil {
-		sectionMask >>= 1
-		if keyA&sectionMask == 0 {
-			return vlms.a.get(sectionMask, bucketIndex, lockIndex, keyA, keyB)
+func (lm *locMap) get(keyA uint64, keyB uint64) (uint64, uint16, uint32, uint32) {
+	var seq uint64
+	var blockID uint16 = _VALUESBLOCK_UNUSED
+	var offset uint32
+	var length uint32
+	var a *locStore
+	var b *locStore
+	for {
+		a = lm.a
+		b = lm.b
+		c := lm.c
+		d := lm.d
+		if c == nil {
+			break
+		}
+		if keyA&lm.leftMask == 0 {
+			lm = c
 		} else {
-			return vlms.b.get(sectionMask, bucketIndex, lockIndex, keyA, keyB)
-		}
-	} else if storageB == nil {
-		return vlms.getSingle(storageA, bucketIndex, lockIndex, keyA, keyB)
-	} else {
-		sectionMask >>= 1
-		if keyA&sectionMask == 0 {
-			return vlms.getSingle(storageA, bucketIndex, lockIndex, keyA, keyB)
-		} else {
-			return vlms.getWithFallback(storageB, storageA, bucketIndex, lockIndex, keyA, keyB)
+			lm = d
 		}
 	}
-}
-
-func (vlms *valuesLocMapSection) set(sectionMask uint64, bucketIndex int, lockIndex int, keyA uint64, keyB uint64, seq uint64, valuesLocBlockID uint16, offset uint32, length uint32, evenIfSameSeq bool) uint64 {
-	storageA := vlms.storageA
-	storageB := vlms.storageB
-	if storageA == nil {
-		sectionMask >>= 1
-		if keyA&sectionMask == 0 {
-			return vlms.a.set(sectionMask, bucketIndex, lockIndex, keyA, keyB, seq, valuesLocBlockID, offset, length, evenIfSameSeq)
+	if b != nil {
+		if keyA&lm.leftMask == 0 {
+			b = nil
 		} else {
-			return vlms.b.set(sectionMask, bucketIndex, lockIndex, keyA, keyB, seq, valuesLocBlockID, offset, length, evenIfSameSeq)
-		}
-	} else if storageB == nil {
-		seq, bucketsInUse := vlms.setSingle(storageA, bucketIndex, lockIndex, keyA, keyB, seq, valuesLocBlockID, offset, length, evenIfSameSeq)
-		if bucketsInUse > vlms.splitCount {
-			go vlms.split(sectionMask)
-		}
-		return seq
-	} else {
-		sectionMask >>= 1
-		if keyA&sectionMask == 0 {
-			seq, _ := vlms.setSingle(storageA, bucketIndex, lockIndex, keyA, keyB, seq, valuesLocBlockID, offset, length, evenIfSameSeq)
-			return seq
-		} else {
-			return vlms.setWithFallback(storageB, storageA, bucketIndex, lockIndex, keyA, keyB, seq, valuesLocBlockID, offset, length, evenIfSameSeq)
+			a, b = b, a
 		}
 	}
-}
-
-func (vlms *valuesLocMapSection) getSingle(storage *valuesLocMapSectionStorage, bucketIndex int, lockIndex int, keyA uint64, keyB uint64) (uint64, uint16, uint32, uint32) {
-	storage.locks[lockIndex].RLock()
-	for item := &storage.buckets[bucketIndex]; item != nil; item = item.next {
-		if item.valuesLocBlockID != _VALUESBLOCK_UNUSED && item.keyA == keyA && item.keyB == keyB {
-			q, i, o, z := item.seq, item.valuesLocBlockID, item.offset, item.length
-			storage.locks[lockIndex].RUnlock()
-			return q, i, o, z
+	bix := keyB % uint64(len(a.buckets))
+	lix := bix % uint64(len(a.locks))
+	a.locks[lix].RLock()
+	if b != nil {
+		b.locks[lix].RLock()
+	}
+	for itemA := &a.buckets[bix]; itemA != nil; itemA = itemA.next {
+		if itemA.blockID != _VALUESBLOCK_UNUSED && itemA.keyA == keyA && itemA.keyB == keyB {
+			seq, blockID, offset, length = itemA.seq, itemA.blockID, itemA.offset, itemA.length
+			break
 		}
 	}
-	storage.locks[lockIndex].RUnlock()
-	return 0, _VALUESBLOCK_UNUSED, 0, 0
+	if blockID == _VALUESBLOCK_UNUSED && b != nil {
+		for itemB := &b.buckets[bix]; itemB != nil; itemB = itemB.next {
+			if itemB.blockID != _VALUESBLOCK_UNUSED && itemB.keyA == keyA && itemB.keyB == keyB {
+				seq, blockID, offset, length = itemB.seq, itemB.blockID, itemB.offset, itemB.length
+				break
+			}
+		}
+	}
+	if b != nil {
+		b.locks[lix].RUnlock()
+	}
+	a.locks[lix].RUnlock()
+	return seq, blockID, offset, length
 }
 
-func (vlms *valuesLocMapSection) setSingle(storage *valuesLocMapSectionStorage, bucketIndex int, lockIndex int, keyA uint64, keyB uint64, seq uint64, valuesLocBlockID uint16, offset uint32, length uint32, evenIfSameSeq bool) (uint64, int32) {
+func (lm *locMap) set(keyA uint64, keyB uint64, seq uint64, blockID uint16, offset uint32, length uint32, evenIfSameSeq bool) uint64 {
 	var oldSeq uint64
-	var bucketsInUse int32
-	var done bool
-	var unusedItem *valueLoc
-	storage.locks[lockIndex].Lock()
-	for item := &storage.buckets[bucketIndex]; item != nil; item = item.next {
-		if item.valuesLocBlockID == _VALUESBLOCK_UNUSED {
-			if unusedItem == nil {
-				unusedItem = item
+	var a *locStore
+	var b *locStore
+	for {
+		a = lm.a
+		b = lm.b
+		c := lm.c
+		d := lm.d
+		if c == nil {
+			break
+		}
+		if keyA&lm.leftMask == 0 {
+			lm = c
+		} else {
+			lm = d
+		}
+	}
+	if b != nil {
+		if keyA&lm.leftMask == 0 {
+			b = nil
+		} else {
+			a, b = b, a
+		}
+	}
+	bix := keyB % uint64(len(a.buckets))
+	lix := bix % uint64(len(a.locks))
+	done := false
+	var unusedItemA *loc
+	a.locks[lix].Lock()
+	if b != nil {
+		b.locks[lix].Lock()
+	}
+	for itemA := &a.buckets[bix]; itemA != nil; itemA = itemA.next {
+		if itemA.blockID == _VALUESBLOCK_UNUSED {
+			if unusedItemA == nil {
+				unusedItemA = itemA
 			}
 			continue
 		}
-		if item.keyA == keyA && item.keyB == keyB {
-			oldSeq = item.seq
-			if (evenIfSameSeq && item.seq == seq) || item.seq < seq {
-				if valuesLocBlockID == _VALUESBLOCK_UNUSED {
-					bucketsInUse = atomic.AddInt32(&storage.atBucketsInUse, -1)
-				} else {
-					bucketsInUse = atomic.LoadInt32(&storage.atBucketsInUse)
+		if itemA.keyA == keyA && itemA.keyB == keyB {
+			oldSeq = itemA.seq
+			if (evenIfSameSeq && itemA.seq == seq) || itemA.seq < seq {
+				if blockID == _VALUESBLOCK_UNUSED {
+					atomic.AddInt32(&a.used, -1)
 				}
-				item.seq = seq
-				item.valuesLocBlockID = valuesLocBlockID
-				item.offset = offset
-				item.length = length
-			} else {
-				bucketsInUse = atomic.LoadInt32(&storage.atBucketsInUse)
+				itemA.seq = seq
+				itemA.blockID = blockID
+				itemA.offset = offset
+				itemA.length = length
 			}
 			done = true
 			break
 		}
 	}
-	if !done && valuesLocBlockID != _VALUESBLOCK_UNUSED {
-		bucketsInUse = atomic.AddInt32(&storage.atBucketsInUse, 1)
-		if unusedItem != nil {
-			unusedItem.keyA = keyA
-			unusedItem.keyB = keyB
-			unusedItem.seq = seq
-			unusedItem.valuesLocBlockID = valuesLocBlockID
-			unusedItem.offset = offset
-			unusedItem.length = length
-		} else {
-			storage.buckets[bucketIndex].next = &valueLoc{
-				next:             storage.buckets[bucketIndex].next,
-				keyA:             keyA,
-				keyB:             keyB,
-				seq:              seq,
-				valuesLocBlockID: valuesLocBlockID,
-				offset:           offset,
-				length:           length,
-			}
-		}
-	}
-	storage.locks[lockIndex].Unlock()
-	return oldSeq, bucketsInUse
-}
-
-func (vlms *valuesLocMapSection) getWithFallback(storage *valuesLocMapSectionStorage, fallback *valuesLocMapSectionStorage, bucketIndex int, lockIndex int, keyA uint64, keyB uint64) (uint64, uint16, uint32, uint32) {
-	storage.locks[lockIndex].RLock()
-	fallback.locks[lockIndex].RLock()
-	for item := &storage.buckets[bucketIndex]; item != nil; item = item.next {
-		if item.valuesLocBlockID != _VALUESBLOCK_UNUSED && item.keyA == keyA && item.keyB == keyB {
-			q, i, o, z := item.seq, item.valuesLocBlockID, item.offset, item.length
-			fallback.locks[lockIndex].RUnlock()
-			storage.locks[lockIndex].RUnlock()
-			return q, i, o, z
-		}
-	}
-	for item := &fallback.buckets[bucketIndex]; item != nil; item = item.next {
-		if item.valuesLocBlockID != _VALUESBLOCK_UNUSED && item.keyA == keyA && item.keyB == keyB {
-			q, i, o, z := item.seq, item.valuesLocBlockID, item.offset, item.length
-			fallback.locks[lockIndex].RUnlock()
-			storage.locks[lockIndex].RUnlock()
-			return q, i, o, z
-		}
-	}
-	fallback.locks[lockIndex].RUnlock()
-	storage.locks[lockIndex].RUnlock()
-	return 0, _VALUESBLOCK_UNUSED, 0, 0
-}
-
-func (vlms *valuesLocMapSection) setWithFallback(storage *valuesLocMapSectionStorage, fallback *valuesLocMapSectionStorage, bucketIndex int, lockIndex int, keyA uint64, keyB uint64, seq uint64, valuesLocBlockID uint16, offset uint32, length uint32, evenIfSameSeq bool) uint64 {
-	var oldSeq uint64
-	var done bool
-	var unusedItem *valueLoc
-	storage.locks[lockIndex].Lock()
-	fallback.locks[lockIndex].Lock()
-	for item := &storage.buckets[bucketIndex]; item != nil; item = item.next {
-		if item.valuesLocBlockID == _VALUESBLOCK_UNUSED {
-			if unusedItem == nil {
-				unusedItem = item
-			}
-			continue
-		}
-		if item.keyA == keyA && item.keyB == keyB {
-			oldSeq = item.seq
-			if (evenIfSameSeq && item.seq == seq) || item.seq < seq {
-				if valuesLocBlockID == _VALUESBLOCK_UNUSED {
-					atomic.AddInt32(&storage.atBucketsInUse, -1)
-				}
-				item.seq = seq
-				item.valuesLocBlockID = valuesLocBlockID
-				item.offset = offset
-				item.length = length
-			}
-			done = true
-			break
-		}
-	}
-	if !done {
-		for fallbackItem := &fallback.buckets[bucketIndex]; fallbackItem != nil; fallbackItem = fallbackItem.next {
-			if fallbackItem.valuesLocBlockID == _VALUESBLOCK_UNUSED {
+	if !done && b != nil {
+		for itemB := &b.buckets[bix]; itemB != nil; itemB = itemB.next {
+			if itemB.blockID == _VALUESBLOCK_UNUSED {
 				continue
 			}
-			if fallbackItem.keyA == keyA && fallbackItem.keyB == keyB {
-				oldSeq = fallbackItem.seq
-				if (evenIfSameSeq && fallbackItem.seq == seq) || fallbackItem.seq < seq {
-					atomic.AddInt32(&fallback.atBucketsInUse, -1)
-					fallbackItem.valuesLocBlockID = _VALUESBLOCK_UNUSED
+			if itemB.keyA == keyA && itemB.keyB == keyB {
+				oldSeq = itemB.seq
+				if (evenIfSameSeq && itemB.seq == seq) || itemB.seq < seq {
+					atomic.AddInt32(&b.used, -1)
+					itemB.blockID = _VALUESBLOCK_UNUSED
 				} else {
 					done = true
 				}
@@ -337,136 +218,151 @@ func (vlms *valuesLocMapSection) setWithFallback(storage *valuesLocMapSectionSto
 			}
 		}
 	}
-	if !done && valuesLocBlockID != _VALUESBLOCK_UNUSED {
-		atomic.AddInt32(&storage.atBucketsInUse, 1)
-		if unusedItem != nil {
-			unusedItem.keyA = keyA
-			unusedItem.keyB = keyB
-			unusedItem.seq = seq
-			unusedItem.valuesLocBlockID = valuesLocBlockID
-			unusedItem.offset = offset
-			unusedItem.length = length
+	if !done && blockID != _VALUESBLOCK_UNUSED {
+		atomic.AddInt32(&a.used, 1)
+		if unusedItemA != nil {
+			unusedItemA.keyA = keyA
+			unusedItemA.keyB = keyB
+			unusedItemA.seq = seq
+			unusedItemA.blockID = blockID
+			unusedItemA.offset = offset
+			unusedItemA.length = length
 		} else {
-			storage.buckets[bucketIndex].next = &valueLoc{
-				next:             storage.buckets[bucketIndex].next,
-				keyA:             keyA,
-				keyB:             keyB,
-				seq:              seq,
-				valuesLocBlockID: valuesLocBlockID,
-				offset:           offset,
-				length:           length,
+			a.buckets[bix].next = &loc{
+				next:    a.buckets[bix].next,
+				keyA:    keyA,
+				keyB:    keyB,
+				seq:     seq,
+				blockID: blockID,
+				offset:  offset,
+				length:  length,
 			}
 		}
 	}
-	fallback.locks[lockIndex].Unlock()
-	storage.locks[lockIndex].Unlock()
+	if b != nil {
+		b.locks[lix].Unlock()
+	}
+	a.locks[lix].Unlock()
+	if b == nil {
+		if int(atomic.LoadInt32(&a.used)) > len(a.buckets) {
+			go lm.split()
+		}
+	}
 	return oldSeq
 }
 
-func (vlms *valuesLocMapSection) isResizing() bool {
-	a := vlms.a
-	b := vlms.b
-	return vlms.resizing || (a != nil && a.isResizing()) || (b != nil && b.isResizing())
+func (lm *locMap) isResizing() bool {
+	c, d := lm.c, lm.d
+	return lm.resizing || (c != nil && c.isResizing()) || (d != nil && d.isResizing())
 }
 
-func (vlms *valuesLocMapSection) gatherStats(stats *valuesLocMapStats) {
+func (lm *locMap) gatherStats() *valuesLocMapStats {
+	buckets := 0
+	for llm := lm; llm != nil; llm = llm.c {
+		a := llm.a
+		if a != nil {
+			buckets = len(a.buckets)
+			break
+		}
+	}
+	stats := &valuesLocMapStats{
+		depthCounts:  []uint64{0},
+		buckets:      uint64(buckets),
+		bucketCounts: make([]uint64, buckets),
+	}
+	lm.gatherStats2(stats)
+	stats.depthCounts = stats.depthCounts[1:]
+	return stats
+}
+
+func (lm *locMap) gatherStats2(stats *valuesLocMapStats) {
 	stats.sections++
-	storageA := vlms.storageA
-	storageB := vlms.storageB
-	a := vlms.a
-	b := vlms.b
-	if storageA != nil {
-		vlms.gatherStatsFromStorage(storageA, stats)
-	}
-	if storageB != nil {
-		vlms.gatherStatsFromStorage(storageB, stats)
-	}
 	stats.depth++
 	if stats.depth < uint64(len(stats.depthCounts)) {
 		stats.depthCounts[stats.depth]++
 	} else {
 		stats.depthCounts = append(stats.depthCounts, 1)
 	}
-	if a != nil || b != nil {
-		depth := stats.depth
-		if a != nil {
-			a.gatherStats(stats)
-		}
-		if b != nil {
-			depthA := stats.depth
-			stats.depth = depth
-			b.gatherStats(stats)
-			if depthA > stats.depth {
-				stats.depth = depthA
+	a := lm.a
+	b := lm.b
+	c := lm.c
+	d := lm.d
+	for _, s := range []*locStore{a, b} {
+		if s != nil {
+			stats.storages++
+			for bix := len(s.buckets) - 1; bix >= 0; bix-- {
+				lix := bix % len(s.locks)
+				s.locks[lix].RLock()
+				for item := &s.buckets[bix]; item != nil; item = item.next {
+					stats.bucketCounts[bix]++
+					if item.next != nil {
+						stats.pointerLocs++
+					}
+					stats.locs++
+					switch item.blockID {
+					case _VALUESBLOCK_UNUSED:
+						stats.unused++
+					case _VALUESBLOCK_TOMB:
+						stats.tombs++
+					default:
+						stats.used++
+						stats.length += uint64(item.length)
+					}
+				}
+				s.locks[lix].RUnlock()
 			}
+		}
+	}
+	depthOrig := stats.depth
+	if c != nil {
+		c.gatherStats2(stats)
+		depthC := stats.depth
+		stats.depth = depthOrig
+		d.gatherStats2(stats)
+		if depthC > stats.depth {
+			stats.depth = depthC
 		}
 	}
 }
 
-func (vlms *valuesLocMapSection) gatherStatsFromStorage(storage *valuesLocMapSectionStorage, stats *valuesLocMapStats) {
-	stats.storages++
-	lockMask := len(storage.locks) - 1
-	for bucketIndex := len(storage.buckets) - 1; bucketIndex >= 0; bucketIndex-- {
-		lockIndex := bucketIndex & lockMask
-		storage.locks[lockIndex].RLock()
-		for item := &storage.buckets[bucketIndex]; item != nil; item = item.next {
-			stats.bucketCounts[bucketIndex]++
-			if item.next != nil {
-				stats.pointerLocs++
-			}
-			stats.locs++
-			switch item.valuesLocBlockID {
-			case _VALUESBLOCK_UNUSED:
-				stats.unused++
-			case _VALUESBLOCK_TOMB:
-				stats.tombs++
-			default:
-				stats.used++
-				stats.length += uint64(item.length)
-			}
-		}
-		storage.locks[lockIndex].RUnlock()
-	}
-}
-
-func (vlms *valuesLocMapSection) split(sectionMask uint64) {
-	if vlms.resizing {
+func (lm *locMap) split() {
+	if lm.resizing {
 		return
 	}
-	vlms.resizeLock.Lock()
-	storageA := vlms.storageA
-	storageB := vlms.storageB
-	if vlms.resizing || storageA == nil || storageB != nil || atomic.LoadInt32(&storageA.atBucketsInUse) < int32(len(storageA.buckets)) {
-		vlms.resizeLock.Unlock()
+	lm.resizeLock.Lock()
+	a := lm.a
+	b := lm.b
+	if lm.resizing || a == nil || b != nil || int(atomic.LoadInt32(&a.used)) < len(a.buckets) {
+		lm.resizeLock.Unlock()
 		return
 	}
-	vlms.resizing = true
-	vlms.resizeLock.Unlock()
-	storageB = newValuesLocMapSectionStorage(len(storageA.buckets), len(storageA.locks))
-	vlms.storageB = storageB
-	sectionMask >>= 1
-	lockMask := len(storageA.locks) - 1
-	cores := int(math.Sqrt(float64(len(storageA.locks))))
+	lm.resizing = true
+	lm.resizeLock.Unlock()
+	b = &locStore{
+		buckets: make([]loc, len(a.buckets)),
+		locks:   make([]sync.RWMutex, len(a.locks)),
+	}
+	lm.b = b
 	wg := &sync.WaitGroup{}
-	wg.Add(cores)
-	for core := 0; core < cores; core++ {
+	wg.Add(lm.cores)
+	for core := 0; core < lm.cores; core++ {
 		go func(coreOffset int) {
 			clean := false
 			for !clean {
 				clean = true
-				for bucketIndex := len(storageA.buckets) - 1 - coreOffset; bucketIndex >= 0; bucketIndex -= cores {
-					lockIndex := bucketIndex & lockMask
-					storageB.locks[lockIndex].Lock()
-					storageA.locks[lockIndex].Lock()
+				for bix := len(a.buckets) - 1 - coreOffset; bix >= 0; bix -= lm.cores {
+					lix := bix % len(a.locks)
+					b.locks[lix].Lock()
+					a.locks[lix].Lock()
 				NEXT_ITEM_A:
-					for itemA := &storageA.buckets[bucketIndex]; itemA != nil; itemA = itemA.next {
-						if itemA.valuesLocBlockID == _VALUESBLOCK_UNUSED || itemA.keyA&sectionMask == 0 {
+					for itemA := &a.buckets[bix]; itemA != nil; itemA = itemA.next {
+						if itemA.blockID == _VALUESBLOCK_UNUSED || itemA.keyA&lm.leftMask == 0 {
 							continue
 						}
 						clean = false
-						var unusedItemB *valueLoc
-						for itemB := &storageB.buckets[bucketIndex]; itemB != nil; itemB = itemB.next {
-							if itemB.valuesLocBlockID == _VALUESBLOCK_UNUSED {
+						var unusedItemB *loc
+						for itemB := &b.buckets[bix]; itemB != nil; itemB = itemB.next {
+							if itemB.blockID == _VALUESBLOCK_UNUSED {
 								if unusedItemB == nil {
 									unusedItemB = itemB
 								}
@@ -477,81 +373,48 @@ func (vlms *valuesLocMapSection) split(sectionMask uint64) {
 									itemB.keyA = itemA.keyA
 									itemB.keyB = itemA.keyB
 									itemB.seq = itemA.seq
-									itemB.valuesLocBlockID = itemA.valuesLocBlockID
+									itemB.blockID = itemA.blockID
 									itemB.offset = itemA.offset
 									itemB.length = itemA.length
 								}
-								atomic.AddInt32(&storageA.atBucketsInUse, -1)
-								itemA.valuesLocBlockID = _VALUESBLOCK_UNUSED
+								atomic.AddInt32(&a.used, -1)
+								itemA.blockID = _VALUESBLOCK_UNUSED
 								continue NEXT_ITEM_A
 							}
 						}
-						atomic.AddInt32(&storageB.atBucketsInUse, 1)
+						atomic.AddInt32(&b.used, 1)
 						if unusedItemB != nil {
 							unusedItemB.keyA = itemA.keyA
 							unusedItemB.keyB = itemA.keyB
 							unusedItemB.seq = itemA.seq
-							unusedItemB.valuesLocBlockID = itemA.valuesLocBlockID
+							unusedItemB.blockID = itemA.blockID
 							unusedItemB.offset = itemA.offset
 							unusedItemB.length = itemA.length
 						} else {
-							storageB.buckets[bucketIndex].next = &valueLoc{
-								next:             storageB.buckets[bucketIndex].next,
-								keyA:             itemA.keyA,
-								keyB:             itemA.keyB,
-								seq:              itemA.seq,
-								valuesLocBlockID: itemA.valuesLocBlockID,
-								offset:           itemA.offset,
-								length:           itemA.length,
+							b.buckets[bix].next = &loc{
+								next:    b.buckets[bix].next,
+								keyA:    itemA.keyA,
+								keyB:    itemA.keyB,
+								seq:     itemA.seq,
+								blockID: itemA.blockID,
+								offset:  itemA.offset,
+								length:  itemA.length,
 							}
 						}
-						atomic.AddInt32(&storageA.atBucketsInUse, -1)
-						itemA.valuesLocBlockID = 0
+						atomic.AddInt32(&a.used, -1)
+						itemA.blockID = _VALUESBLOCK_UNUSED
 					}
-					storageA.locks[lockIndex].Unlock()
-					storageB.locks[lockIndex].Unlock()
+					a.locks[lix].Unlock()
+					b.locks[lix].Unlock()
 				}
 			}
 			wg.Done()
 		}(core)
 	}
 	wg.Wait()
-	vlms.a = &valuesLocMapSection{storageA: storageA, splitCount: vlms.splitCount}
-	vlms.b = &valuesLocMapSection{storageA: storageB, splitCount: vlms.splitCount}
-	vlms.storageA = nil
-	vlms.storageB = nil
-	vlms.resizing = false
-}
-
-type valuesLocMapSectionStorage struct {
-	// The first level of each bucket is preallocated with a valueLoc rather
-	// than a *valueLoc. This trades memory usage for keeping the Go garbage
-	// collector sane.
-	buckets        []valueLoc
-	locks          []sync.RWMutex
-	atBucketsInUse int32
-}
-
-func newValuesLocMapSectionStorage(bucketCount int, lockCount int) *valuesLocMapSectionStorage {
-	return &valuesLocMapSectionStorage{
-		buckets: make([]valueLoc, bucketCount),
-		locks:   make([]sync.RWMutex, lockCount),
-	}
-}
-
-// Each valueLoc uses 8+8+8+8+2+4+4 = 42 bytes (assuming 64 bit pointer) which
-// means we can store ~25,565,281 key locations in 1G of memory or
-// 1,636,178,017 key locations in 64G of memory (half the memory of our test
-// 128G machine).
-type valueLoc struct {
-	next *valueLoc
-	keyA uint64
-	keyB uint64
-	seq  uint64
-	// 0 is reserved for "not set" and 1 is for a tombstone, so a max of 65,354
-	// IDs can be used. Each block can be up to 4G in size based on the offset
-	// as uint32, so a total addressable space of almost 256T.
-	valuesLocBlockID uint16
-	offset           uint32
-	length           uint32
+	lm.d = &locMap{leftMask: lm.leftMask >> 1, a: b, cores: lm.cores}
+	lm.c = &locMap{leftMask: lm.leftMask >> 1, a: a, cores: lm.cores}
+	lm.a = nil
+	lm.b = nil
+	lm.resizing = false
 }

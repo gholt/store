@@ -691,7 +691,6 @@ func (vss *ValuesStoreStats) String() string {
 		[]string{"averageBucketCount", fmt.Sprintf("%d", averageBucketCount)},
 		[]string{"minBucketCount", fmt.Sprintf("%d %.1f%%", minBucketCount, float64(averageBucketCount-minBucketCount)/float64(averageBucketCount)*100)},
 		[]string{"maxBucketCount", fmt.Sprintf("%d %.1f%%", maxBucketCount, float64(maxBucketCount-averageBucketCount)/float64(averageBucketCount)*100)},
-		[]string{"splitCount", fmt.Sprintf("%d", vss.vlmStats.splitCount)},
 		[]string{"locs", fmt.Sprintf("%d", vss.vlmStats.locs)},
 		[]string{"pointerLocs", fmt.Sprintf("%d %.1f%%", vss.vlmStats.pointerLocs, float64(vss.vlmStats.pointerLocs)/float64(vss.vlmStats.locs)*100)},
 		[]string{"unused", fmt.Sprintf("%d", vss.vlmStats.unused)},
