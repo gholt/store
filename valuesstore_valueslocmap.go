@@ -16,25 +16,26 @@ const (
 	_VALUESBLOCK_IDOFFSET = iota
 )
 
-type locMap struct {
+type valuesLocMap struct {
 	leftMask   uint64
-	a          *locStore
-	b          *locStore
-	c          *locMap
-	d          *locMap
+	a          *valuesLocStore
+	b          *valuesLocStore
+	c          *valuesLocMap
+	d          *valuesLocMap
 	resizing   bool
 	resizeLock sync.Mutex
 	cores      int
+	splitCount int
 }
 
-type locStore struct {
-	buckets []loc
+type valuesLocStore struct {
+	buckets []valueLoc
 	locks   []sync.RWMutex
 	used    int32
 }
 
-type loc struct {
-	next    *loc
+type valueLoc struct {
+	next    *valueLoc
 	keyA    uint64
 	keyB    uint64
 	seq     uint64
@@ -59,7 +60,7 @@ type valuesLocMapStats struct {
 	length       uint64
 }
 
-func newLocMap(opts *ValuesStoreOpts) *locMap {
+func newValuesLocMap(opts *ValuesStoreOpts) *valuesLocMap {
 	if opts == nil {
 		opts = NewValuesStoreOpts()
 	}
@@ -76,44 +77,45 @@ func newLocMap(opts *ValuesStoreOpts) *locMap {
 	if valuesLocMapPageSize < 4096 {
 		valuesLocMapPageSize = 4096
 	}
-	bucketCount := 1 << brimutil.PowerOfTwoNeeded(uint64(valuesLocMapPageSize)/uint64(unsafe.Sizeof(loc{})))
+	bucketCount := 1 << brimutil.PowerOfTwoNeeded(uint64(valuesLocMapPageSize)/uint64(unsafe.Sizeof(valueLoc{})))
 	lockCount := 1 << brimutil.PowerOfTwoNeeded(uint64(cores*cores))
 	if lockCount > bucketCount {
 		lockCount = bucketCount
 	}
-	return &locMap{
+	return &valuesLocMap{
 		leftMask: uint64(1) << 63,
-		a: &locStore{
-			buckets: make([]loc, bucketCount),
+		a: &valuesLocStore{
+			buckets: make([]valueLoc, bucketCount),
 			locks:   make([]sync.RWMutex, lockCount),
 		},
-		cores: cores,
+		cores:      cores,
+		splitCount: bucketCount,
 	}
 }
 
-func (lm *locMap) get(keyA uint64, keyB uint64) (uint64, uint16, uint32, uint32) {
+func (vlm *valuesLocMap) get(keyA uint64, keyB uint64) (uint64, uint16, uint32, uint32) {
 	var seq uint64
 	var blockID uint16 = _VALUESBLOCK_UNUSED
 	var offset uint32
 	var length uint32
-	var a *locStore
-	var b *locStore
+	var a *valuesLocStore
+	var b *valuesLocStore
 	for {
-		a = lm.a
-		b = lm.b
-		c := lm.c
-		d := lm.d
+		a = vlm.a
+		b = vlm.b
+		c := vlm.c
+		d := vlm.d
 		if c == nil {
 			break
 		}
-		if keyA&lm.leftMask == 0 {
-			lm = c
+		if keyA&vlm.leftMask == 0 {
+			vlm = c
 		} else {
-			lm = d
+			vlm = d
 		}
 	}
 	if b != nil {
-		if keyA&lm.leftMask == 0 {
+		if keyA&vlm.leftMask == 0 {
 			b = nil
 		} else {
 			a, b = b, a
@@ -146,26 +148,26 @@ func (lm *locMap) get(keyA uint64, keyB uint64) (uint64, uint16, uint32, uint32)
 	return seq, blockID, offset, length
 }
 
-func (lm *locMap) set(keyA uint64, keyB uint64, seq uint64, blockID uint16, offset uint32, length uint32, evenIfSameSeq bool) uint64 {
+func (vlm *valuesLocMap) set(keyA uint64, keyB uint64, seq uint64, blockID uint16, offset uint32, length uint32, evenIfSameSeq bool) uint64 {
 	var oldSeq uint64
-	var a *locStore
-	var b *locStore
+	var a *valuesLocStore
+	var b *valuesLocStore
 	for {
-		a = lm.a
-		b = lm.b
-		c := lm.c
-		d := lm.d
+		a = vlm.a
+		b = vlm.b
+		c := vlm.c
+		d := vlm.d
 		if c == nil {
 			break
 		}
-		if keyA&lm.leftMask == 0 {
-			lm = c
+		if keyA&vlm.leftMask == 0 {
+			vlm = c
 		} else {
-			lm = d
+			vlm = d
 		}
 	}
 	if b != nil {
-		if keyA&lm.leftMask == 0 {
+		if keyA&vlm.leftMask == 0 {
 			b = nil
 		} else {
 			a, b = b, a
@@ -174,7 +176,7 @@ func (lm *locMap) set(keyA uint64, keyB uint64, seq uint64, blockID uint16, offs
 	bix := keyB % uint64(len(a.buckets))
 	lix := bix % uint64(len(a.locks))
 	done := false
-	var unusedItemA *loc
+	var unusedItemA *valueLoc
 	a.locks[lix].Lock()
 	if b != nil {
 		b.locks[lix].Lock()
@@ -228,7 +230,7 @@ func (lm *locMap) set(keyA uint64, keyB uint64, seq uint64, blockID uint16, offs
 			unusedItemA.offset = offset
 			unusedItemA.length = length
 		} else {
-			a.buckets[bix].next = &loc{
+			a.buckets[bix].next = &valueLoc{
 				next:    a.buckets[bix].next,
 				keyA:    keyA,
 				keyB:    keyB,
@@ -244,21 +246,21 @@ func (lm *locMap) set(keyA uint64, keyB uint64, seq uint64, blockID uint16, offs
 	}
 	a.locks[lix].Unlock()
 	if b == nil {
-		if int(atomic.LoadInt32(&a.used)) > len(a.buckets) {
-			go lm.split()
+		if int(atomic.LoadInt32(&a.used)) > vlm.splitCount {
+			go vlm.split()
 		}
 	}
 	return oldSeq
 }
 
-func (lm *locMap) isResizing() bool {
-	c, d := lm.c, lm.d
-	return lm.resizing || (c != nil && c.isResizing()) || (d != nil && d.isResizing())
+func (vlm *valuesLocMap) isResizing() bool {
+	c, d := vlm.c, vlm.d
+	return vlm.resizing || (c != nil && c.isResizing()) || (d != nil && d.isResizing())
 }
 
-func (lm *locMap) gatherStats() *valuesLocMapStats {
+func (vlm *valuesLocMap) gatherStats() *valuesLocMapStats {
 	buckets := 0
-	for llm := lm; llm != nil; llm = llm.c {
+	for llm := vlm; llm != nil; llm = llm.c {
 		a := llm.a
 		if a != nil {
 			buckets = len(a.buckets)
@@ -269,13 +271,14 @@ func (lm *locMap) gatherStats() *valuesLocMapStats {
 		depthCounts:  []uint64{0},
 		buckets:      uint64(buckets),
 		bucketCounts: make([]uint64, buckets),
+		splitCount:   uint64(vlm.splitCount),
 	}
-	lm.gatherStats2(stats)
+	vlm.gatherStatsHelper(stats)
 	stats.depthCounts = stats.depthCounts[1:]
 	return stats
 }
 
-func (lm *locMap) gatherStats2(stats *valuesLocMapStats) {
+func (vlm *valuesLocMap) gatherStatsHelper(stats *valuesLocMapStats) {
 	stats.sections++
 	stats.depth++
 	if stats.depth < uint64(len(stats.depthCounts)) {
@@ -283,11 +286,11 @@ func (lm *locMap) gatherStats2(stats *valuesLocMapStats) {
 	} else {
 		stats.depthCounts = append(stats.depthCounts, 1)
 	}
-	a := lm.a
-	b := lm.b
-	c := lm.c
-	d := lm.d
-	for _, s := range []*locStore{a, b} {
+	a := vlm.a
+	b := vlm.b
+	c := vlm.c
+	d := vlm.d
+	for _, s := range []*valuesLocStore{a, b} {
 		if s != nil {
 			stats.storages++
 			for bix := len(s.buckets) - 1; bix >= 0; bix-- {
@@ -315,52 +318,52 @@ func (lm *locMap) gatherStats2(stats *valuesLocMapStats) {
 	}
 	depthOrig := stats.depth
 	if c != nil {
-		c.gatherStats2(stats)
+		c.gatherStatsHelper(stats)
 		depthC := stats.depth
 		stats.depth = depthOrig
-		d.gatherStats2(stats)
+		d.gatherStatsHelper(stats)
 		if depthC > stats.depth {
 			stats.depth = depthC
 		}
 	}
 }
 
-func (lm *locMap) split() {
-	if lm.resizing {
+func (vlm *valuesLocMap) split() {
+	if vlm.resizing {
 		return
 	}
-	lm.resizeLock.Lock()
-	a := lm.a
-	b := lm.b
-	if lm.resizing || a == nil || b != nil || int(atomic.LoadInt32(&a.used)) < len(a.buckets) {
-		lm.resizeLock.Unlock()
+	vlm.resizeLock.Lock()
+	a := vlm.a
+	b := vlm.b
+	if vlm.resizing || a == nil || b != nil || int(atomic.LoadInt32(&a.used)) < vlm.splitCount {
+		vlm.resizeLock.Unlock()
 		return
 	}
-	lm.resizing = true
-	lm.resizeLock.Unlock()
-	b = &locStore{
-		buckets: make([]loc, len(a.buckets)),
+	vlm.resizing = true
+	vlm.resizeLock.Unlock()
+	b = &valuesLocStore{
+		buckets: make([]valueLoc, len(a.buckets)),
 		locks:   make([]sync.RWMutex, len(a.locks)),
 	}
-	lm.b = b
+	vlm.b = b
 	wg := &sync.WaitGroup{}
-	wg.Add(lm.cores)
-	for core := 0; core < lm.cores; core++ {
+	wg.Add(vlm.cores)
+	for core := 0; core < vlm.cores; core++ {
 		go func(coreOffset int) {
 			clean := false
 			for !clean {
 				clean = true
-				for bix := len(a.buckets) - 1 - coreOffset; bix >= 0; bix -= lm.cores {
+				for bix := len(a.buckets) - 1 - coreOffset; bix >= 0; bix -= vlm.cores {
 					lix := bix % len(a.locks)
 					b.locks[lix].Lock()
 					a.locks[lix].Lock()
 				NEXT_ITEM_A:
 					for itemA := &a.buckets[bix]; itemA != nil; itemA = itemA.next {
-						if itemA.blockID == _VALUESBLOCK_UNUSED || itemA.keyA&lm.leftMask == 0 {
+						if itemA.blockID == _VALUESBLOCK_UNUSED || itemA.keyA&vlm.leftMask == 0 {
 							continue
 						}
 						clean = false
-						var unusedItemB *loc
+						var unusedItemB *valueLoc
 						for itemB := &b.buckets[bix]; itemB != nil; itemB = itemB.next {
 							if itemB.blockID == _VALUESBLOCK_UNUSED {
 								if unusedItemB == nil {
@@ -391,7 +394,7 @@ func (lm *locMap) split() {
 							unusedItemB.offset = itemA.offset
 							unusedItemB.length = itemA.length
 						} else {
-							b.buckets[bix].next = &loc{
+							b.buckets[bix].next = &valueLoc{
 								next:    b.buckets[bix].next,
 								keyA:    itemA.keyA,
 								keyB:    itemA.keyB,
@@ -412,9 +415,19 @@ func (lm *locMap) split() {
 		}(core)
 	}
 	wg.Wait()
-	lm.d = &locMap{leftMask: lm.leftMask >> 1, a: b, cores: lm.cores}
-	lm.c = &locMap{leftMask: lm.leftMask >> 1, a: a, cores: lm.cores}
-	lm.a = nil
-	lm.b = nil
-	lm.resizing = false
+	vlm.d = &valuesLocMap{
+		leftMask:   vlm.leftMask >> 1,
+		a:          b,
+		cores:      vlm.cores,
+		splitCount: vlm.splitCount,
+	}
+	vlm.c = &valuesLocMap{
+		leftMask:   vlm.leftMask >> 1,
+		a:          a,
+		cores:      vlm.cores,
+		splitCount: vlm.splitCount,
+	}
+	vlm.a = nil
+	vlm.b = nil
+	vlm.resizing = false
 }
