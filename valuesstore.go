@@ -268,6 +268,15 @@ func (vs *ValuesStore) Close() {
 	}
 }
 
+// LookupValue will return seq, length, err for keyA, keyB.
+func (vs *ValuesStore) LookupValue(keyA uint64, keyB uint64) (uint64, uint32, error) {
+	seq, id, _, length := vs.vlm.get(keyA, keyB)
+	if id < _VALUESBLOCK_IDOFFSET {
+		return 0, 0, ErrValueNotFound
+	}
+	return seq, length, nil
+}
+
 // ReadValue will return seq, value, err for keyA, keyB; if an incoming value
 // is provided, the read value will be appended to it and the whole returned
 // (useful to reuse an existing []byte).
@@ -469,7 +478,7 @@ func (vs *ValuesStore) vfWriter() {
 				if vf != nil {
 					vf.close()
 				}
-				for i := 0; i <= vs.cores; i++ {
+				for i := 0; i < vs.cores; i++ {
 					vs.freeableVMChan <- nil
 				}
 				break
@@ -759,7 +768,7 @@ func (vs *ValuesStore) recovery() {
 	wg.Wait()
 	if fromDiskCount > 0 {
 		dur := time.Now().Sub(start)
-		log.Printf("%d key locations loaded in %s, %.0f/s; %d were current.\n", fromDiskCount, dur, float64(fromDiskCount)/(float64(dur)/float64(time.Second)), count)
+		log.Printf("%d key locations loaded in %s, %.0f/s; %d caused change; %d resulting locations.\n", fromDiskCount, dur, float64(fromDiskCount)/(float64(dur)/float64(time.Second)), count, vs.GatherStats(false).ValueCount())
 	}
 }
 

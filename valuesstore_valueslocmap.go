@@ -255,8 +255,11 @@ func (vlm *valuesLocMap) set(keyA uint64, keyB uint64, seq uint64, blockID uint1
 }
 
 func (vlm *valuesLocMap) isResizing() bool {
+	vlm.resizeLock.Lock()
+	resizing := vlm.resizing
+	vlm.resizeLock.Unlock()
 	c, d := vlm.c, vlm.d
-	return vlm.resizing || (c != nil && c.isResizing()) || (d != nil && d.isResizing())
+	return resizing || (c != nil && c.isResizing()) || (d != nil && d.isResizing())
 }
 
 func (vlm *valuesLocMap) gatherStats(extended bool) *valuesLocMapStats {

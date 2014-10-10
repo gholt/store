@@ -30,9 +30,9 @@ func old() {
 	totalValueBytes := totalValues * bytesPerValue
 	value := make([]byte, bytesPerValue)
 	brimutil.NewSeededScrambled(seed).Read(value)
-	keys := createKeys(seed, clients, valuesPerClient)
-	keys2 := createKeys(seed+int64(totalValues), clients, valuesPerClient)
-	keys3 := createKeys(seed+int64(totalValues*2), clients, valuesPerClient)
+	keys := oldCreateKeys(seed, clients, valuesPerClient)
+	keys2 := oldCreateKeys(seed+int64(totalValues), clients, valuesPerClient)
+	keys3 := oldCreateKeys(seed+int64(totalValues*2), clients, valuesPerClient)
 
 	fmt.Println(cores, "cores")
 	fmt.Println(bytesPerValue, "bytes per value")
@@ -57,7 +57,7 @@ func old() {
 
 	fmt.Println()
 	start = time.Now()
-	writeValues(vs, keys, value, clients, valuesPerClient)
+	oldWriteValues(vs, keys, value, clients, valuesPerClient)
 	dur = time.Now().Sub(start)
 	fmt.Printf("%s %.0f/s %0.2fG/s to add %d values\n", dur, float64(totalValues)/(float64(dur)/float64(time.Second)), float64(totalValueBytes)/(float64(dur)/float64(time.Second))/1024/1024/1024, totalValues)
 	runtime.ReadMemStats(&st)
@@ -67,7 +67,7 @@ func old() {
 
 	fmt.Println()
 	start = time.Now()
-	m := readValues(vs, [][][]byte{keys}, value, clients, valuesPerClient)
+	m := oldReadValues(vs, [][][]byte{keys}, value, clients, valuesPerClient)
 	dur = time.Now().Sub(start)
 	fmt.Printf("%s %.0f/s %dns each, to read %d values\n", dur, float64(totalValues)/(float64(dur)/float64(time.Second)), int(dur)/totalValues, totalValues)
 	if m != 0 {
@@ -120,7 +120,7 @@ func old() {
 
 	fmt.Println()
 	start = time.Now()
-	m = readValues(vs, [][][]byte{keys, keys2}, value, clients, valuesPerClient)
+	m = oldReadValues(vs, [][][]byte{keys, keys2}, value, clients, valuesPerClient)
 	dur = time.Now().Sub(start)
 	fmt.Printf("%s %.0f/s %dns each, to read %d values\n", dur, float64(totalValues*2)/(float64(dur)/float64(time.Second)), int(dur)/(totalValues*2), totalValues*2)
 	if m != 0 {
@@ -133,7 +133,7 @@ func old() {
 
 	fmt.Println()
 	start = time.Now()
-	m = readValues(vs, [][][]byte{keys3}, value, clients, valuesPerClient)
+	m = oldReadValues(vs, [][][]byte{keys3}, value, clients, valuesPerClient)
 	dur = time.Now().Sub(start)
 	fmt.Printf("%s %.0f/s %dns each, to read %d non-existent values\n", dur, float64(totalValues)/(float64(dur)/float64(time.Second)), int(dur)/(totalValues), totalValues)
 	if m != 0 {
@@ -167,7 +167,7 @@ func old() {
 	fmt.Printf("%0.2fG total alloc, %0.2fG delta\n", float64(st.TotalAlloc)/1024/1024/1024, float64(deltaAlloc)/1024/1024/1024)
 }
 
-func createKeys(seed int64, clients int, valuesPerClient int) [][]byte {
+func oldCreateKeys(seed int64, clients int, valuesPerClient int) [][]byte {
 	wg := &sync.WaitGroup{}
 	keys := make([][]byte, clients)
 	wg.Add(clients)
@@ -182,7 +182,7 @@ func createKeys(seed int64, clients int, valuesPerClient int) [][]byte {
 	return keys
 }
 
-func writeValues(vs *brimstore.ValuesStore, keys [][]byte, value []byte, clients int, valuesPerClient int) {
+func oldWriteValues(vs *brimstore.ValuesStore, keys [][]byte, value []byte, clients int, valuesPerClient int) {
 	wg := &sync.WaitGroup{}
 	wg.Add(clients)
 	for i := 0; i < clients; i++ {
@@ -201,7 +201,7 @@ func writeValues(vs *brimstore.ValuesStore, keys [][]byte, value []byte, clients
 	wg.Wait()
 }
 
-func readValues(vs *brimstore.ValuesStore, keys [][][]byte, value []byte, clients int, valuesPerClient int) int {
+func oldReadValues(vs *brimstore.ValuesStore, keys [][][]byte, value []byte, clients int, valuesPerClient int) int {
 	c := make([]chan int, clients)
 	for i := 0; i < clients; i++ {
 		c[i] = make(chan int)
@@ -235,10 +235,10 @@ func readAndWriteValues(vs *brimstore.ValuesStore, keys [][]byte, keys2 [][]byte
 	readChan := make(chan int, 1)
 	writeChan := make(chan struct{}, 1)
 	go func() {
-		readChan <- readValues(vs, [][][]byte{keys}, value, clients, valuesPerClient)
+		readChan <- oldReadValues(vs, [][][]byte{keys}, value, clients, valuesPerClient)
 	}()
 	go func() {
-		writeValues(vs, keys2, value, clients, valuesPerClient)
+		oldWriteValues(vs, keys2, value, clients, valuesPerClient)
 		writeChan <- struct{}{}
 	}()
 	return readChan, writeChan
