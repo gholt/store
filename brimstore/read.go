@@ -54,25 +54,9 @@ read n s	Reads n random values seeded with s.
 
 	fmt.Println()
 	start = time.Now()
-	missing, valuesLength := readValues(vs, keys, buffers, clients)
+	valuesLength := readValues(vs, keys, buffers, clients)
 	dur = time.Now().Sub(start)
 	fmt.Printf("%s %.0f/s %0.2fG/s to read %d values\n", dur, float64(values)/(float64(dur)/float64(time.Second)), float64(valuesLength)/(float64(dur)/float64(time.Second))/1024/1024/1024, values)
-	if missing > 0 {
-		fmt.Println(missing, "MISSING!")
-	}
-	runtime.ReadMemStats(&st)
-	deltaAlloc = st.TotalAlloc - lastAlloc
-	lastAlloc = st.TotalAlloc
-	fmt.Printf("%0.2fG total alloc, %0.2fG delta\n", float64(st.TotalAlloc)/1024/1024/1024, float64(deltaAlloc)/1024/1024/1024)
-
-	fmt.Println()
-	start = time.Now()
-	missing, valuesLength = readValues(vs, keys, buffers, clients)
-	dur = time.Now().Sub(start)
-	fmt.Printf("%s %.0f/s %0.2fG/s to read %d values again\n", dur, float64(values)/(float64(dur)/float64(time.Second)), float64(valuesLength)/(float64(dur)/float64(time.Second))/1024/1024/1024, values)
-	if missing > 0 {
-		fmt.Println(missing, "MISSING!")
-	}
 	runtime.ReadMemStats(&st)
 	deltaAlloc = st.TotalAlloc - lastAlloc
 	lastAlloc = st.TotalAlloc

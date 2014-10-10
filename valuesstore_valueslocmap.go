@@ -23,7 +23,7 @@ type valuesLocMap struct {
 	c          *valuesLocMap
 	d          *valuesLocMap
 	resizing   bool
-	resizeLock sync.Mutex
+	lock       sync.RWMutex
 	cores      int
 	splitCount int
 }
@@ -102,6 +102,7 @@ func (vlm *valuesLocMap) get(keyA uint64, keyB uint64) (uint64, uint16, uint32, 
 	var a *valuesLocStore
 	var b *valuesLocStore
 	for {
+		vlm.lock.RLock()
 		a = vlm.a
 		b = vlm.b
 		c := vlm.c
@@ -109,6 +110,7 @@ func (vlm *valuesLocMap) get(keyA uint64, keyB uint64) (uint64, uint16, uint32, 
 		if c == nil {
 			break
 		}
+		vlm.lock.RUnlock()
 		if keyA&vlm.leftMask == 0 {
 			vlm = c
 		} else {
@@ -146,6 +148,7 @@ func (vlm *valuesLocMap) get(keyA uint64, keyB uint64) (uint64, uint16, uint32, 
 		b.locks[lix].RUnlock()
 	}
 	a.locks[lix].RUnlock()
+	vlm.lock.RUnlock()
 	return seq, blockID, offset, length
 }
 
@@ -154,6 +157,7 @@ func (vlm *valuesLocMap) set(keyA uint64, keyB uint64, seq uint64, blockID uint1
 	var a *valuesLocStore
 	var b *valuesLocStore
 	for {
+		vlm.lock.RLock()
 		a = vlm.a
 		b = vlm.b
 		c := vlm.c
@@ -161,6 +165,7 @@ func (vlm *valuesLocMap) set(keyA uint64, keyB uint64, seq uint64, blockID uint1
 		if c == nil {
 			break
 		}
+		vlm.lock.RUnlock()
 		if keyA&vlm.leftMask == 0 {
 			vlm = c
 		} else {
@@ -246,6 +251,7 @@ func (vlm *valuesLocMap) set(keyA uint64, keyB uint64, seq uint64, blockID uint1
 		b.locks[lix].Unlock()
 	}
 	a.locks[lix].Unlock()
+	vlm.lock.RUnlock()
 	if b == nil {
 		if int(atomic.LoadInt32(&a.used)) > vlm.splitCount {
 			go vlm.split()
@@ -255,30 +261,18 @@ func (vlm *valuesLocMap) set(keyA uint64, keyB uint64, seq uint64, blockID uint1
 }
 
 func (vlm *valuesLocMap) isResizing() bool {
-	vlm.resizeLock.Lock()
+	vlm.lock.RLock()
 	resizing := vlm.resizing
-	vlm.resizeLock.Unlock()
 	c, d := vlm.c, vlm.d
+	vlm.lock.RUnlock()
 	return resizing || (c != nil && c.isResizing()) || (d != nil && d.isResizing())
 }
 
 func (vlm *valuesLocMap) gatherStats(extended bool) *valuesLocMapStats {
-	buckets := 0
-	if extended {
-		for llm := vlm; llm != nil; llm = llm.c {
-			a := llm.a
-			if a != nil {
-				buckets = len(a.buckets)
-				break
-			}
-		}
-	}
 	stats := &valuesLocMapStats{}
 	if extended {
 		stats.extended = true
 		stats.depthCounts = []uint64{0}
-		stats.buckets = uint64(buckets)
-		stats.bucketCounts = make([]uint64, buckets)
 		stats.splitCount = uint64(vlm.splitCount)
 	}
 	vlm.gatherStatsHelper(stats)
@@ -299,12 +293,17 @@ func (vlm *valuesLocMap) gatherStatsHelper(stats *valuesLocMapStats) {
 			stats.depthCounts = append(stats.depthCounts, 1)
 		}
 	}
+	vlm.lock.RLock()
 	a := vlm.a
 	b := vlm.b
 	c := vlm.c
 	d := vlm.d
 	for _, s := range []*valuesLocStore{a, b} {
 		if s != nil {
+			if stats.buckets == 0 {
+				stats.buckets = uint64(len(s.buckets))
+				stats.bucketCounts = make([]uint64, len(s.buckets))
+			}
 			stats.wg.Add(1)
 			go func(s *valuesLocStore) {
 				var bucketCounts []uint64
@@ -363,6 +362,7 @@ func (vlm *valuesLocMap) gatherStatsHelper(stats *valuesLocMapStats) {
 			}(s)
 		}
 	}
+	vlm.lock.RUnlock()
 	if stats.extended {
 		depthOrig := stats.depth
 		if c != nil {
@@ -430,20 +430,22 @@ func (vlm *valuesLocMap) split() {
 	if vlm.resizing {
 		return
 	}
-	vlm.resizeLock.Lock()
+	vlm.lock.Lock()
 	a := vlm.a
 	b := vlm.b
 	if vlm.resizing || a == nil || b != nil || int(atomic.LoadInt32(&a.used)) < vlm.splitCount {
-		vlm.resizeLock.Unlock()
+		vlm.lock.Unlock()
 		return
 	}
 	vlm.resizing = true
-	vlm.resizeLock.Unlock()
+	vlm.lock.Unlock()
 	b = &valuesLocStore{
 		buckets: make([]valueLoc, len(a.buckets)),
 		locks:   make([]sync.RWMutex, len(a.locks)),
 	}
+	vlm.lock.Lock()
 	vlm.b = b
+	vlm.lock.Unlock()
 	wg := &sync.WaitGroup{}
 	wg.Add(vlm.cores)
 	for core := 0; core < vlm.cores; core++ {
@@ -513,19 +515,21 @@ func (vlm *valuesLocMap) split() {
 		}(core)
 	}
 	wg.Wait()
-	vlm.d = &valuesLocMap{
-		leftMask:   vlm.leftMask >> 1,
-		a:          b,
-		cores:      vlm.cores,
-		splitCount: vlm.splitCount,
-	}
+	vlm.lock.Lock()
+	vlm.a = nil
+	vlm.b = nil
 	vlm.c = &valuesLocMap{
 		leftMask:   vlm.leftMask >> 1,
 		a:          a,
 		cores:      vlm.cores,
 		splitCount: vlm.splitCount,
 	}
-	vlm.a = nil
-	vlm.b = nil
+	vlm.d = &valuesLocMap{
+		leftMask:   vlm.leftMask >> 1,
+		a:          b,
+		cores:      vlm.cores,
+		splitCount: vlm.splitCount,
+	}
 	vlm.resizing = false
+	vlm.lock.Unlock()
 }

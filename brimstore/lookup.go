@@ -50,12 +50,9 @@ lookup n s	Looks up n random values seeded with s.
 
 	fmt.Println()
 	start = time.Now()
-	missing := lookupValues(vs, keys, clients)
+	lookupValues(vs, keys, clients)
 	dur = time.Now().Sub(start)
 	fmt.Printf("%s %.0f/s to lookup %d values\n", dur, float64(values)/(float64(dur)/float64(time.Second)), values)
-	if missing > 0 {
-		fmt.Println(missing, "MISSING!")
-	}
 	runtime.ReadMemStats(&st)
 	deltaAlloc = st.TotalAlloc - lastAlloc
 	lastAlloc = st.TotalAlloc

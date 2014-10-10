@@ -80,8 +80,7 @@ func writeValues(vs *brimstore.ValuesStore, keys [][]byte, seq int, value []byte
 	wg.Wait()
 }
 
-func readValues(vs *brimstore.ValuesStore, keys [][]byte, buffers [][]byte, clients int) (uint64, uint64) {
-	var missing uint64
+func readValues(vs *brimstore.ValuesStore, keys [][]byte, buffers [][]byte, clients int) uint64 {
 	var valuesLength uint64
 	start := []byte("START67890")
 	stop := []byte("123456STOP")
@@ -91,13 +90,10 @@ func readValues(vs *brimstore.ValuesStore, keys [][]byte, buffers [][]byte, clie
 		go func(keys []byte, buffer []byte) {
 			var err error
 			var v []byte
-			var m uint64
 			var vl uint64
 			for o := 0; o < len(keys); o += 16 {
 				_, v, err = vs.ReadValue(binary.BigEndian.Uint64(keys[o:]), binary.BigEndian.Uint64(keys[o+8:]), buffer[:0])
-				if err == brimstore.ErrValueNotFound {
-					m++
-				} else if err != nil {
+				if err != nil {
 					panic(err)
 				} else if len(v) > 10 && !bytes.Equal(v[:10], start) {
 					panic("bad start to value")
@@ -107,9 +103,6 @@ func readValues(vs *brimstore.ValuesStore, keys [][]byte, buffers [][]byte, clie
 					vl += uint64(len(v))
 				}
 			}
-			if m > 0 {
-				atomic.AddUint64(&missing, m)
-			}
 			if vl > 0 {
 				atomic.AddUint64(&valuesLength, vl)
 			}
@@ -117,31 +110,23 @@ func readValues(vs *brimstore.ValuesStore, keys [][]byte, buffers [][]byte, clie
 		}(keys[i], buffers[i])
 	}
 	wg.Wait()
-	return atomic.LoadUint64(&missing), atomic.LoadUint64(&valuesLength)
+	return atomic.LoadUint64(&valuesLength)
 }
 
-func lookupValues(vs *brimstore.ValuesStore, keys [][]byte, clients int) uint64 {
-	var missing uint64
+func lookupValues(vs *brimstore.ValuesStore, keys [][]byte, clients int) {
 	wg := &sync.WaitGroup{}
 	wg.Add(clients)
 	for i := 0; i < clients; i++ {
 		go func(keys []byte) {
 			var err error
-			var m uint64
 			for o := 0; o < len(keys); o += 16 {
 				_, _, err = vs.LookupValue(binary.BigEndian.Uint64(keys[o:]), binary.BigEndian.Uint64(keys[o+8:]))
-				if err == brimstore.ErrValueNotFound {
-					m++
-				} else if err != nil {
+				if err != nil {
 					panic(err)
 				}
-			}
-			if m > 0 {
-				atomic.AddUint64(&missing, m)
 			}
 			wg.Done()
 		}(keys[i])
 	}
 	wg.Wait()
-	return atomic.LoadUint64(&missing)
 }
