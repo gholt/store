@@ -14,13 +14,12 @@ import (
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Printf(`
+		fmt.Println(`
 start/stop	Simply starts the store and then stops it. Measures recovery.
 add n s q z	Adds n random values seeded with s using sequence number q and
 		the values will be z in length.
 read n s	Reads n random values seeded with s.
-lookup n s	Looks up n random values seeded with s.
-		`)
+lookup n s	Looks up n random values seeded with s.`)
 		os.Exit(1)
 	} else {
 		switch os.Args[1] {

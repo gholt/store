@@ -13,9 +13,8 @@ import (
 // read n s	Reads n random values seeded with s.
 func read() {
 	if len(os.Args) != 4 {
-		fmt.Printf(`
-read n s	Reads n random values seeded with s.
-		`)
+		fmt.Println(`
+read n s	Reads n random values seeded with s.`)
 		os.Exit(1)
 	}
 	values, err := strconv.Atoi(os.Args[2])

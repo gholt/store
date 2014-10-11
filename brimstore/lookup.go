@@ -13,9 +13,8 @@ import (
 // lookup n s	Looks up n random values seeded with s.
 func lookup() {
 	if len(os.Args) != 4 {
-		fmt.Printf(`
-lookup n s	Looks up n random values seeded with s.
-		`)
+		fmt.Println(`
+lookup n s	Looks up n random values seeded with s.`)
 		os.Exit(1)
 	}
 	values, err := strconv.Atoi(os.Args[2])

@@ -15,10 +15,9 @@ import (
 // 		the values will be z in length.
 func add() {
 	if len(os.Args) != 6 {
-		fmt.Printf(`
+		fmt.Println(`
 add n s q z	Adds n random values seeded with s using sequence number q and
-		the values will be z in length.
-		`)
+		the values will be z in length.`)
 		os.Exit(1)
 	}
 	values, err := strconv.Atoi(os.Args[2])
