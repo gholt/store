@@ -17,15 +17,15 @@ const (
 )
 
 type valuesLocMap struct {
-	leftMask   uint64
-	a          *valuesLocStore
-	b          *valuesLocStore
-	c          *valuesLocMap
-	d          *valuesLocMap
-	resizing   bool
-	lock       sync.RWMutex
-	cores      int
-	splitCount int
+	leftMask     uint64
+	a            *valuesLocStore
+	b            *valuesLocStore
+	c            *valuesLocMap
+	d            *valuesLocMap
+	resizing     bool
+	resizingLock sync.RWMutex
+	cores        int
+	splitCount   int
 }
 
 type valuesLocStore struct {
@@ -83,188 +83,219 @@ func newValuesLocMap(opts *ValuesStoreOpts) *valuesLocMap {
 	if splitMultiplier <= 0 {
 		splitMultiplier = 3.0
 	}
-	return &valuesLocMap{
-		leftMask: uint64(1) << 63,
-		a: &valuesLocStore{
-			buckets: make([]valueLoc, bucketCount),
-			locks:   make([]sync.RWMutex, lockCount),
-		},
+	vlm := &valuesLocMap{
+		leftMask:   uint64(1) << 63,
 		cores:      cores,
 		splitCount: int(float64(bucketCount) * splitMultiplier),
 	}
+	a := &valuesLocStore{
+		buckets: make([]valueLoc, bucketCount),
+		locks:   make([]sync.RWMutex, lockCount),
+	}
+	atomic.StorePointer((*unsafe.Pointer)(unsafe.Pointer(&vlm.a)), unsafe.Pointer(a))
+	return vlm
 }
 
 func (vlm *valuesLocMap) get(keyA uint64, keyB uint64) (uint64, uint16, uint32, uint32) {
 	var seq uint64
-	var blockID uint16 = _VALUESBLOCK_UNUSED
+	var blockID uint16
 	var offset uint32
 	var length uint32
-	var a *valuesLocStore
-	var b *valuesLocStore
 	for {
-		vlm.lock.RLock()
-		a = vlm.a
-		b = vlm.b
-		c := vlm.c
-		d := vlm.d
+		c := (*valuesLocMap)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vlm.c))))
 		if c == nil {
 			break
 		}
-		vlm.lock.RUnlock()
 		if keyA&vlm.leftMask == 0 {
 			vlm = c
 		} else {
-			vlm = d
+			vlm = (*valuesLocMap)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vlm.d))))
 		}
 	}
-	if b != nil {
-		if keyA&vlm.leftMask == 0 {
-			b = nil
-		} else {
-			a, b = b, a
-		}
-	}
+	a := (*valuesLocStore)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vlm.a))))
 	bix := keyB % uint64(len(a.buckets))
 	lix := bix % uint64(len(a.locks))
-	a.locks[lix].RLock()
-	if b != nil {
-		b.locks[lix].RLock()
-	}
-	for itemA := &a.buckets[bix]; itemA != nil; itemA = itemA.next {
-		if itemA.blockID != _VALUESBLOCK_UNUSED && itemA.keyA == keyA && itemA.keyB == keyB {
-			seq, blockID, offset, length = itemA.seq, itemA.blockID, itemA.offset, itemA.length
-			break
+	f := func(s *valuesLocStore, fb *valuesLocStore) {
+		blockID = _VALUESBLOCK_UNUSED
+		s.locks[lix].RLock()
+		if fb != nil {
+			fb.locks[lix].RLock()
 		}
-	}
-	if blockID == _VALUESBLOCK_UNUSED && b != nil {
-		for itemB := &b.buckets[bix]; itemB != nil; itemB = itemB.next {
-			if itemB.blockID != _VALUESBLOCK_UNUSED && itemB.keyA == keyA && itemB.keyB == keyB {
-				seq, blockID, offset, length = itemB.seq, itemB.blockID, itemB.offset, itemB.length
+		for item := &s.buckets[bix]; item != nil; item = item.next {
+			if item.blockID != _VALUESBLOCK_UNUSED && item.keyA == keyA && item.keyB == keyB {
+				seq, blockID, offset, length = item.seq, item.blockID, item.offset, item.length
 				break
 			}
 		}
+		if fb != nil && blockID == _VALUESBLOCK_UNUSED {
+			for item := &fb.buckets[bix]; item != nil; item = item.next {
+				if item.blockID != _VALUESBLOCK_UNUSED && item.keyA == keyA && item.keyB == keyB {
+					seq, blockID, offset, length = item.seq, item.blockID, item.offset, item.length
+					break
+				}
+			}
+		}
+		if fb != nil {
+			fb.locks[lix].RUnlock()
+		}
+		s.locks[lix].RUnlock()
 	}
-	if b != nil {
-		b.locks[lix].RUnlock()
+	if keyA&vlm.leftMask == 0 {
+		f(a, nil)
+	} else {
+		b := (*valuesLocStore)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vlm.b))))
+		if b != nil {
+			f(b, a)
+		} else {
+			f(a, nil)
+		}
 	}
-	a.locks[lix].RUnlock()
-	vlm.lock.RUnlock()
 	return seq, blockID, offset, length
 }
 
 func (vlm *valuesLocMap) set(keyA uint64, keyB uint64, seq uint64, blockID uint16, offset uint32, length uint32, evenIfSameSeq bool) uint64 {
 	var oldSeq uint64
-	var a *valuesLocStore
-	var b *valuesLocStore
 	for {
-		vlm.lock.RLock()
-		a = vlm.a
-		b = vlm.b
-		c := vlm.c
-		d := vlm.d
+		c := (*valuesLocMap)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vlm.c))))
 		if c == nil {
 			break
 		}
-		vlm.lock.RUnlock()
 		if keyA&vlm.leftMask == 0 {
 			vlm = c
 		} else {
-			vlm = d
+			vlm = (*valuesLocMap)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vlm.d))))
 		}
 	}
-	if b != nil {
-		if keyA&vlm.leftMask == 0 {
-			b = nil
-		} else {
-			a, b = b, a
-		}
-	}
+	a := (*valuesLocStore)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vlm.a))))
 	bix := keyB % uint64(len(a.buckets))
 	lix := bix % uint64(len(a.locks))
-	done := false
-	var unusedItemA *valueLoc
-	a.locks[lix].Lock()
-	if b != nil {
-		b.locks[lix].Lock()
-	}
-	for itemA := &a.buckets[bix]; itemA != nil; itemA = itemA.next {
-		if itemA.blockID == _VALUESBLOCK_UNUSED {
-			if unusedItemA == nil {
-				unusedItemA = itemA
-			}
-			continue
+	f := func(s *valuesLocStore, fb *valuesLocStore) {
+		oldSeq = _VALUESBLOCK_UNUSED
+		var sMatch *valueLoc
+		var fbMatch *valueLoc
+		var unusedItem *valueLoc
+		s.locks[lix].Lock()
+		if fb != nil {
+			fb.locks[lix].Lock()
 		}
-		if itemA.keyA == keyA && itemA.keyB == keyB {
-			oldSeq = itemA.seq
-			if (evenIfSameSeq && itemA.seq == seq) || itemA.seq < seq {
-				if blockID == _VALUESBLOCK_UNUSED {
-					atomic.AddInt32(&a.used, -1)
+		for item := &s.buckets[bix]; item != nil; item = item.next {
+			if item.blockID == _VALUESBLOCK_UNUSED {
+				if unusedItem == nil {
+					unusedItem = item
 				}
-				itemA.seq = seq
-				itemA.blockID = blockID
-				itemA.offset = offset
-				itemA.length = length
-			}
-			done = true
-			break
-		}
-	}
-	if !done && b != nil {
-		for itemB := &b.buckets[bix]; itemB != nil; itemB = itemB.next {
-			if itemB.blockID == _VALUESBLOCK_UNUSED {
 				continue
 			}
-			if itemB.keyA == keyA && itemB.keyB == keyB {
-				oldSeq = itemB.seq
-				if (evenIfSameSeq && itemB.seq == seq) || itemB.seq < seq {
-					atomic.AddInt32(&b.used, -1)
-					itemB.blockID = _VALUESBLOCK_UNUSED
-				} else {
-					done = true
-				}
+			if item.keyA == keyA && item.keyB == keyB {
+				sMatch = item
 				break
 			}
 		}
-	}
-	if !done && blockID != _VALUESBLOCK_UNUSED {
-		atomic.AddInt32(&a.used, 1)
-		if unusedItemA != nil {
-			unusedItemA.keyA = keyA
-			unusedItemA.keyB = keyB
-			unusedItemA.seq = seq
-			unusedItemA.blockID = blockID
-			unusedItemA.offset = offset
-			unusedItemA.length = length
-		} else {
-			a.buckets[bix].next = &valueLoc{
-				next:    a.buckets[bix].next,
-				keyA:    keyA,
-				keyB:    keyB,
-				seq:     seq,
-				blockID: blockID,
-				offset:  offset,
-				length:  length,
+		if fb != nil {
+			for item := &fb.buckets[bix]; item != nil; item = item.next {
+				if item.blockID == _VALUESBLOCK_UNUSED {
+					continue
+				}
+				if item.keyA == keyA && item.keyB == keyB {
+					fbMatch = item
+					break
+				}
 			}
 		}
+		if sMatch != nil {
+			if fbMatch != nil {
+				if sMatch.seq >= fbMatch.seq {
+					oldSeq = sMatch.seq
+					if seq > sMatch.seq || (evenIfSameSeq && seq == sMatch.seq) {
+						sMatch.seq = seq
+						sMatch.blockID = blockID
+						sMatch.offset = offset
+						sMatch.length = length
+					}
+				} else {
+					oldSeq = fbMatch.seq
+					if seq > fbMatch.seq || (evenIfSameSeq && seq == fbMatch.seq) {
+						sMatch.seq = seq
+						sMatch.blockID = blockID
+						sMatch.offset = offset
+						sMatch.length = length
+					} else {
+						sMatch.seq = fbMatch.seq
+						sMatch.blockID = fbMatch.blockID
+						sMatch.offset = fbMatch.offset
+						sMatch.length = fbMatch.length
+					}
+				}
+				atomic.AddInt32(&fb.used, -1)
+				fbMatch.blockID = _VALUESBLOCK_UNUSED
+			} else {
+				oldSeq = sMatch.seq
+				if seq > sMatch.seq || (evenIfSameSeq && seq == sMatch.seq) {
+					sMatch.seq = seq
+					sMatch.blockID = blockID
+					sMatch.offset = offset
+					sMatch.length = length
+				}
+			}
+		} else {
+			atomic.AddInt32(&s.used, 1)
+			if unusedItem == nil {
+				unusedItem = &valueLoc{next: s.buckets[bix].next}
+				s.buckets[bix].next = unusedItem
+			}
+			unusedItem.keyA = keyA
+			unusedItem.keyB = keyB
+			if fbMatch != nil {
+				oldSeq = fbMatch.seq
+				if seq > fbMatch.seq || (evenIfSameSeq && seq == fbMatch.seq) {
+					unusedItem.seq = seq
+					unusedItem.blockID = blockID
+					unusedItem.offset = offset
+					unusedItem.length = length
+				} else {
+					unusedItem.seq = fbMatch.seq
+					unusedItem.blockID = fbMatch.blockID
+					unusedItem.offset = fbMatch.offset
+					unusedItem.length = fbMatch.length
+				}
+				atomic.AddInt32(&fb.used, -1)
+				fbMatch.blockID = _VALUESBLOCK_UNUSED
+			} else {
+				unusedItem.seq = seq
+				unusedItem.blockID = blockID
+				unusedItem.offset = offset
+				unusedItem.length = length
+			}
+		}
+		if fb != nil {
+			fb.locks[lix].Unlock()
+		}
+		s.locks[lix].Unlock()
 	}
-	if b != nil {
-		b.locks[lix].Unlock()
-	}
-	a.locks[lix].Unlock()
-	vlm.lock.RUnlock()
-	if b == nil {
-		if int(atomic.LoadInt32(&a.used)) > vlm.splitCount {
-			go vlm.split()
+	if keyA&vlm.leftMask == 0 {
+		f(a, nil)
+		b := (*valuesLocStore)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vlm.b))))
+		if b == nil {
+			if int(atomic.LoadInt32(&a.used)) > vlm.splitCount {
+				go vlm.split()
+			}
+		}
+	} else {
+		b := (*valuesLocStore)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vlm.b))))
+		if b != nil {
+			f(b, a)
+		} else {
+			f(a, nil)
 		}
 	}
 	return oldSeq
 }
 
 func (vlm *valuesLocMap) isResizing() bool {
-	vlm.lock.RLock()
+	vlm.resizingLock.RLock()
 	resizing := vlm.resizing
-	c, d := vlm.c, vlm.d
-	vlm.lock.RUnlock()
+	c := (*valuesLocMap)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vlm.c))))
+	d := (*valuesLocMap)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vlm.d))))
+	vlm.resizingLock.RUnlock()
 	return resizing || (c != nil && c.isResizing()) || (d != nil && d.isResizing())
 }
 
@@ -293,79 +324,11 @@ func (vlm *valuesLocMap) gatherStatsHelper(stats *valuesLocMapStats) {
 			stats.depthCounts = append(stats.depthCounts, 1)
 		}
 	}
-	vlm.lock.RLock()
-	a := vlm.a
-	b := vlm.b
-	c := vlm.c
-	d := vlm.d
-	for _, s := range []*valuesLocStore{a, b} {
-		if s != nil {
-			if stats.buckets == 0 {
-				stats.buckets = uint64(len(s.buckets))
-				stats.bucketCounts = make([]uint64, len(s.buckets))
-			}
-			stats.wg.Add(1)
-			go func(s *valuesLocStore) {
-				var bucketCounts []uint64
-				var pointerLocs uint64
-				var locs uint64
-				var unused uint64
-				var tombs uint64
-				var used uint64
-				var length uint64
-				if stats.extended {
-					bucketCounts = make([]uint64, len(s.buckets))
-				}
-				for bix := len(s.buckets) - 1; bix >= 0; bix-- {
-					lix := bix % len(s.locks)
-					s.locks[lix].RLock()
-					if stats.extended {
-						for item := &s.buckets[bix]; item != nil; item = item.next {
-							bucketCounts[bix]++
-							if item.next != nil {
-								pointerLocs++
-							}
-							locs++
-							switch item.blockID {
-							case _VALUESBLOCK_UNUSED:
-								unused++
-							case _VALUESBLOCK_TOMB:
-								tombs++
-							default:
-								used++
-								length += uint64(item.length)
-							}
-						}
-					} else {
-						for item := &s.buckets[bix]; item != nil; item = item.next {
-							if item.blockID >= _VALUESBLOCK_IDOFFSET {
-								used++
-								length += uint64(item.length)
-							}
-						}
-					}
-					s.locks[lix].RUnlock()
-				}
-				if stats.extended {
-					atomic.AddUint64(&stats.storages, 1)
-					for bix := 0; bix < len(bucketCounts); bix++ {
-						atomic.AddUint64(&stats.bucketCounts[bix], bucketCounts[bix])
-					}
-					atomic.AddUint64(&stats.pointerLocs, pointerLocs)
-					atomic.AddUint64(&stats.locs, locs)
-					atomic.AddUint64(&stats.unused, unused)
-					atomic.AddUint64(&stats.tombs, tombs)
-				}
-				atomic.AddUint64(&stats.used, used)
-				atomic.AddUint64(&stats.length, length)
-				stats.wg.Done()
-			}(s)
-		}
-	}
-	vlm.lock.RUnlock()
-	if stats.extended {
-		depthOrig := stats.depth
-		if c != nil {
+	c := (*valuesLocMap)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vlm.c))))
+	if c != nil {
+		d := (*valuesLocMap)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vlm.d))))
+		if stats.extended {
+			depthOrig := stats.depth
 			c.gatherStatsHelper(stats)
 			depthC := stats.depth
 			stats.depth = depthOrig
@@ -373,12 +336,81 @@ func (vlm *valuesLocMap) gatherStatsHelper(stats *valuesLocMapStats) {
 			if depthC > stats.depth {
 				stats.depth = depthC
 			}
-		}
-	} else {
-		if c != nil {
+		} else {
 			c.gatherStatsHelper(stats)
 			d.gatherStatsHelper(stats)
 		}
+		return
+	}
+	f := func(s *valuesLocStore) {
+		if stats.buckets == 0 {
+			stats.buckets = uint64(len(s.buckets))
+			stats.bucketCounts = make([]uint64, len(s.buckets))
+		}
+		stats.wg.Add(1)
+		go func() {
+			var bucketCounts []uint64
+			var pointerLocs uint64
+			var locs uint64
+			var unused uint64
+			var tombs uint64
+			var used uint64
+			var length uint64
+			if stats.extended {
+				bucketCounts = make([]uint64, len(s.buckets))
+			}
+			for bix := len(s.buckets) - 1; bix >= 0; bix-- {
+				lix := bix % len(s.locks)
+				s.locks[lix].RLock()
+				if stats.extended {
+					for item := &s.buckets[bix]; item != nil; item = item.next {
+						bucketCounts[bix]++
+						if item.next != nil {
+							pointerLocs++
+						}
+						locs++
+						switch item.blockID {
+						case _VALUESBLOCK_UNUSED:
+							unused++
+						case _VALUESBLOCK_TOMB:
+							tombs++
+						default:
+							used++
+							length += uint64(item.length)
+						}
+					}
+				} else {
+					for item := &s.buckets[bix]; item != nil; item = item.next {
+						if item.blockID >= _VALUESBLOCK_IDOFFSET {
+							used++
+							length += uint64(item.length)
+						}
+					}
+				}
+				s.locks[lix].RUnlock()
+			}
+			if stats.extended {
+				atomic.AddUint64(&stats.storages, 1)
+				for bix := 0; bix < len(bucketCounts); bix++ {
+					atomic.AddUint64(&stats.bucketCounts[bix], bucketCounts[bix])
+				}
+				atomic.AddUint64(&stats.pointerLocs, pointerLocs)
+				atomic.AddUint64(&stats.locs, locs)
+				atomic.AddUint64(&stats.unused, unused)
+				atomic.AddUint64(&stats.tombs, tombs)
+			}
+			atomic.AddUint64(&stats.used, used)
+			atomic.AddUint64(&stats.length, length)
+			stats.wg.Done()
+		}()
+	}
+	a := (*valuesLocStore)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vlm.a))))
+	if a != nil {
+		f(a)
+	}
+	b := (*valuesLocStore)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vlm.b))))
+	if b != nil {
+		f(b)
 	}
 }
 
@@ -427,109 +459,122 @@ func (stats *valuesLocMapStats) String() string {
 }
 
 func (vlm *valuesLocMap) split() {
-	if vlm.resizing {
-		return
-	}
-	vlm.lock.Lock()
-	a := vlm.a
-	b := vlm.b
-	if vlm.resizing || a == nil || b != nil || int(atomic.LoadInt32(&a.used)) < vlm.splitCount {
-		vlm.lock.Unlock()
+	vlm.resizingLock.Lock()
+	a := (*valuesLocStore)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vlm.a))))
+	c := (*valuesLocMap)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vlm.c))))
+	if vlm.resizing || c != nil || int(atomic.LoadInt32(&a.used)) < vlm.splitCount {
+		vlm.resizingLock.Unlock()
 		return
 	}
 	vlm.resizing = true
-	vlm.lock.Unlock()
-	b = &valuesLocStore{
+	vlm.resizingLock.Unlock()
+	b := &valuesLocStore{
 		buckets: make([]valueLoc, len(a.buckets)),
 		locks:   make([]sync.RWMutex, len(a.locks)),
 	}
-	vlm.lock.Lock()
-	vlm.b = b
-	vlm.lock.Unlock()
+	atomic.StorePointer((*unsafe.Pointer)(unsafe.Pointer(&vlm.b)), unsafe.Pointer(b))
 	wg := &sync.WaitGroup{}
-	wg.Add(vlm.cores)
-	for core := 0; core < vlm.cores; core++ {
-		go func(coreOffset int) {
-			clean := false
-			for !clean {
-				clean = true
-				for bix := len(a.buckets) - 1 - coreOffset; bix >= 0; bix -= vlm.cores {
-					lix := bix % len(a.locks)
-					b.locks[lix].Lock()
-					a.locks[lix].Lock()
-				NEXT_ITEM_A:
-					for itemA := &a.buckets[bix]; itemA != nil; itemA = itemA.next {
-						if itemA.blockID == _VALUESBLOCK_UNUSED || itemA.keyA&vlm.leftMask == 0 {
-							continue
+	var copies uint32
+	var clears uint32
+	f := func(coreOffset int, clear bool) {
+		for bix := len(a.buckets) - 1 - coreOffset; bix >= 0; bix -= vlm.cores {
+			lix := bix % len(a.locks)
+			b.locks[lix].Lock()
+			a.locks[lix].Lock()
+		NEXT_ITEM_A:
+			for itemA := &a.buckets[bix]; itemA != nil; itemA = itemA.next {
+				if itemA.blockID == _VALUESBLOCK_UNUSED || itemA.keyA&vlm.leftMask == 0 {
+					continue
+				}
+				var unusedItemB *valueLoc
+				for itemB := &b.buckets[bix]; itemB != nil; itemB = itemB.next {
+					if itemB.blockID == _VALUESBLOCK_UNUSED {
+						if unusedItemB == nil {
+							unusedItemB = itemB
 						}
-						clean = false
-						var unusedItemB *valueLoc
-						for itemB := &b.buckets[bix]; itemB != nil; itemB = itemB.next {
-							if itemB.blockID == _VALUESBLOCK_UNUSED {
-								if unusedItemB == nil {
-									unusedItemB = itemB
-								}
-								continue
-							}
-							if itemA.keyA == itemB.keyA && itemA.keyB == itemB.keyB {
-								if itemA.seq > itemB.seq {
-									itemB.keyA = itemA.keyA
-									itemB.keyB = itemA.keyB
-									itemB.seq = itemA.seq
-									itemB.blockID = itemA.blockID
-									itemB.offset = itemA.offset
-									itemB.length = itemA.length
-								}
-								atomic.AddInt32(&a.used, -1)
-								itemA.blockID = _VALUESBLOCK_UNUSED
-								continue NEXT_ITEM_A
-							}
-						}
-						atomic.AddInt32(&b.used, 1)
-						if unusedItemB != nil {
-							unusedItemB.keyA = itemA.keyA
-							unusedItemB.keyB = itemA.keyB
-							unusedItemB.seq = itemA.seq
-							unusedItemB.blockID = itemA.blockID
-							unusedItemB.offset = itemA.offset
-							unusedItemB.length = itemA.length
-						} else {
-							b.buckets[bix].next = &valueLoc{
-								next:    b.buckets[bix].next,
-								keyA:    itemA.keyA,
-								keyB:    itemA.keyB,
-								seq:     itemA.seq,
-								blockID: itemA.blockID,
-								offset:  itemA.offset,
-								length:  itemA.length,
-							}
-						}
-						atomic.AddInt32(&a.used, -1)
-						itemA.blockID = _VALUESBLOCK_UNUSED
+						continue
 					}
-					a.locks[lix].Unlock()
-					b.locks[lix].Unlock()
+					if itemA.keyA == itemB.keyA && itemA.keyB == itemB.keyB {
+						if itemA.seq > itemB.seq {
+							itemB.keyA = itemA.keyA
+							itemB.keyB = itemA.keyB
+							itemB.seq = itemA.seq
+							itemB.blockID = itemA.blockID
+							itemB.offset = itemA.offset
+							itemB.length = itemA.length
+							atomic.AddUint32(&copies, 1)
+						}
+						if clear {
+							atomic.AddInt32(&a.used, -1)
+							itemA.blockID = _VALUESBLOCK_UNUSED
+							atomic.AddUint32(&clears, 1)
+						}
+						continue NEXT_ITEM_A
+					}
+				}
+				atomic.AddInt32(&b.used, 1)
+				if unusedItemB != nil {
+					unusedItemB.keyA = itemA.keyA
+					unusedItemB.keyB = itemA.keyB
+					unusedItemB.seq = itemA.seq
+					unusedItemB.blockID = itemA.blockID
+					unusedItemB.offset = itemA.offset
+					unusedItemB.length = itemA.length
+				} else {
+					b.buckets[bix].next = &valueLoc{
+						next:    b.buckets[bix].next,
+						keyA:    itemA.keyA,
+						keyB:    itemA.keyB,
+						seq:     itemA.seq,
+						blockID: itemA.blockID,
+						offset:  itemA.offset,
+						length:  itemA.length,
+					}
+				}
+				atomic.AddUint32(&copies, 1)
+				if clear {
+					atomic.AddInt32(&a.used, -1)
+					itemA.blockID = _VALUESBLOCK_UNUSED
+					atomic.AddUint32(&clears, 1)
 				}
 			}
-			wg.Done()
-		}(core)
+			a.locks[lix].Unlock()
+			b.locks[lix].Unlock()
+		}
+		wg.Done()
 	}
-	wg.Wait()
-	vlm.lock.Lock()
-	vlm.a = nil
-	vlm.b = nil
-	vlm.c = &valuesLocMap{
+	for passes := 0; passes < 2 || copies > 0; passes++ {
+		copies = 0
+		wg.Add(vlm.cores)
+		for core := 0; core < vlm.cores; core++ {
+			go f(core, false)
+		}
+		wg.Wait()
+	}
+	for passes := 0; passes < 2 || copies > 0 || clears > 0; passes++ {
+		copies = 0
+		clears = 0
+		wg.Add(vlm.cores)
+		for core := 0; core < vlm.cores; core++ {
+			go f(core, true)
+		}
+		wg.Wait()
+	}
+	newVLM := &valuesLocMap{
 		leftMask:   vlm.leftMask >> 1,
-		a:          a,
 		cores:      vlm.cores,
 		splitCount: vlm.splitCount,
 	}
-	vlm.d = &valuesLocMap{
+	atomic.StorePointer((*unsafe.Pointer)(unsafe.Pointer(&newVLM.a)), unsafe.Pointer(b))
+	atomic.StorePointer((*unsafe.Pointer)(unsafe.Pointer(&vlm.d)), unsafe.Pointer(newVLM))
+	newVLM = &valuesLocMap{
 		leftMask:   vlm.leftMask >> 1,
-		a:          b,
 		cores:      vlm.cores,
 		splitCount: vlm.splitCount,
 	}
+	atomic.StorePointer((*unsafe.Pointer)(unsafe.Pointer(&newVLM.a)), unsafe.Pointer(a))
+	atomic.StorePointer((*unsafe.Pointer)(unsafe.Pointer(&vlm.c)), unsafe.Pointer(newVLM))
+	vlm.resizingLock.Lock()
 	vlm.resizing = false
-	vlm.lock.Unlock()
+	vlm.resizingLock.Unlock()
 }

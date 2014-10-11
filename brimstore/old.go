@@ -18,7 +18,7 @@ const VALUE_SIZE = 128
 func old() {
 	seed := int64(1)
 	bytesPerValue := VALUE_SIZE
-	targetBytes := 32 * 1024 * 1024 * 1024
+	targetBytes := 64 * 1024 * 1024 * 1024
 	cores := runtime.GOMAXPROCS(0)
 	if os.Getenv("GOMAXPROCS") == "" {
 		runtime.GOMAXPROCS(runtime.NumCPU())
