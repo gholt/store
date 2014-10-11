@@ -148,6 +148,10 @@ func (vlm *valuesLocMap) get(keyA uint64, keyB uint64) (uint64, uint16, uint32, 
 			f(b, a)
 		} else {
 			f(a, nil)
+			b := (*valuesLocStore)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vlm.b))))
+			if b != nil {
+				f(b, a)
+			}
 		}
 	}
 	return seq, blockID, offset, length
