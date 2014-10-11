@@ -86,27 +86,30 @@ func readValues(vs *brimstore.ValuesStore, keys [][]byte, buffers [][]byte, clie
 	wg := &sync.WaitGroup{}
 	wg.Add(clients)
 	for i := 0; i < clients; i++ {
-		go func(keys []byte, buffer []byte) {
-			var err error
-			var v []byte
-			var vl uint64
-			for o := 0; o < len(keys); o += 16 {
-				_, v, err = vs.ReadValue(binary.BigEndian.Uint64(keys[o:]), binary.BigEndian.Uint64(keys[o+8:]), buffer[:0])
-				if err != nil {
-					panic(err)
-				} else if len(v) > 10 && !bytes.Equal(v[:10], start) {
-					panic("bad start to value")
-				} else if len(v) > 20 && !bytes.Equal(v[len(v)-10:], stop) {
-					panic("bad stop to value")
-				} else {
-					vl += uint64(len(v))
+		go func(client int) {
+			f := func(keys []byte) {
+				var vl uint64
+				for o := 0; o < len(keys); o += 16 {
+					_, v, err := vs.ReadValue(binary.BigEndian.Uint64(keys[o:]), binary.BigEndian.Uint64(keys[o+8:]), buffers[client][:0])
+					if err != nil {
+						panic(err)
+					} else if len(v) > 10 && !bytes.Equal(v[:10], start) {
+						panic("bad start to value")
+					} else if len(v) > 20 && !bytes.Equal(v[len(v)-10:], stop) {
+						panic("bad stop to value")
+					} else {
+						vl += uint64(len(v))
+					}
+				}
+				if vl > 0 {
+					atomic.AddUint64(&valuesLength, vl)
 				}
 			}
-			if vl > 0 {
-				atomic.AddUint64(&valuesLength, vl)
-			}
+			keysSplit := len(keys[client]) / 16 / clients * client * 16
+			f(keys[client][:keysSplit])
+			f(keys[client][keysSplit:])
 			wg.Done()
-		}(keys[i], buffers[i])
+		}(i)
 	}
 	wg.Wait()
 	return atomic.LoadUint64(&valuesLength)

@@ -109,9 +109,6 @@ func NewValuesStoreOpts(envPrefix string) *ValuesStoreOpts {
 	}
 	if opts.ValuesFileReaders <= 0 {
 		opts.ValuesFileReaders = opts.Cores
-		if opts.Cores > 8 {
-			opts.ValuesFileReaders = 8
-		}
 	}
 	if env := os.Getenv(envPrefix + "CHECKSUM_INTERVAL"); env != "" {
 		if val, err := strconv.Atoi(env); err == nil {
