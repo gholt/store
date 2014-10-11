@@ -31,6 +31,9 @@ lookup n s	Looks up n random values seeded with s.`)
 		cores = runtime.GOMAXPROCS(0)
 	}
 	clients := cores * cores
+	if clients < 50 {
+		clients = 50
+	}
 	keys := createKeys(seed, clients, values)
 	var st runtime.MemStats
 	runtime.ReadMemStats(&st)

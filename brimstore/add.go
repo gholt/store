@@ -42,6 +42,9 @@ add n s q z	Adds n random values seeded with s using sequence number q and
 		cores = runtime.GOMAXPROCS(0)
 	}
 	clients := cores * cores
+	if clients < 50 {
+		clients = 50
+	}
 	keys := createKeys(seed, clients, values)
 	value := make([]byte, length)
 	brimutil.NewSeededScrambled(int64(seed)).Read(value)

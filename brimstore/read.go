@@ -31,6 +31,9 @@ read n s	Reads n random values seeded with s.`)
 		cores = runtime.GOMAXPROCS(0)
 	}
 	clients := cores * cores
+	if clients < 50 {
+		clients = 50
+	}
 	keys := createKeys(seed, clients, values)
 	buffers := make([][]byte, clients)
 	for i := 0; i < clients; i++ {
