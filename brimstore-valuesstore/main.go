@@ -147,7 +147,7 @@ func lookup() {
 			}
 			var m uint64
 			for o := 0; o < len(keys); o += 16 {
-				_, _, err = opts.vs.LookupValue(binary.BigEndian.Uint64(keys[o:]), binary.BigEndian.Uint64(keys[o+8:]))
+				_, _, err = opts.vs.Lookup(binary.BigEndian.Uint64(keys[o:]), binary.BigEndian.Uint64(keys[o+8:]))
 				if err == brimstore.ErrValueNotFound {
 					m++
 				} else if err != nil {
@@ -182,7 +182,7 @@ func read() {
 				var vl uint64
 				var m uint64
 				for o := 0; o < len(keys); o += 16 {
-					_, v, err := opts.vs.ReadValue(binary.BigEndian.Uint64(keys[o:]), binary.BigEndian.Uint64(keys[o+8:]), opts.buffers[client][:0])
+					_, v, err := opts.vs.Read(binary.BigEndian.Uint64(keys[o:]), binary.BigEndian.Uint64(keys[o+8:]), opts.buffers[client][:0])
 					if err == brimstore.ErrValueNotFound {
 						m++
 					} else if err != nil {
@@ -239,7 +239,7 @@ func write() {
 				keys = opts.keyspace[numberPer*client*16 : numberPer*(client+1)*16]
 			}
 			for o := 0; o < len(keys); o += 16 {
-				if oldSeq, err := opts.vs.WriteValue(binary.BigEndian.Uint64(keys[o:]), binary.BigEndian.Uint64(keys[o+8:]), opts.Sequence, opts.value); err != nil {
+				if oldSeq, err := opts.vs.Write(binary.BigEndian.Uint64(keys[o:]), binary.BigEndian.Uint64(keys[o+8:]), opts.Sequence, opts.value); err != nil {
 					panic(err)
 				} else if oldSeq > opts.Sequence {
 					panic(fmt.Sprintf("%d > %d\n", oldSeq, opts.Sequence))
@@ -250,5 +250,5 @@ func write() {
 	}
 	wg.Wait()
 	dur := time.Now().Sub(begin)
-	fmt.Printf("%s %.0f/s %0.2fG/s to add %d values\n", dur, float64(opts.Number)/(float64(dur)/float64(time.Second)), float64(opts.Number*opts.Length)/(float64(dur)/float64(time.Second))/1024/1024/1024, opts.Number)
+	fmt.Printf("%s %.0f/s %0.2fG/s to write %d values\n", dur, float64(opts.Number)/(float64(dur)/float64(time.Second)), float64(opts.Number*opts.Length)/(float64(dur)/float64(time.Second))/1024/1024/1024, opts.Number)
 }

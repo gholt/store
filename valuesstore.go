@@ -265,8 +265,8 @@ func (vs *ValuesStore) Close() {
 	}
 }
 
-// LookupValue will return seq, length, err for keyA, keyB.
-func (vs *ValuesStore) LookupValue(keyA uint64, keyB uint64) (uint64, uint32, error) {
+// Lookup will return seq, length, err for keyA, keyB.
+func (vs *ValuesStore) Lookup(keyA uint64, keyB uint64) (uint64, uint32, error) {
 	seq, id, _, length := vs.vlm.get(keyA, keyB)
 	if id < _VALUESBLOCK_IDOFFSET {
 		return 0, 0, ErrValueNotFound
@@ -274,20 +274,20 @@ func (vs *ValuesStore) LookupValue(keyA uint64, keyB uint64) (uint64, uint32, er
 	return seq, length, nil
 }
 
-// ReadValue will return seq, value, err for keyA, keyB; if an incoming value
+// Read will return seq, value, err for keyA, keyB; if an incoming value
 // is provided, the read value will be appended to it and the whole returned
 // (useful to reuse an existing []byte).
-func (vs *ValuesStore) ReadValue(keyA uint64, keyB uint64, value []byte) (uint64, []byte, error) {
+func (vs *ValuesStore) Read(keyA uint64, keyB uint64, value []byte) (uint64, []byte, error) {
 	seq, id, offset, length := vs.vlm.get(keyA, keyB)
 	if id < _VALUESBLOCK_IDOFFSET {
 		return 0, value, ErrValueNotFound
 	}
-	return vs.valuesLocBlock(id).readValue(keyA, keyB, seq, offset, length, value)
+	return vs.valuesLocBlock(id).read(keyA, keyB, seq, offset, length, value)
 }
 
-// WriteValue stores seq, value for keyA, keyB or returns any error; a newer
+// Write stores seq, value for keyA, keyB or returns any error; a newer
 // seq already in place is not reported as an error.
-func (vs *ValuesStore) WriteValue(keyA uint64, keyB uint64, seq uint64, value []byte) (uint64, error) {
+func (vs *ValuesStore) Write(keyA uint64, keyB uint64, seq uint64, value []byte) (uint64, error) {
 	i := int(keyA>>1) % len(vs.freeVWRChans)
 	vwr := <-vs.freeVWRChans[i]
 	vwr.keyA = keyA
@@ -779,7 +779,7 @@ type valueWriteReq struct {
 
 type valuesLocBlock interface {
 	timestamp() int64
-	readValue(keyA uint64, keyB uint64, seq uint64, offset uint32, length uint32, value []byte) (uint64, []byte, error)
+	read(keyA uint64, keyB uint64, seq uint64, offset uint32, length uint32, value []byte) (uint64, []byte, error)
 }
 
 type ValuesStoreStats struct {
