@@ -121,12 +121,12 @@ func (vf *valuesFile) write(vm *valuesMem) {
 	if vm == nil {
 		return
 	}
+	vm.vfID = vf.id
+	vm.vfOffset = atomic.LoadUint32(&vf.atOffset)
 	if len(vm.values) < 1 {
 		vf.vs.freeableVMChan <- vm
 		return
 	}
-	vm.vfID = vf.id
-	vm.vfOffset = atomic.LoadUint32(&vf.atOffset)
 	left := len(vm.values)
 	for left > 0 {
 		n := copy(vf.buf.buf[vf.buf.offset:vf.vs.checksumInterval], vm.values[len(vm.values)-left:])
