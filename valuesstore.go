@@ -327,9 +327,10 @@ func (vs *ValuesStore) Close() {
 
 // Lookup will return timestamp, length, err for keyA, keyB.
 //
-// Note that err == ErrValueNotFound with timestamp == 0 indicates keyA, keyB was not
-// known at all whereas err == ErrValueNotFound with timestamp != 0 (also timestamp & 1 ==
-// 1) indicates keyA, keyB was known and had a deletion marker (aka tombstone).
+// Note that err == ErrValueNotFound with timestamp == 0 indicates keyA, keyB
+// was not known at all whereas err == ErrValueNotFound with timestamp != 0
+// (also timestamp & 1 == 1) indicates keyA, keyB was known and had a deletion
+// marker (aka tombstone).
 //
 // This may be called even after Close.
 func (vs *ValuesStore) Lookup(keyA uint64, keyB uint64) (uint64, uint32, error) {
@@ -340,13 +341,14 @@ func (vs *ValuesStore) Lookup(keyA uint64, keyB uint64) (uint64, uint32, error) 
 	return timestamp, length, nil
 }
 
-// Read will return timestamp, value, err for keyA, keyB; if an incoming value is
-// provided, the read value will be appended to it and the whole returned
+// Read will return timestamp, value, err for keyA, keyB; if an incoming value
+// is provided, the read value will be appended to it and the whole returned
 // (useful to reuse an existing []byte).
 //
-// Note that err == ErrValueNotFound with timestamp == 0 indicates keyA, keyB was not
-// known at all whereas err == ErrValueNotFound with timestamp != 0 (also timestamp & 1 ==
-// 1) indicates keyA, keyB was known and had a deletion marker (aka tombstone).
+// Note that err == ErrValueNotFound with timestamp == 0 indicates keyA, keyB
+// was not known at all whereas err == ErrValueNotFound with timestamp != 0
+// (also timestamp & 1 == 1) indicates keyA, keyB was known and had a deletion
+// marker (aka tombstone).
 //
 // This may be called even after Close.
 func (vs *ValuesStore) Read(keyA uint64, keyB uint64, value []byte) (uint64, []byte, error) {
@@ -357,9 +359,9 @@ func (vs *ValuesStore) Read(keyA uint64, keyB uint64, value []byte) (uint64, []b
 	return vs.valuesLocBlock(id).read(keyA, keyB, timestamp, offset, length, value)
 }
 
-// Write stores timestamp & 0xfffffffffffffffe (lowest bit zeroed), value for keyA,
-// keyB or returns any error; a newer timestamp already in place is not reported as
-// an error.
+// Write stores timestamp & 0xfffffffffffffffe (lowest bit zeroed), value for
+// keyA, keyB or returns any error; a newer timestamp already in place is not
+// reported as an error.
 //
 // This may no longer be called after Close.
 func (vs *ValuesStore) Write(keyA uint64, keyB uint64, timestamp uint64, value []byte) (uint64, error) {
@@ -377,8 +379,8 @@ func (vs *ValuesStore) Write(keyA uint64, keyB uint64, timestamp uint64, value [
 	return oldTimestamp, err
 }
 
-// Delete stores timestamp | 1 for keyA, keyB or returns any error; a newer timestamp
-// already in place is not reported as an error.
+// Delete stores timestamp | 1 for keyA, keyB or returns any error; a newer
+// timestamp already in place is not reported as an error.
 //
 // This may no longer be called after Close.
 func (vs *ValuesStore) Delete(keyA uint64, keyB uint64, timestamp uint64) (uint64, error) {
