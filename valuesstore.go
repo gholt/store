@@ -79,7 +79,7 @@ type ValuesStoreOpts struct {
 	// closing it and opening a new file. This also caps the size of the TOC
 	// files (Table of Contents of what is contained within a values file), but
 	// usually the TOC files are smaller than the values files unless the
-	// average value size is very small.
+	// average value size is very small or there are a lot of deletes.
 	ValuesFileSize int
 	// ValuesFileReaders controls how many times an individual values file is
 	// opened for reading. A higher number will allow more concurrent reads,
