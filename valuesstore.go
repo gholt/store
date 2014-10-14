@@ -268,74 +268,74 @@ func (vs *ValuesStore) Close() {
 	}
 }
 
-// Lookup will return seq, length, err for keyA, keyB.
+// Lookup will return timestamp, length, err for keyA, keyB.
 //
-// Note that err == ErrValueNotFound with seq == 0 indicates keyA, keyB was not
-// known at all whereas err == ErrValueNotFound with seq != 0 (also seq & 1 ==
+// Note that err == ErrValueNotFound with timestamp == 0 indicates keyA, keyB was not
+// known at all whereas err == ErrValueNotFound with timestamp != 0 (also timestamp & 1 ==
 // 1) indicates keyA, keyB was known and had a deletion marker (aka tombstone).
 //
 // This may be called even after Close.
 func (vs *ValuesStore) Lookup(keyA uint64, keyB uint64) (uint64, uint32, error) {
-	seq, id, _, length := vs.vlm.get(keyA, keyB)
-	if id == 0 || seq&1 == 1 {
-		return seq, 0, ErrValueNotFound
+	timestamp, id, _, length := vs.vlm.get(keyA, keyB)
+	if id == 0 || timestamp&1 == 1 {
+		return timestamp, 0, ErrValueNotFound
 	}
-	return seq, length, nil
+	return timestamp, length, nil
 }
 
-// Read will return seq, value, err for keyA, keyB; if an incoming value is
+// Read will return timestamp, value, err for keyA, keyB; if an incoming value is
 // provided, the read value will be appended to it and the whole returned
 // (useful to reuse an existing []byte).
 //
-// Note that err == ErrValueNotFound with seq == 0 indicates keyA, keyB was not
-// known at all whereas err == ErrValueNotFound with seq != 0 (also seq & 1 ==
+// Note that err == ErrValueNotFound with timestamp == 0 indicates keyA, keyB was not
+// known at all whereas err == ErrValueNotFound with timestamp != 0 (also timestamp & 1 ==
 // 1) indicates keyA, keyB was known and had a deletion marker (aka tombstone).
 //
 // This may be called even after Close.
 func (vs *ValuesStore) Read(keyA uint64, keyB uint64, value []byte) (uint64, []byte, error) {
-	seq, id, offset, length := vs.vlm.get(keyA, keyB)
-	if id == 0 || seq&1 == 1 {
-		return seq, value, ErrValueNotFound
+	timestamp, id, offset, length := vs.vlm.get(keyA, keyB)
+	if id == 0 || timestamp&1 == 1 {
+		return timestamp, value, ErrValueNotFound
 	}
-	return vs.valuesLocBlock(id).read(keyA, keyB, seq, offset, length, value)
+	return vs.valuesLocBlock(id).read(keyA, keyB, timestamp, offset, length, value)
 }
 
-// Write stores seq & 0xfffffffffffffffe (lowest bit zeroed), value for keyA,
-// keyB or returns any error; a newer seq already in place is not reported as
+// Write stores timestamp & 0xfffffffffffffffe (lowest bit zeroed), value for keyA,
+// keyB or returns any error; a newer timestamp already in place is not reported as
 // an error.
 //
 // This may no longer be called after Close.
-func (vs *ValuesStore) Write(keyA uint64, keyB uint64, seq uint64, value []byte) (uint64, error) {
+func (vs *ValuesStore) Write(keyA uint64, keyB uint64, timestamp uint64, value []byte) (uint64, error) {
 	i := int(keyA>>1) % len(vs.freeVWRChans)
 	vwr := <-vs.freeVWRChans[i]
 	vwr.keyA = keyA
 	vwr.keyB = keyB
-	vwr.seq = seq & 0xfffffffffffffffe
+	vwr.timestamp = timestamp & 0xfffffffffffffffe
 	vwr.value = value
 	vs.pendingVWRChans[i] <- vwr
 	err := <-vwr.errChan
-	oldSeq := vwr.seq
+	oldTimestamp := vwr.timestamp
 	vwr.value = nil
 	vs.freeVWRChans[i] <- vwr
-	return oldSeq, err
+	return oldTimestamp, err
 }
 
-// Delete stores seq | 1 for keyA, keyB or returns any error; a newer seq
+// Delete stores timestamp | 1 for keyA, keyB or returns any error; a newer timestamp
 // already in place is not reported as an error.
 //
 // This may no longer be called after Close.
-func (vs *ValuesStore) Delete(keyA uint64, keyB uint64, seq uint64) (uint64, error) {
+func (vs *ValuesStore) Delete(keyA uint64, keyB uint64, timestamp uint64) (uint64, error) {
 	i := int(keyA>>1) % len(vs.freeVWRChans)
 	vwr := <-vs.freeVWRChans[i]
 	vwr.keyA = keyA
 	vwr.keyB = keyB
-	vwr.seq = seq | 1
+	vwr.timestamp = timestamp | 1
 	vwr.value = nil
 	vs.pendingVWRChans[i] <- vwr
 	err := <-vwr.errChan
-	oldSeq := vwr.seq
+	oldTimestamp := vwr.timestamp
 	vs.freeVWRChans[i] <- vwr
-	return oldSeq, err
+	return oldTimestamp, err
 }
 
 // GatherStats returns overall information about the state of the ValuesStore.
@@ -412,13 +412,13 @@ func (vs *ValuesStore) memClearer() {
 			tb = nil
 		}
 		for vmTOCOffset := 0; vmTOCOffset < len(vm.toc); vmTOCOffset += 32 {
-			a := binary.BigEndian.Uint64(vm.toc[vmTOCOffset:])
-			b := binary.BigEndian.Uint64(vm.toc[vmTOCOffset+8:])
-			q := binary.BigEndian.Uint64(vm.toc[vmTOCOffset+16:])
+			keyA := binary.BigEndian.Uint64(vm.toc[vmTOCOffset:])
+			keyB := binary.BigEndian.Uint64(vm.toc[vmTOCOffset+8:])
+			timestamp := binary.BigEndian.Uint64(vm.toc[vmTOCOffset+16:])
 			vmMemOffset := binary.BigEndian.Uint32(vm.toc[vmTOCOffset+24:])
-			z := binary.BigEndian.Uint32(vm.toc[vmTOCOffset+28:])
-			oldSeq := vs.vlm.set(a, b, q, vm.vfID, vm.vfOffset+vmMemOffset, z, true)
-			if oldSeq != q {
+			length := binary.BigEndian.Uint32(vm.toc[vmTOCOffset+28:])
+			oldTimestamp := vs.vlm.set(keyA, keyB, timestamp, vm.vfID, vm.vfOffset+vmMemOffset, length, true)
+			if oldTimestamp != timestamp {
 				continue
 			}
 			if tb != nil && tbOffset+32 > cap(tb) {
@@ -433,11 +433,11 @@ func (vs *ValuesStore) memClearer() {
 				tbOffset = 8
 			}
 			tb = tb[:tbOffset+32]
-			binary.BigEndian.PutUint64(tb[tbOffset:], a)
-			binary.BigEndian.PutUint64(tb[tbOffset+8:], b)
-			binary.BigEndian.PutUint64(tb[tbOffset+16:], q)
+			binary.BigEndian.PutUint64(tb[tbOffset:], keyA)
+			binary.BigEndian.PutUint64(tb[tbOffset+8:], keyB)
+			binary.BigEndian.PutUint64(tb[tbOffset+16:], timestamp)
 			binary.BigEndian.PutUint32(tb[tbOffset+24:], vm.vfOffset+vmMemOffset)
-			binary.BigEndian.PutUint32(tb[tbOffset+28:], z)
+			binary.BigEndian.PutUint32(tb[tbOffset+28:], length)
 			tbOffset += 32
 		}
 		vm.discardLock.Lock()
@@ -463,12 +463,12 @@ func (vs *ValuesStore) memWriter(pendingVWRChan chan *valueWriteReq) {
 			vs.vfVMChan <- nil
 			break
 		}
-		z := len(vwr.value)
-		if z > int(vs.maxValueSize) {
-			vwr.errChan <- fmt.Errorf("value length of %d > %d", z, vs.maxValueSize)
+		length := len(vwr.value)
+		if length > int(vs.maxValueSize) {
+			vwr.errChan <- fmt.Errorf("value length of %d > %d", length, vs.maxValueSize)
 			continue
 		}
-		if vm != nil && (vmTOCOffset+32 > cap(vm.toc) || vmMemOffset+z > cap(vm.values)) {
+		if vm != nil && (vmTOCOffset+32 > cap(vm.toc) || vmMemOffset+length > cap(vm.values)) {
 			vs.vfVMChan <- vm
 			vm = nil
 		}
@@ -478,25 +478,25 @@ func (vs *ValuesStore) memWriter(pendingVWRChan chan *valueWriteReq) {
 			vmMemOffset = 0
 		}
 		vm.discardLock.Lock()
-		vm.values = vm.values[:vmMemOffset+z]
+		vm.values = vm.values[:vmMemOffset+length]
 		vm.discardLock.Unlock()
 		copy(vm.values[vmMemOffset:], vwr.value)
-		oldSeq := vs.vlm.set(vwr.keyA, vwr.keyB, vwr.seq, vm.id, uint32(vmMemOffset), uint32(z), false)
-		if oldSeq < vwr.seq {
+		oldTimestamp := vs.vlm.set(vwr.keyA, vwr.keyB, vwr.timestamp, vm.id, uint32(vmMemOffset), uint32(length), false)
+		if oldTimestamp < vwr.timestamp {
 			vm.toc = vm.toc[:vmTOCOffset+32]
 			binary.BigEndian.PutUint64(vm.toc[vmTOCOffset:], vwr.keyA)
 			binary.BigEndian.PutUint64(vm.toc[vmTOCOffset+8:], vwr.keyB)
-			binary.BigEndian.PutUint64(vm.toc[vmTOCOffset+16:], vwr.seq)
+			binary.BigEndian.PutUint64(vm.toc[vmTOCOffset+16:], vwr.timestamp)
 			binary.BigEndian.PutUint32(vm.toc[vmTOCOffset+24:], uint32(vmMemOffset))
-			binary.BigEndian.PutUint32(vm.toc[vmTOCOffset+28:], uint32(z))
+			binary.BigEndian.PutUint32(vm.toc[vmTOCOffset+28:], uint32(length))
 			vmTOCOffset += 32
-			vmMemOffset += z
+			vmMemOffset += length
 		} else {
 			vm.discardLock.Lock()
 			vm.values = vm.values[:vmMemOffset]
 			vm.discardLock.Unlock()
 		}
-		vwr.seq = oldSeq
+		vwr.timestamp = oldTimestamp
 		vwr.errChan <- nil
 	}
 }
@@ -537,10 +537,10 @@ func (vs *ValuesStore) vfWriter() {
 }
 
 func (vs *ValuesStore) tocWriter() {
-	var tsA uint64
+	var btsA uint64
 	var writerA io.WriteCloser
 	var offsetA uint64
-	var tsB uint64
+	var btsB uint64
 	var writerB io.WriteCloser
 	var offsetB uint64
 	head := []byte("BRIMSTORE VALUESTOC v0          ")
@@ -576,14 +576,14 @@ func (vs *ValuesStore) tocWriter() {
 			continue
 		}
 		if len(t) > 8 {
-			ts := binary.BigEndian.Uint64(t)
-			switch ts {
-			case tsA:
+			bts := binary.BigEndian.Uint64(t)
+			switch bts {
+			case btsA:
 				if _, err := writerA.Write(t[8:]); err != nil {
 					panic(err)
 				}
 				offsetA += uint64(len(t) - 8)
-			case tsB:
+			case btsB:
 				if _, err := writerB.Write(t[8:]); err != nil {
 					panic(err)
 				}
@@ -602,11 +602,11 @@ func (vs *ValuesStore) tocWriter() {
 						panic(err)
 					}
 				}
-				tsB = tsA
+				btsB = btsA
 				writerB = writerA
 				offsetB = offsetA
-				tsA = ts
-				fp, err := os.Create(fmt.Sprintf("%d.valuestoc", ts))
+				btsA = bts
+				fp, err := os.Create(fmt.Sprintf("%d.valuestoc", bts))
 				if err != nil {
 					panic(err)
 				}
@@ -639,12 +639,12 @@ func (vs *ValuesStore) recovery() {
 	fromDiskCount := 0
 	count := int64(0)
 	type writeReq struct {
-		keyA    uint64
-		keyB    uint64
-		seq     uint64
-		blockID uint16
-		offset  uint32
-		length  uint32
+		keyA      uint64
+		keyB      uint64
+		timestamp uint64
+		blockID   uint16
+		offset    uint32
+		length    uint32
 	}
 	pendingChan := make(chan []writeReq, vs.cores)
 	freeChan := make(chan []writeReq, cap(pendingChan)*2)
@@ -662,7 +662,7 @@ func (vs *ValuesStore) recovery() {
 				}
 				for i := len(wrs) - 1; i >= 0; i-- {
 					wr := &wrs[i]
-					if vs.vlm.set(wr.keyA, wr.keyB, wr.seq, wr.blockID, wr.offset, wr.length, false) < wr.seq {
+					if vs.vlm.set(wr.keyA, wr.keyB, wr.timestamp, wr.blockID, wr.offset, wr.length, false) < wr.timestamp {
 						atomic.AddInt64(&count, 1)
 					}
 				}
@@ -679,16 +679,16 @@ func (vs *ValuesStore) recovery() {
 		if !strings.HasSuffix(names[i], ".valuestoc") {
 			continue
 		}
-		ts := int64(0)
-		if ts, err = strconv.ParseInt(names[i][:len(names[i])-len(".valuestoc")], 10, 64); err != nil {
+		bts := int64(0)
+		if bts, err = strconv.ParseInt(names[i][:len(names[i])-len(".valuestoc")], 10, 64); err != nil {
 			log.Printf("bad timestamp name: %#v\n", names[i])
 			continue
 		}
-		if ts == 0 {
+		if bts == 0 {
 			log.Printf("bad timestamp name: %#v\n", names[i])
 			continue
 		}
-		vf := newValuesFile(vs, ts)
+		vf := newValuesFile(vs, bts)
 		fp, err := os.Open(names[i])
 		if err != nil {
 			log.Printf("error opening %s: %s\n", names[i], err)
@@ -746,7 +746,7 @@ func (vs *ValuesStore) recovery() {
 					wr := &wrs[wix]
 					wr.keyA = binary.BigEndian.Uint64(overflow)
 					wr.keyB = binary.BigEndian.Uint64(overflow[8:])
-					wr.seq = binary.BigEndian.Uint64(overflow[16:])
+					wr.timestamp = binary.BigEndian.Uint64(overflow[16:])
 					wr.blockID = vf.id
 					wr.offset = binary.BigEndian.Uint32(overflow[24:])
 					wr.length = binary.BigEndian.Uint32(overflow[28:])
@@ -766,7 +766,7 @@ func (vs *ValuesStore) recovery() {
 					wr := &wrs[wix]
 					wr.keyA = binary.BigEndian.Uint64(buf[i:])
 					wr.keyB = binary.BigEndian.Uint64(buf[i+8:])
-					wr.seq = binary.BigEndian.Uint64(buf[i+16:])
+					wr.timestamp = binary.BigEndian.Uint64(buf[i+16:])
 					wr.blockID = vf.id
 					wr.offset = binary.BigEndian.Uint32(buf[i+24:])
 					wr.length = binary.BigEndian.Uint32(buf[i+28:])
@@ -809,16 +809,16 @@ func (vs *ValuesStore) recovery() {
 }
 
 type valueWriteReq struct {
-	keyA    uint64
-	keyB    uint64
-	seq     uint64
-	value   []byte
-	errChan chan error
+	keyA      uint64
+	keyB      uint64
+	timestamp uint64
+	value     []byte
+	errChan   chan error
 }
 
 type valuesLocBlock interface {
 	timestamp() int64
-	read(keyA uint64, keyB uint64, seq uint64, offset uint32, length uint32, value []byte) (uint64, []byte, error)
+	read(keyA uint64, keyB uint64, timestamp uint64, offset uint32, length uint32, value []byte) (uint64, []byte, error)
 }
 
 type ValuesStoreStats struct {

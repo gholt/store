@@ -16,7 +16,7 @@ import (
 type valuesFile struct {
 	vs           *ValuesStore
 	id           uint16
-	ts           int64
+	bts          int64
 	writerFP     io.WriteCloser
 	atOffset     uint32
 	freeChan     chan *valuesFileWriteBuf
@@ -36,9 +36,9 @@ type valuesFileWriteBuf struct {
 	vms    []*valuesMem
 }
 
-func newValuesFile(vs *ValuesStore, ts int64) *valuesFile {
-	vf := &valuesFile{vs: vs, ts: ts}
-	name := fmt.Sprintf("%d.values", vf.ts)
+func newValuesFile(vs *ValuesStore, bts int64) *valuesFile {
+	vf := &valuesFile{vs: vs, bts: bts}
+	name := fmt.Sprintf("%d.values", vf.bts)
 	vf.readerFPs = make([]brimutil.ChecksummedReader, vs.valuesFileReaders)
 	vf.readerLocks = make([]sync.Mutex, len(vf.readerFPs))
 	vf.readerLens = make([][]byte, len(vf.readerFPs))
@@ -55,8 +55,8 @@ func newValuesFile(vs *ValuesStore, ts int64) *valuesFile {
 }
 
 func createValuesFile(vs *ValuesStore) *valuesFile {
-	vf := &valuesFile{vs: vs, ts: time.Now().UnixNano()}
-	name := fmt.Sprintf("%d.values", vf.ts)
+	vf := &valuesFile{vs: vs, bts: time.Now().UnixNano()}
+	name := fmt.Sprintf("%d.values", vf.bts)
 	fp, err := os.Create(name)
 	if err != nil {
 		panic(err)
@@ -94,12 +94,12 @@ func createValuesFile(vs *ValuesStore) *valuesFile {
 }
 
 func (vf *valuesFile) timestamp() int64 {
-	return vf.ts
+	return vf.bts
 }
 
-func (vf *valuesFile) read(keyA uint64, keyB uint64, seq uint64, offset uint32, length uint32, value []byte) (uint64, []byte, error) {
-	if seq&1 == 1 {
-		return seq, value, ErrValueNotFound
+func (vf *valuesFile) read(keyA uint64, keyB uint64, timestamp uint64, offset uint32, length uint32, value []byte) (uint64, []byte, error) {
+	if timestamp&1 == 1 {
+		return timestamp, value, ErrValueNotFound
 	}
 	i := int(keyA>>1) % len(vf.readerFPs)
 	vf.readerLocks[i].Lock()
@@ -114,10 +114,10 @@ func (vf *valuesFile) read(keyA uint64, keyB uint64, seq uint64, offset uint32, 
 	}
 	if _, err := io.ReadFull(vf.readerFPs[i], value[len(value)-int(length):]); err != nil {
 		vf.readerLocks[i].Unlock()
-		return seq, value, err
+		return timestamp, value, err
 	}
 	vf.readerLocks[i].Unlock()
-	return seq, value, nil
+	return timestamp, value, nil
 }
 
 func (vf *valuesFile) write(vm *valuesMem) {

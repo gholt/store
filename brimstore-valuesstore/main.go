@@ -22,7 +22,7 @@ type optsStruct struct {
 	Length        int    `short:"l" long:"length" description:"Length of values. Default: 0"`
 	Number        int    `short:"n" long:"number" description:"Number of keys. Default: 0"`
 	Random        int    `long:"random" description:"Random number seed. Default: 0"`
-	Sequence      uint64 `long:"sequence" description:"Sequence number. Default: 2 for write, 3 for delete"`
+	Timestamp     uint64 `long:"timestamp" description:"Timestamp value. Default: 2 for write, 3 for delete"`
 	Positional    struct {
 		Tests []string `name:"tests" description:"delete lookup read write"`
 	} `positional-args:"yes"`
@@ -129,7 +129,7 @@ func memstat() {
 
 func delete() {
 	var superseded uint64
-	seq := opts.Sequence | 1
+	timestamp := opts.Timestamp | 1
 	begin := time.Now()
 	wg := &sync.WaitGroup{}
 	wg.Add(opts.Clients)
@@ -145,9 +145,9 @@ func delete() {
 				keys = opts.keyspace[numberPer*client*16 : numberPer*(client+1)*16]
 			}
 			for o := 0; o < len(keys); o += 16 {
-				if oldSeq, err := opts.vs.Delete(binary.BigEndian.Uint64(keys[o:]), binary.BigEndian.Uint64(keys[o+8:]), seq); err != nil {
+				if oldTimestamp, err := opts.vs.Delete(binary.BigEndian.Uint64(keys[o:]), binary.BigEndian.Uint64(keys[o+8:]), timestamp); err != nil {
 					panic(err)
-				} else if oldSeq > seq {
+				} else if oldTimestamp > timestamp {
 					s++
 				}
 			}
@@ -159,7 +159,7 @@ func delete() {
 	}
 	wg.Wait()
 	dur := time.Now().Sub(begin)
-	fmt.Printf("%s %.0f/s to delete %d values (seq %d)\n", dur, float64(opts.Number)/(float64(dur)/float64(time.Second)), opts.Number, seq)
+	fmt.Printf("%s %.0f/s to delete %d values (timestamp %d)\n", dur, float64(opts.Number)/(float64(dur)/float64(time.Second)), opts.Number, timestamp)
 	if superseded > 0 {
 		fmt.Println(superseded, "SUPERCEDED!")
 	}
@@ -184,9 +184,9 @@ func lookup() {
 			var m uint64
 			var d uint64
 			for o := 0; o < len(keys); o += 16 {
-				q, _, err := opts.vs.Lookup(binary.BigEndian.Uint64(keys[o:]), binary.BigEndian.Uint64(keys[o+8:]))
+				timestamp, _, err := opts.vs.Lookup(binary.BigEndian.Uint64(keys[o:]), binary.BigEndian.Uint64(keys[o+8:]))
 				if err == brimstore.ErrValueNotFound {
-					if q == 0 {
+					if timestamp == 0 {
 						m++
 					} else {
 						d++
@@ -231,9 +231,9 @@ func read() {
 				var m uint64
 				var d uint64
 				for o := 0; o < len(keys); o += 16 {
-					q, v, err := opts.vs.Read(binary.BigEndian.Uint64(keys[o:]), binary.BigEndian.Uint64(keys[o+8:]), opts.buffers[client][:0])
+					timestamp, v, err := opts.vs.Read(binary.BigEndian.Uint64(keys[o:]), binary.BigEndian.Uint64(keys[o+8:]), opts.buffers[client][:0])
 					if err == brimstore.ErrValueNotFound {
-						if q == 0 {
+						if timestamp == 0 {
 							m++
 						} else {
 							d++
@@ -285,9 +285,9 @@ func read() {
 
 func write() {
 	var superseded uint64
-	seq := opts.Sequence & 0xfffffffffffffffe
-	if seq == 0 {
-		seq = 2
+	timestamp := opts.Timestamp & 0xfffffffffffffffe
+	if timestamp == 0 {
+		timestamp = 2
 	}
 	begin := time.Now()
 	wg := &sync.WaitGroup{}
@@ -304,9 +304,9 @@ func write() {
 				keys = opts.keyspace[numberPer*client*16 : numberPer*(client+1)*16]
 			}
 			for o := 0; o < len(keys); o += 16 {
-				if oldSeq, err := opts.vs.Write(binary.BigEndian.Uint64(keys[o:]), binary.BigEndian.Uint64(keys[o+8:]), seq, opts.value); err != nil {
+				if oldTimestamp, err := opts.vs.Write(binary.BigEndian.Uint64(keys[o:]), binary.BigEndian.Uint64(keys[o+8:]), timestamp, opts.value); err != nil {
 					panic(err)
-				} else if oldSeq > seq {
+				} else if oldTimestamp > timestamp {
 					s++
 				}
 			}
@@ -318,7 +318,7 @@ func write() {
 	}
 	wg.Wait()
 	dur := time.Now().Sub(begin)
-	fmt.Printf("%s %.0f/s %0.2fG/s to write %d values (seq %d)\n", dur, float64(opts.Number)/(float64(dur)/float64(time.Second)), float64(opts.Number*opts.Length)/(float64(dur)/float64(time.Second))/1024/1024/1024, opts.Number, seq)
+	fmt.Printf("%s %.0f/s %0.2fG/s to write %d values (timestamp %d)\n", dur, float64(opts.Number)/(float64(dur)/float64(time.Second)), float64(opts.Number*opts.Length)/(float64(dur)/float64(time.Second))/1024/1024/1024, opts.Number, timestamp)
 	if superseded > 0 {
 		fmt.Println(superseded, "SUPERCEDED!")
 	}

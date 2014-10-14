@@ -29,13 +29,13 @@ type valuesLocStore struct {
 }
 
 type valueLoc struct {
-	next    *valueLoc
-	keyA    uint64
-	keyB    uint64
-	seq     uint64
-	blockID uint16
-	offset  uint32
-	length  uint32
+	next      *valueLoc
+	keyA      uint64
+	keyB      uint64
+	timestamp uint64
+	blockID   uint16
+	offset    uint32
+	length    uint32
 }
 
 type valuesLocMapStats struct {
@@ -92,7 +92,7 @@ func newValuesLocMap(opts *ValuesStoreOpts) *valuesLocMap {
 }
 
 func (vlm *valuesLocMap) get(keyA uint64, keyB uint64) (uint64, uint16, uint32, uint32) {
-	var seq uint64
+	var timestamp uint64
 	var blockID uint16
 	var offset uint32
 	var length uint32
@@ -118,14 +118,14 @@ func (vlm *valuesLocMap) get(keyA uint64, keyB uint64) (uint64, uint16, uint32, 
 		}
 		for item := &s.buckets[bix]; item != nil; item = item.next {
 			if item.blockID != 0 && item.keyA == keyA && item.keyB == keyB {
-				seq, blockID, offset, length = item.seq, item.blockID, item.offset, item.length
+				timestamp, blockID, offset, length = item.timestamp, item.blockID, item.offset, item.length
 				break
 			}
 		}
 		if fb != nil && blockID == 0 {
 			for item := &fb.buckets[bix]; item != nil; item = item.next {
 				if item.blockID != 0 && item.keyA == keyA && item.keyB == keyB {
-					seq, blockID, offset, length = item.seq, item.blockID, item.offset, item.length
+					timestamp, blockID, offset, length = item.timestamp, item.blockID, item.offset, item.length
 					break
 				}
 			}
@@ -149,11 +149,11 @@ func (vlm *valuesLocMap) get(keyA uint64, keyB uint64) (uint64, uint16, uint32, 
 			}
 		}
 	}
-	return seq, blockID, offset, length
+	return timestamp, blockID, offset, length
 }
 
-func (vlm *valuesLocMap) set(keyA uint64, keyB uint64, seq uint64, blockID uint16, offset uint32, length uint32, evenIfSameSeq bool) uint64 {
-	var oldSeq uint64
+func (vlm *valuesLocMap) set(keyA uint64, keyB uint64, timestamp uint64, blockID uint16, offset uint32, length uint32, evenIfSameTimestamp bool) uint64 {
+	var oldTimestamp uint64
 	for {
 		c := (*valuesLocMap)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vlm.c))))
 		if c == nil {
@@ -169,7 +169,7 @@ func (vlm *valuesLocMap) set(keyA uint64, keyB uint64, seq uint64, blockID uint1
 	bix := keyB % uint64(len(a.buckets))
 	lix := bix % uint64(len(a.locks))
 	f := func(s *valuesLocStore, fb *valuesLocStore) {
-		oldSeq = 0
+		oldTimestamp = 0
 		var sMatch *valueLoc
 		var fbMatch *valueLoc
 		var unusedItem *valueLoc
@@ -202,23 +202,23 @@ func (vlm *valuesLocMap) set(keyA uint64, keyB uint64, seq uint64, blockID uint1
 		}
 		if sMatch != nil {
 			if fbMatch != nil {
-				if sMatch.seq >= fbMatch.seq {
-					oldSeq = sMatch.seq
-					if seq > sMatch.seq || (evenIfSameSeq && seq == sMatch.seq) {
-						sMatch.seq = seq
+				if sMatch.timestamp >= fbMatch.timestamp {
+					oldTimestamp = sMatch.timestamp
+					if timestamp > sMatch.timestamp || (evenIfSameTimestamp && timestamp == sMatch.timestamp) {
+						sMatch.timestamp = timestamp
 						sMatch.blockID = blockID
 						sMatch.offset = offset
 						sMatch.length = length
 					}
 				} else {
-					oldSeq = fbMatch.seq
-					if seq > fbMatch.seq || (evenIfSameSeq && seq == fbMatch.seq) {
-						sMatch.seq = seq
+					oldTimestamp = fbMatch.timestamp
+					if timestamp > fbMatch.timestamp || (evenIfSameTimestamp && timestamp == fbMatch.timestamp) {
+						sMatch.timestamp = timestamp
 						sMatch.blockID = blockID
 						sMatch.offset = offset
 						sMatch.length = length
 					} else {
-						sMatch.seq = fbMatch.seq
+						sMatch.timestamp = fbMatch.timestamp
 						sMatch.blockID = fbMatch.blockID
 						sMatch.offset = fbMatch.offset
 						sMatch.length = fbMatch.length
@@ -227,9 +227,9 @@ func (vlm *valuesLocMap) set(keyA uint64, keyB uint64, seq uint64, blockID uint1
 				atomic.AddInt32(&fb.used, -1)
 				fbMatch.blockID = 0
 			} else {
-				oldSeq = sMatch.seq
-				if seq > sMatch.seq || (evenIfSameSeq && seq == sMatch.seq) {
-					sMatch.seq = seq
+				oldTimestamp = sMatch.timestamp
+				if timestamp > sMatch.timestamp || (evenIfSameTimestamp && timestamp == sMatch.timestamp) {
+					sMatch.timestamp = timestamp
 					sMatch.blockID = blockID
 					sMatch.offset = offset
 					sMatch.length = length
@@ -244,14 +244,14 @@ func (vlm *valuesLocMap) set(keyA uint64, keyB uint64, seq uint64, blockID uint1
 			unusedItem.keyA = keyA
 			unusedItem.keyB = keyB
 			if fbMatch != nil {
-				oldSeq = fbMatch.seq
-				if seq > fbMatch.seq || (evenIfSameSeq && seq == fbMatch.seq) {
-					unusedItem.seq = seq
+				oldTimestamp = fbMatch.timestamp
+				if timestamp > fbMatch.timestamp || (evenIfSameTimestamp && timestamp == fbMatch.timestamp) {
+					unusedItem.timestamp = timestamp
 					unusedItem.blockID = blockID
 					unusedItem.offset = offset
 					unusedItem.length = length
 				} else {
-					unusedItem.seq = fbMatch.seq
+					unusedItem.timestamp = fbMatch.timestamp
 					unusedItem.blockID = fbMatch.blockID
 					unusedItem.offset = fbMatch.offset
 					unusedItem.length = fbMatch.length
@@ -259,7 +259,7 @@ func (vlm *valuesLocMap) set(keyA uint64, keyB uint64, seq uint64, blockID uint1
 				atomic.AddInt32(&fb.used, -1)
 				fbMatch.blockID = 0
 			} else {
-				unusedItem.seq = seq
+				unusedItem.timestamp = timestamp
 				unusedItem.blockID = blockID
 				unusedItem.offset = offset
 				unusedItem.length = length
@@ -286,7 +286,7 @@ func (vlm *valuesLocMap) set(keyA uint64, keyB uint64, seq uint64, blockID uint1
 			f(a, nil)
 		}
 	}
-	return oldSeq
+	return oldTimestamp
 }
 
 func (vlm *valuesLocMap) isResizing() bool {
@@ -373,7 +373,7 @@ func (vlm *valuesLocMap) gatherStatsHelper(stats *valuesLocMapStats) {
 							unused++
 						} else {
 							used++
-							if item.seq&1 == 0 {
+							if item.timestamp&1 == 0 {
 								active++
 								length += uint64(item.length)
 							} else {
@@ -384,7 +384,7 @@ func (vlm *valuesLocMap) gatherStatsHelper(stats *valuesLocMapStats) {
 				} else {
 					for item := &s.buckets[bix]; item != nil; item = item.next {
 						if item.blockID > 0 {
-							if item.seq&1 == 0 {
+							if item.timestamp&1 == 0 {
 								active++
 								length += uint64(item.length)
 							}
@@ -501,10 +501,10 @@ func (vlm *valuesLocMap) split() {
 						continue
 					}
 					if itemA.keyA == itemB.keyA && itemA.keyB == itemB.keyB {
-						if itemA.seq > itemB.seq {
+						if itemA.timestamp > itemB.timestamp {
 							itemB.keyA = itemA.keyA
 							itemB.keyB = itemA.keyB
-							itemB.seq = itemA.seq
+							itemB.timestamp = itemA.timestamp
 							itemB.blockID = itemA.blockID
 							itemB.offset = itemA.offset
 							itemB.length = itemA.length
@@ -522,19 +522,19 @@ func (vlm *valuesLocMap) split() {
 				if unusedItemB != nil {
 					unusedItemB.keyA = itemA.keyA
 					unusedItemB.keyB = itemA.keyB
-					unusedItemB.seq = itemA.seq
+					unusedItemB.timestamp = itemA.timestamp
 					unusedItemB.blockID = itemA.blockID
 					unusedItemB.offset = itemA.offset
 					unusedItemB.length = itemA.length
 				} else {
 					b.buckets[bix].next = &valueLoc{
-						next:    b.buckets[bix].next,
-						keyA:    itemA.keyA,
-						keyB:    itemA.keyB,
-						seq:     itemA.seq,
-						blockID: itemA.blockID,
-						offset:  itemA.offset,
-						length:  itemA.length,
+						next:      b.buckets[bix].next,
+						keyA:      itemA.keyA,
+						keyB:      itemA.keyB,
+						timestamp: itemA.timestamp,
+						blockID:   itemA.blockID,
+						offset:    itemA.offset,
+						length:    itemA.length,
 					}
 				}
 				atomic.AddUint32(&copies, 1)
