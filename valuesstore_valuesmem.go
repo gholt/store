@@ -22,7 +22,7 @@ func (vm *valuesMem) timestamp() int64 {
 func (vm *valuesMem) read(keyA uint64, keyB uint64, seq uint64, offset uint32, length uint32, value []byte) (uint64, []byte, error) {
 	vm.discardLock.RLock()
 	seq, id, offset, length := vm.vs.vlm.get(keyA, keyB)
-	if id < _VALUESBLOCK_IDOFFSET {
+	if id == 0 || seq&1 == 1 {
 		vm.discardLock.RUnlock()
 		return seq, value, ErrValueNotFound
 	}

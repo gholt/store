@@ -22,9 +22,9 @@ type optsStruct struct {
 	Length        int    `short:"l" long:"length" description:"Length of values. Default: 0"`
 	Number        int    `short:"n" long:"number" description:"Number of keys. Default: 0"`
 	Random        int    `long:"random" description:"Random number seed. Default: 0"`
-	Sequence      uint64 `long:"sequence" description:"Sequence number. Default: 1"`
+	Sequence      uint64 `long:"sequence" description:"Sequence number. Default: 2 for write, 3 for delete"`
 	Positional    struct {
-		Tests []string `name:"tests" description:"lookup read write"`
+		Tests []string `name:"tests" description:"delete lookup read write"`
 	} `positional-args:"yes"`
 	keyspace []byte
 	buffers  [][]byte
@@ -46,6 +46,7 @@ func main() {
 	}
 	for _, arg := range opts.Positional.Tests {
 		switch arg {
+		case "delete":
 		case "lookup":
 		case "read":
 		case "write":
@@ -62,9 +63,6 @@ func main() {
 	opts.Cores = runtime.GOMAXPROCS(0)
 	if opts.Clients == 0 {
 		opts.Clients = opts.Cores * opts.Cores
-	}
-	if opts.Sequence < 1 {
-		opts.Sequence = 1
 	}
 	opts.keyspace = make([]byte, opts.Number*16)
 	brimutil.NewSeededScrambled(int64(opts.Random)).Read(opts.keyspace)
@@ -84,8 +82,6 @@ func main() {
 	fmt.Println(opts.Clients, "clients")
 	fmt.Println(opts.Number, "values")
 	fmt.Println(opts.Length, "value length")
-	fmt.Println(opts.Random, "random seed")
-	fmt.Println(opts.Sequence, "sequence number")
 	memstat()
 	begin := time.Now()
 	opts.vs = brimstore.NewValuesStore(nil)
@@ -94,6 +90,8 @@ func main() {
 	memstat()
 	for _, arg := range opts.Positional.Tests {
 		switch arg {
+		case "delete":
+			delete()
 		case "lookup":
 			lookup()
 		case "read":
@@ -129,14 +127,52 @@ func memstat() {
 	fmt.Printf("%0.2fG total alloc, %0.2fG delta\n\n", float64(opts.st.TotalAlloc)/1024/1024/1024, float64(deltaAlloc)/1024/1024/1024)
 }
 
-func lookup() {
-	var missing uint64
+func delete() {
+	var superseded uint64
+	seq := opts.Sequence | 1
 	begin := time.Now()
 	wg := &sync.WaitGroup{}
 	wg.Add(opts.Clients)
 	for i := 0; i < opts.Clients; i++ {
 		go func(client int) {
-			var err error
+			var s uint64
+			number := len(opts.keyspace) / 16
+			numberPer := number / opts.Clients
+			var keys []byte
+			if client == opts.Clients-1 {
+				keys = opts.keyspace[numberPer*client*16:]
+			} else {
+				keys = opts.keyspace[numberPer*client*16 : numberPer*(client+1)*16]
+			}
+			for o := 0; o < len(keys); o += 16 {
+				if oldSeq, err := opts.vs.Delete(binary.BigEndian.Uint64(keys[o:]), binary.BigEndian.Uint64(keys[o+8:]), seq); err != nil {
+					panic(err)
+				} else if oldSeq > seq {
+					s++
+				}
+			}
+			if s > 0 {
+				atomic.AddUint64(&superseded, s)
+			}
+			wg.Done()
+		}(i)
+	}
+	wg.Wait()
+	dur := time.Now().Sub(begin)
+	fmt.Printf("%s %.0f/s to delete %d values (seq %d)\n", dur, float64(opts.Number)/(float64(dur)/float64(time.Second)), opts.Number, seq)
+	if superseded > 0 {
+		fmt.Println(superseded, "SUPERCEDED!")
+	}
+}
+
+func lookup() {
+	var missing uint64
+	var deleted uint64
+	begin := time.Now()
+	wg := &sync.WaitGroup{}
+	wg.Add(opts.Clients)
+	for i := 0; i < opts.Clients; i++ {
+		go func(client int) {
 			number := len(opts.keyspace) / 16
 			numberPer := number / opts.Clients
 			var keys []byte
@@ -146,16 +182,24 @@ func lookup() {
 				keys = opts.keyspace[numberPer*client*16 : numberPer*(client+1)*16]
 			}
 			var m uint64
+			var d uint64
 			for o := 0; o < len(keys); o += 16 {
-				_, _, err = opts.vs.Lookup(binary.BigEndian.Uint64(keys[o:]), binary.BigEndian.Uint64(keys[o+8:]))
+				q, _, err := opts.vs.Lookup(binary.BigEndian.Uint64(keys[o:]), binary.BigEndian.Uint64(keys[o+8:]))
 				if err == brimstore.ErrValueNotFound {
-					m++
+					if q == 0 {
+						m++
+					} else {
+						d++
+					}
 				} else if err != nil {
 					panic(err)
 				}
 			}
 			if m > 0 {
 				atomic.AddUint64(&missing, m)
+			}
+			if d > 0 {
+				atomic.AddUint64(&deleted, d)
 			}
 			wg.Done()
 		}(i)
@@ -166,11 +210,15 @@ func lookup() {
 	if missing > 0 {
 		fmt.Println(missing, "MISSING!")
 	}
+	if deleted > 0 {
+		fmt.Println(deleted, "DELETED!")
+	}
 }
 
 func read() {
 	var valuesLength uint64
 	var missing uint64
+	var deleted uint64
 	start := []byte("START67890")
 	stop := []byte("123456STOP")
 	wg := &sync.WaitGroup{}
@@ -181,10 +229,15 @@ func read() {
 			f := func(keys []byte) {
 				var vl uint64
 				var m uint64
+				var d uint64
 				for o := 0; o < len(keys); o += 16 {
-					_, v, err := opts.vs.Read(binary.BigEndian.Uint64(keys[o:]), binary.BigEndian.Uint64(keys[o+8:]), opts.buffers[client][:0])
+					q, v, err := opts.vs.Read(binary.BigEndian.Uint64(keys[o:]), binary.BigEndian.Uint64(keys[o+8:]), opts.buffers[client][:0])
 					if err == brimstore.ErrValueNotFound {
-						m++
+						if q == 0 {
+							m++
+						} else {
+							d++
+						}
 					} else if err != nil {
 						panic(err)
 					} else if len(v) > 10 && !bytes.Equal(v[:10], start) {
@@ -200,6 +253,9 @@ func read() {
 				}
 				if m > 0 {
 					atomic.AddUint64(&missing, m)
+				}
+				if d > 0 {
+					atomic.AddUint64(&deleted, d)
 				}
 			}
 			number := len(opts.keyspace) / 16
@@ -222,14 +278,23 @@ func read() {
 	if missing > 0 {
 		fmt.Println(missing, "MISSING!")
 	}
+	if deleted > 0 {
+		fmt.Println(deleted, "DELETED!")
+	}
 }
 
 func write() {
+	var superseded uint64
+	seq := opts.Sequence & 0xfffffffffffffffe
+	if seq == 0 {
+		seq = 2
+	}
 	begin := time.Now()
 	wg := &sync.WaitGroup{}
 	wg.Add(opts.Clients)
 	for i := 0; i < opts.Clients; i++ {
 		go func(client int) {
+			var s uint64
 			number := len(opts.keyspace) / 16
 			numberPer := number / opts.Clients
 			var keys []byte
@@ -239,16 +304,22 @@ func write() {
 				keys = opts.keyspace[numberPer*client*16 : numberPer*(client+1)*16]
 			}
 			for o := 0; o < len(keys); o += 16 {
-				if oldSeq, err := opts.vs.Write(binary.BigEndian.Uint64(keys[o:]), binary.BigEndian.Uint64(keys[o+8:]), opts.Sequence, opts.value); err != nil {
+				if oldSeq, err := opts.vs.Write(binary.BigEndian.Uint64(keys[o:]), binary.BigEndian.Uint64(keys[o+8:]), seq, opts.value); err != nil {
 					panic(err)
-				} else if oldSeq > opts.Sequence {
-					panic(fmt.Sprintf("%d > %d\n", oldSeq, opts.Sequence))
+				} else if oldSeq > seq {
+					s++
 				}
+			}
+			if s > 0 {
+				atomic.AddUint64(&superseded, s)
 			}
 			wg.Done()
 		}(i)
 	}
 	wg.Wait()
 	dur := time.Now().Sub(begin)
-	fmt.Printf("%s %.0f/s %0.2fG/s to write %d values\n", dur, float64(opts.Number)/(float64(dur)/float64(time.Second)), float64(opts.Number*opts.Length)/(float64(dur)/float64(time.Second))/1024/1024/1024, opts.Number)
+	fmt.Printf("%s %.0f/s %0.2fG/s to write %d values (seq %d)\n", dur, float64(opts.Number)/(float64(dur)/float64(time.Second)), float64(opts.Number*opts.Length)/(float64(dur)/float64(time.Second))/1024/1024/1024, opts.Number, seq)
+	if superseded > 0 {
+		fmt.Println(superseded, "SUPERCEDED!")
+	}
 }

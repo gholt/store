@@ -199,8 +199,7 @@ func NewValuesStore(opts *ValuesStoreOpts) *ValuesStore {
 		memValuesPageSize = math.MaxUint32
 	}
 	vs := &ValuesStore{
-		valuesLocBlocks:       make([]valuesLocBlock, 65536),
-		atValuesLocBlocksIDer: _VALUESBLOCK_IDOFFSET - 1,
+		valuesLocBlocks:   make([]valuesLocBlock, 65536),
 		vlm:               newValuesLocMap(opts),
 		cores:             cores,
 		maxValueSize:      uint32(maxValueSize),
@@ -251,10 +250,14 @@ func NewValuesStore(opts *ValuesStoreOpts) *ValuesStore {
 	return vs
 }
 
+// MaxValueSize returns the maximum length of a value the ValuesStore can
+// accept.
 func (vs *ValuesStore) MaxValueSize() uint32 {
 	return vs.maxValueSize
 }
 
+// Close shuts down all background processing and the ValuesStore will refuse
+// any additional writes; reads may still occur.
 func (vs *ValuesStore) Close() {
 	for _, c := range vs.pendingVWRChans {
 		c <- nil
@@ -266,33 +269,48 @@ func (vs *ValuesStore) Close() {
 }
 
 // Lookup will return seq, length, err for keyA, keyB.
+//
+// Note that err == ErrValueNotFound with seq == 0 indicates keyA, keyB was not
+// known at all whereas err == ErrValueNotFound with seq != 0 (also seq & 1 ==
+// 1) indicates keyA, keyB was known and had a deletion marker (aka tombstone).
+//
+// This may be called even after Close.
 func (vs *ValuesStore) Lookup(keyA uint64, keyB uint64) (uint64, uint32, error) {
 	seq, id, _, length := vs.vlm.get(keyA, keyB)
-	if id < _VALUESBLOCK_IDOFFSET {
-		return 0, 0, ErrValueNotFound
+	if id == 0 || seq&1 == 1 {
+		return seq, 0, ErrValueNotFound
 	}
 	return seq, length, nil
 }
 
-// Read will return seq, value, err for keyA, keyB; if an incoming value
-// is provided, the read value will be appended to it and the whole returned
+// Read will return seq, value, err for keyA, keyB; if an incoming value is
+// provided, the read value will be appended to it and the whole returned
 // (useful to reuse an existing []byte).
+//
+// Note that err == ErrValueNotFound with seq == 0 indicates keyA, keyB was not
+// known at all whereas err == ErrValueNotFound with seq != 0 (also seq & 1 ==
+// 1) indicates keyA, keyB was known and had a deletion marker (aka tombstone).
+//
+// This may be called even after Close.
 func (vs *ValuesStore) Read(keyA uint64, keyB uint64, value []byte) (uint64, []byte, error) {
 	seq, id, offset, length := vs.vlm.get(keyA, keyB)
-	if id < _VALUESBLOCK_IDOFFSET {
-		return 0, value, ErrValueNotFound
+	if id == 0 || seq&1 == 1 {
+		return seq, value, ErrValueNotFound
 	}
 	return vs.valuesLocBlock(id).read(keyA, keyB, seq, offset, length, value)
 }
 
-// Write stores seq, value for keyA, keyB or returns any error; a newer
-// seq already in place is not reported as an error.
+// Write stores seq & 0xfffffffffffffffe (lowest bit zeroed), value for keyA,
+// keyB or returns any error; a newer seq already in place is not reported as
+// an error.
+//
+// This may no longer be called after Close.
 func (vs *ValuesStore) Write(keyA uint64, keyB uint64, seq uint64, value []byte) (uint64, error) {
 	i := int(keyA>>1) % len(vs.freeVWRChans)
 	vwr := <-vs.freeVWRChans[i]
 	vwr.keyA = keyA
 	vwr.keyB = keyB
-	vwr.seq = seq
+	vwr.seq = seq & 0xfffffffffffffffe
 	vwr.value = value
 	vs.pendingVWRChans[i] <- vwr
 	err := <-vwr.errChan
@@ -302,6 +320,27 @@ func (vs *ValuesStore) Write(keyA uint64, keyB uint64, seq uint64, value []byte)
 	return oldSeq, err
 }
 
+// Delete stores seq | 1 for keyA, keyB or returns any error; a newer seq
+// already in place is not reported as an error.
+//
+// This may no longer be called after Close.
+func (vs *ValuesStore) Delete(keyA uint64, keyB uint64, seq uint64) (uint64, error) {
+	i := int(keyA>>1) % len(vs.freeVWRChans)
+	vwr := <-vs.freeVWRChans[i]
+	vwr.keyA = keyA
+	vwr.keyB = keyB
+	vwr.seq = seq | 1
+	vwr.value = nil
+	vs.pendingVWRChans[i] <- vwr
+	err := <-vwr.errChan
+	oldSeq := vwr.seq
+	vs.freeVWRChans[i] <- vwr
+	return oldSeq, err
+}
+
+// GatherStats returns overall information about the state of the ValuesStore.
+//
+// This may be called even after Close.
 func (vs *ValuesStore) GatherStats(extended bool) *ValuesStoreStats {
 	stats := &ValuesStoreStats{}
 	if extended {
@@ -397,7 +436,7 @@ func (vs *ValuesStore) memClearer() {
 			binary.BigEndian.PutUint64(tb[tbOffset:], a)
 			binary.BigEndian.PutUint64(tb[tbOffset+8:], b)
 			binary.BigEndian.PutUint64(tb[tbOffset+16:], q)
-			binary.BigEndian.PutUint32(tb[tbOffset+24:], vm.vfOffset+uint32(vmMemOffset))
+			binary.BigEndian.PutUint32(tb[tbOffset+24:], vm.vfOffset+vmMemOffset)
 			binary.BigEndian.PutUint32(tb[tbOffset+28:], z)
 			tbOffset += 32
 		}
@@ -411,12 +450,12 @@ func (vs *ValuesStore) memClearer() {
 	}
 }
 
-func (vs *ValuesStore) memWriter(VWRChan chan *valueWriteReq) {
+func (vs *ValuesStore) memWriter(pendingVWRChan chan *valueWriteReq) {
 	var vm *valuesMem
 	var vmTOCOffset int
 	var vmMemOffset int
 	for {
-		vwr := <-VWRChan
+		vwr := <-pendingVWRChan
 		if vwr == nil {
 			if vm != nil && len(vm.toc) > 0 {
 				vs.vfVMChan <- vm
@@ -848,7 +887,7 @@ func (stats *ValuesStoreStats) String() string {
 }
 
 func (stats *ValuesStoreStats) ValueCount() uint64 {
-	return stats.vlmStats.used
+	return stats.vlmStats.active
 }
 
 func (stats *ValuesStoreStats) ValuesLength() uint64 {

@@ -10,12 +10,6 @@ import (
 	"github.com/gholt/brimtext"
 )
 
-const (
-	_VALUESBLOCK_UNUSED   = iota
-	_VALUESBLOCK_TOMB     = iota
-	_VALUESBLOCK_IDOFFSET = iota
-)
-
 type valuesLocMap struct {
 	leftMask     uint64
 	a            *valuesLocStore
@@ -57,9 +51,10 @@ type valuesLocMapStats struct {
 	locs         uint64
 	pointerLocs  uint64
 	unused       uint64
-	tombs        uint64
 	used         uint64
+	active       uint64
 	length       uint64
+	tombstones   uint64
 }
 
 func newValuesLocMap(opts *ValuesStoreOpts) *valuesLocMap {
@@ -116,20 +111,20 @@ func (vlm *valuesLocMap) get(keyA uint64, keyB uint64) (uint64, uint16, uint32, 
 	bix := keyB % uint64(len(a.buckets))
 	lix := bix % uint64(len(a.locks))
 	f := func(s *valuesLocStore, fb *valuesLocStore) {
-		blockID = _VALUESBLOCK_UNUSED
+		blockID = 0
 		s.locks[lix].RLock()
 		if fb != nil {
 			fb.locks[lix].RLock()
 		}
 		for item := &s.buckets[bix]; item != nil; item = item.next {
-			if item.blockID != _VALUESBLOCK_UNUSED && item.keyA == keyA && item.keyB == keyB {
+			if item.blockID != 0 && item.keyA == keyA && item.keyB == keyB {
 				seq, blockID, offset, length = item.seq, item.blockID, item.offset, item.length
 				break
 			}
 		}
-		if fb != nil && blockID == _VALUESBLOCK_UNUSED {
+		if fb != nil && blockID == 0 {
 			for item := &fb.buckets[bix]; item != nil; item = item.next {
-				if item.blockID != _VALUESBLOCK_UNUSED && item.keyA == keyA && item.keyB == keyB {
+				if item.blockID != 0 && item.keyA == keyA && item.keyB == keyB {
 					seq, blockID, offset, length = item.seq, item.blockID, item.offset, item.length
 					break
 				}
@@ -174,7 +169,7 @@ func (vlm *valuesLocMap) set(keyA uint64, keyB uint64, seq uint64, blockID uint1
 	bix := keyB % uint64(len(a.buckets))
 	lix := bix % uint64(len(a.locks))
 	f := func(s *valuesLocStore, fb *valuesLocStore) {
-		oldSeq = _VALUESBLOCK_UNUSED
+		oldSeq = 0
 		var sMatch *valueLoc
 		var fbMatch *valueLoc
 		var unusedItem *valueLoc
@@ -183,7 +178,7 @@ func (vlm *valuesLocMap) set(keyA uint64, keyB uint64, seq uint64, blockID uint1
 			fb.locks[lix].Lock()
 		}
 		for item := &s.buckets[bix]; item != nil; item = item.next {
-			if item.blockID == _VALUESBLOCK_UNUSED {
+			if item.blockID == 0 {
 				if unusedItem == nil {
 					unusedItem = item
 				}
@@ -196,7 +191,7 @@ func (vlm *valuesLocMap) set(keyA uint64, keyB uint64, seq uint64, blockID uint1
 		}
 		if fb != nil {
 			for item := &fb.buckets[bix]; item != nil; item = item.next {
-				if item.blockID == _VALUESBLOCK_UNUSED {
+				if item.blockID == 0 {
 					continue
 				}
 				if item.keyA == keyA && item.keyB == keyB {
@@ -230,7 +225,7 @@ func (vlm *valuesLocMap) set(keyA uint64, keyB uint64, seq uint64, blockID uint1
 					}
 				}
 				atomic.AddInt32(&fb.used, -1)
-				fbMatch.blockID = _VALUESBLOCK_UNUSED
+				fbMatch.blockID = 0
 			} else {
 				oldSeq = sMatch.seq
 				if seq > sMatch.seq || (evenIfSameSeq && seq == sMatch.seq) {
@@ -262,7 +257,7 @@ func (vlm *valuesLocMap) set(keyA uint64, keyB uint64, seq uint64, blockID uint1
 					unusedItem.length = fbMatch.length
 				}
 				atomic.AddInt32(&fb.used, -1)
-				fbMatch.blockID = _VALUESBLOCK_UNUSED
+				fbMatch.blockID = 0
 			} else {
 				unusedItem.seq = seq
 				unusedItem.blockID = blockID
@@ -357,9 +352,10 @@ func (vlm *valuesLocMap) gatherStatsHelper(stats *valuesLocMapStats) {
 			var pointerLocs uint64
 			var locs uint64
 			var unused uint64
-			var tombs uint64
 			var used uint64
+			var active uint64
 			var length uint64
+			var tombstones uint64
 			if stats.extended {
 				bucketCounts = make([]uint64, len(s.buckets))
 			}
@@ -373,21 +369,25 @@ func (vlm *valuesLocMap) gatherStatsHelper(stats *valuesLocMapStats) {
 							pointerLocs++
 						}
 						locs++
-						switch item.blockID {
-						case _VALUESBLOCK_UNUSED:
+						if item.blockID == 0 {
 							unused++
-						case _VALUESBLOCK_TOMB:
-							tombs++
-						default:
+						} else {
 							used++
-							length += uint64(item.length)
+							if item.seq&1 == 0 {
+								active++
+								length += uint64(item.length)
+							} else {
+								tombstones++
+							}
 						}
 					}
 				} else {
 					for item := &s.buckets[bix]; item != nil; item = item.next {
-						if item.blockID >= _VALUESBLOCK_IDOFFSET {
-							used++
-							length += uint64(item.length)
+						if item.blockID > 0 {
+							if item.seq&1 == 0 {
+								active++
+								length += uint64(item.length)
+							}
 						}
 					}
 				}
@@ -400,10 +400,11 @@ func (vlm *valuesLocMap) gatherStatsHelper(stats *valuesLocMapStats) {
 				}
 				atomic.AddUint64(&stats.pointerLocs, pointerLocs)
 				atomic.AddUint64(&stats.locs, locs)
+				atomic.AddUint64(&stats.used, used)
 				atomic.AddUint64(&stats.unused, unused)
-				atomic.AddUint64(&stats.tombs, tombs)
+				atomic.AddUint64(&stats.tombstones, tombstones)
 			}
-			atomic.AddUint64(&stats.used, used)
+			atomic.AddUint64(&stats.active, active)
 			atomic.AddUint64(&stats.length, length)
 			stats.wg.Done()
 		}()
@@ -450,13 +451,14 @@ func (stats *valuesLocMapStats) String() string {
 			[]string{"locs", fmt.Sprintf("%d", stats.locs)},
 			[]string{"pointerLocs", fmt.Sprintf("%d %.1f%%", stats.pointerLocs, float64(stats.pointerLocs)/float64(stats.locs)*100)},
 			[]string{"unused", fmt.Sprintf("%d %.1f%%", stats.unused, float64(stats.unused)/float64(stats.locs)*100)},
-			[]string{"tombs", fmt.Sprintf("%d", stats.tombs)},
 			[]string{"used", fmt.Sprintf("%d", stats.used)},
+			[]string{"active", fmt.Sprintf("%d", stats.active)},
 			[]string{"length", fmt.Sprintf("%d", stats.length)},
+			[]string{"tombstones", fmt.Sprintf("%d", stats.tombstones)},
 		}, nil)
 	} else {
 		return brimtext.Align([][]string{
-			[]string{"used", fmt.Sprintf("%d", stats.used)},
+			[]string{"active", fmt.Sprintf("%d", stats.active)},
 			[]string{"length", fmt.Sprintf("%d", stats.length)},
 		}, nil)
 	}
@@ -487,12 +489,12 @@ func (vlm *valuesLocMap) split() {
 			a.locks[lix].Lock()
 		NEXT_ITEM_A:
 			for itemA := &a.buckets[bix]; itemA != nil; itemA = itemA.next {
-				if itemA.blockID == _VALUESBLOCK_UNUSED || itemA.keyA&vlm.leftMask == 0 {
+				if itemA.blockID == 0 || itemA.keyA&vlm.leftMask == 0 {
 					continue
 				}
 				var unusedItemB *valueLoc
 				for itemB := &b.buckets[bix]; itemB != nil; itemB = itemB.next {
-					if itemB.blockID == _VALUESBLOCK_UNUSED {
+					if itemB.blockID == 0 {
 						if unusedItemB == nil {
 							unusedItemB = itemB
 						}
@@ -510,7 +512,7 @@ func (vlm *valuesLocMap) split() {
 						}
 						if clear {
 							atomic.AddInt32(&a.used, -1)
-							itemA.blockID = _VALUESBLOCK_UNUSED
+							itemA.blockID = 0
 							atomic.AddUint32(&clears, 1)
 						}
 						continue NEXT_ITEM_A
@@ -538,7 +540,7 @@ func (vlm *valuesLocMap) split() {
 				atomic.AddUint32(&copies, 1)
 				if clear {
 					atomic.AddInt32(&a.used, -1)
-					itemA.blockID = _VALUESBLOCK_UNUSED
+					itemA.blockID = 0
 					atomic.AddUint32(&clears, 1)
 				}
 			}
