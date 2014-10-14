@@ -26,16 +26,73 @@ var ErrValueNotFound error = errors.New("value not found")
 
 // ValuesStoreOpts allows configuration of the ValuesStore, although normally
 // the defaults are best.
+//
+// Note that due to implementation changes, many of these options may be
+// deprecated in the future. Cores and MaxValueSize are the two options that
+// are likely to always be supported.
 type ValuesStoreOpts struct {
-	Cores                       int
-	MaxValueSize                int
-	MemTOCPageSize              int
-	MemValuesPageSize           int
-	ValuesLocMapPageSize        int
+	// Cores controls the number of goroutines spawned to process data. The
+	// actual number of CPU cores used can only truly be controlled by
+	// GOMAXPROCS, this will just indicate how many goroutines can spawned for
+	// a given task. For example, if GOMAXPROCS is 8 and Cores is 1, 8 cores
+	// will likely still be in use as different tasks may each launch 1
+	// goroutine.
+	Cores int
+	// MaxValueSize indicates the maximum length for values stored. Attempting
+	// to store a value beyond this cap will result in an error returned.
+	MaxValueSize int
+	// MemTOCPageSize controls TOC buffer memory allocation. A TOC is a Table
+	// Of Contents which has metadata about values stored. A TOC Page is a
+	// block of memory where this metadata is buffered before being written to
+	// disk. The implementation at the time of this writing will allocate
+	// Cores*4 TOC Pages.
+	MemTOCPageSize int
+	// MemValuesPageSize controls value buffer memory allocation. A Values Page
+	// is a block of memory where actual value content is buffered before being
+	// written to disk. The implementation at the time of this writing will
+	// allocate Cores*2 Values Pages.
+	MemValuesPageSize int
+	// ValuesLocMapPageSize controls the size of each chunk of memory allocated
+	// by for value locations. The Values Loc Map is a map from key to value
+	// location data (memory block and offset, disk file and offset) and other
+	// metadata (timestamp, length, etc.). A Value Loc Map Page is a block of
+	// memory where sections of location data is stored. The blocks are
+	// arranged by the high bits of the keys and distributed within each block
+	// by the low bits of the keys. The high bit coalescing is to speed
+	// replication and other routines that work with ranges of keys and the low
+	// bit distribution is to make even use of memory. This page size setting
+	// indicates how large each memory block will be, but the number of memory
+	// blocks depends on the key count. At the time of this writing, each key
+	// requires 42 bytes of location data.
+	ValuesLocMapPageSize int
+	// ValuesLocMapSplitMultiplier indicates how full a Values Loc Map Page can
+	// get before being split into two pages. Each page is a map (hash table),
+	// so this indicates the load factor before splitting. For example, 1.0
+	// would split once a page had as many items in it as its
+	// ValuesLocMapPageSize would indicate. When a page is "overfull", each
+	// item will, on average, point to another individually allocated item
+	// (think of a slice of linked lists, each list having two items). Setting
+	// this lower can decrease the individual allocations and pointer
+	// traversing but at the expense of splitting and copying more often.
 	ValuesLocMapSplitMultiplier float64
-	ValuesFileSize              int
-	ValuesFileReaders           int
-	ChecksumInterval            int
+	// ValuesFileSize indicates the size of a values file on disk before
+	// closing it and opening a new file. This also caps the size of the TOC
+	// files (Table of Contents of what is contained within a values file), but
+	// usually the TOC files are smaller than the values files unless the
+	// average value size is very small.
+	ValuesFileSize int
+	// ValuesFileReaders controls how many times an individual values file is
+	// opened for reading. A higher number will allow more concurrent reads,
+	// but at the expense of open file descriptors.
+	ValuesFileReaders int
+	// ChecksumInterval controls how many on-disk bytes will be written before
+	// emitting a 32-bit checksum for those bytes. Both TOC files and values
+	// files have checksums at this interval. For example, if set to 65532 then
+	// every 65532 bytes written and additional 4 byte checksum will be written
+	// for those bytes, giving 65536 "chunks" on disk. This also controls the
+	// block size written to disk at once since bytes are buffered to the
+	// checksum interval before be checksummed and then written to disk.
+	ChecksumInterval int
 }
 
 func NewValuesStoreOpts(envPrefix string) *ValuesStoreOpts {
