@@ -894,13 +894,25 @@ func (vs *ValuesStore) recovery() {
 
 func (vs *ValuesStore) background() {
 	interval := float64(60 * time.Second)
+	nextRun := time.Now().Add(time.Duration(interval + interval*rand.NormFloat64()*0.1))
 	for {
-		select {
-		case <-vs.backgroundDoneChan:
-			vs.backgroundDoneChan <- struct{}{}
-			return
-		case <-time.After(time.Duration(interval + interval*rand.NormFloat64()*0.1)):
+		sleep := nextRun.Sub(time.Now())
+		if sleep > 0 {
+			select {
+			case <-vs.backgroundDoneChan:
+				vs.backgroundDoneChan <- struct{}{}
+				return
+			case <-time.After(sleep):
+			}
+		} else {
+			select {
+			case <-vs.backgroundDoneChan:
+				vs.backgroundDoneChan <- struct{}{}
+				return
+			default:
+			}
 		}
+		nextRun = time.Now().Add(time.Duration(interval + interval*rand.NormFloat64()*0.1))
 		vs.vlm.background(vs)
 	}
 }
