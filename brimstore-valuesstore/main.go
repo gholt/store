@@ -22,9 +22,10 @@ type optsStruct struct {
 	Length        int    `short:"l" long:"length" description:"Length of values. Default: 0"`
 	Number        int    `short:"n" long:"number" description:"Number of keys. Default: 0"`
 	Random        int    `long:"random" description:"Random number seed. Default: 0"`
-	Timestamp     uint64 `long:"timestamp" description:"Timestamp value. Default: 2 for write, 3 for delete"`
+	Timestamp     uint64 `long:"timestamp" description:"Timestamp value. Default: current time"`
+	TombstoneAge  int    `long:"tombstone-age" description:"Seconds to keep tombstones. Default: 4 hours"`
 	Positional    struct {
-		Tests []string `name:"tests" description:"delete lookup read write"`
+		Tests []string `name:"tests" description:"delete lookup read run write"`
 	} `positional-args:"yes"`
 	keyspace []byte
 	buffers  [][]byte
@@ -49,6 +50,7 @@ func main() {
 		case "delete":
 		case "lookup":
 		case "read":
+		case "run":
 		case "write":
 		default:
 			fmt.Fprintf(os.Stderr, "Unknown test named %#v.\n", arg)
@@ -63,6 +65,9 @@ func main() {
 	opts.Cores = runtime.GOMAXPROCS(0)
 	if opts.Clients == 0 {
 		opts.Clients = opts.Cores * opts.Cores
+	}
+	if opts.Timestamp == 0 {
+		opts.Timestamp = uint64(time.Now().UnixNano())
 	}
 	opts.keyspace = make([]byte, opts.Number*16)
 	brimutil.NewSeededScrambled(int64(opts.Random)).Read(opts.keyspace)
@@ -84,7 +89,11 @@ func main() {
 	fmt.Println(opts.Length, "value length")
 	memstat()
 	begin := time.Now()
-	opts.vs = brimstore.NewValuesStore(nil)
+	vsOpts := brimstore.NewValuesStoreOpts("")
+	if opts.TombstoneAge > 0 {
+		vsOpts.TombstoneAge = opts.TombstoneAge
+	}
+	opts.vs = brimstore.NewValuesStore(vsOpts)
 	dur := time.Now().Sub(begin)
 	fmt.Println(dur, "to start ValuesStore")
 	memstat()
@@ -96,6 +105,8 @@ func main() {
 			lookup()
 		case "read":
 			read()
+		case "run":
+			run()
 		case "write":
 			write()
 		}
@@ -322,4 +333,8 @@ func write() {
 	if superseded > 0 {
 		fmt.Println(superseded, "SUPERCEDED!")
 	}
+}
+
+func run() {
+	<-time.After(5 * time.Minute)
 }

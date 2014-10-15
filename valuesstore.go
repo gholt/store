@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"math"
+	"math/rand"
 	"os"
 	"runtime"
 	"sort"
@@ -41,6 +42,9 @@ type ValuesStoreOpts struct {
 	// MaxValueSize indicates the maximum length for values stored. Attempting
 	// to store a value beyond this cap will result in an error returned.
 	MaxValueSize int
+	// TombstoneAge is the number of seconds to keep tombstones (deletion
+	// markers).
+	TombstoneAge int
 	// MemTOCPageSize controls TOC buffer memory allocation. A TOC is a Table
 	// Of Contents which has metadata about values stored. A TOC Page is a
 	// block of memory where this metadata is buffered before being written to
@@ -116,6 +120,14 @@ func NewValuesStoreOpts(envPrefix string) *ValuesStoreOpts {
 	if opts.MaxValueSize <= 0 {
 		opts.MaxValueSize = 4 * 1024 * 1024
 	}
+	if env := os.Getenv(envPrefix + "TOMBSTONE_AGE"); env != "" {
+		if val, err := strconv.Atoi(env); err == nil {
+			opts.TombstoneAge = val
+		}
+	}
+	if opts.TombstoneAge <= 0 {
+		opts.TombstoneAge = 4 * 60 * 60
+	}
 	if env := os.Getenv(envPrefix + "MEM_TOC_PAGE_SIZE"); env != "" {
 		if val, err := strconv.Atoi(env); err == nil {
 			opts.MemTOCPageSize = val
@@ -188,11 +200,13 @@ type ValuesStore struct {
 	freeTOCBlockChan      chan []byte
 	pendingTOCBlockChan   chan []byte
 	tocWriterDoneChan     chan struct{}
+	backgroundDoneChan    chan struct{}
 	valuesLocBlocks       []valuesLocBlock
 	atValuesLocBlocksIDer uint32
 	vlm                   *valuesLocMap
 	cores                 int
 	maxValueSize          uint32
+	tombstoneAge          uint64
 	memTOCPageSize        uint32
 	memValuesPageSize     uint32
 	valuesFileSize        uint32
@@ -221,6 +235,11 @@ func NewValuesStore(opts *ValuesStoreOpts) *ValuesStore {
 	if maxValueSize > math.MaxUint32 {
 		maxValueSize = math.MaxUint32
 	}
+	tombstoneAge := uint64(opts.TombstoneAge)
+	if tombstoneAge < 1 {
+		tombstoneAge = 1
+	}
+	tombstoneAge *= uint64(time.Second)
 	memTOCPageSize := opts.MemTOCPageSize
 	if memTOCPageSize < 4096 {
 		memTOCPageSize = 4096
@@ -260,6 +279,7 @@ func NewValuesStore(opts *ValuesStoreOpts) *ValuesStore {
 		vlm:               newValuesLocMap(opts),
 		cores:             cores,
 		maxValueSize:      uint32(maxValueSize),
+		tombstoneAge:      tombstoneAge,
 		memTOCPageSize:    uint32(memTOCPageSize),
 		memValuesPageSize: uint32(memValuesPageSize),
 		valuesFileSize:    uint32(valuesFileSize),
@@ -274,6 +294,7 @@ func NewValuesStore(opts *ValuesStoreOpts) *ValuesStore {
 	vs.freeTOCBlockChan = make(chan []byte, vs.cores*2)
 	vs.pendingTOCBlockChan = make(chan []byte, vs.cores)
 	vs.tocWriterDoneChan = make(chan struct{}, 1)
+	vs.backgroundDoneChan = make(chan struct{}, 1)
 	for i := 0; i < cap(vs.freeVMChan); i++ {
 		vm := &valuesMem{
 			vs:     vs,
@@ -304,6 +325,7 @@ func NewValuesStore(opts *ValuesStoreOpts) *ValuesStore {
 		go vs.memWriter(vs.pendingVWRChans[i])
 	}
 	vs.recovery()
+	go vs.background()
 	return vs
 }
 
@@ -320,6 +342,8 @@ func (vs *ValuesStore) Close() {
 		c <- nil
 	}
 	<-vs.tocWriterDoneChan
+	vs.backgroundDoneChan <- struct{}{}
+	<-vs.backgroundDoneChan
 	for vs.vlm.isResizing() {
 		time.Sleep(10 * time.Millisecond)
 	}
@@ -427,6 +451,7 @@ func (vs *ValuesStore) GatherStats(extended bool) *ValuesStoreStats {
 		stats.maxValuesLocBlockID = atomic.LoadUint32(&vs.atValuesLocBlocksIDer)
 		stats.cores = vs.cores
 		stats.maxValueSize = vs.maxValueSize
+		stats.tombstoneAge = vs.tombstoneAge
 		stats.memTOCPageSize = vs.memTOCPageSize
 		stats.memValuesPageSize = vs.memValuesPageSize
 		stats.valuesFileSize = vs.valuesFileSize
@@ -867,6 +892,19 @@ func (vs *ValuesStore) recovery() {
 	}
 }
 
+func (vs *ValuesStore) background() {
+	interval := float64(60 * time.Second)
+	for {
+		select {
+		case <-vs.backgroundDoneChan:
+			vs.backgroundDoneChan <- struct{}{}
+			return
+		case <-time.After(time.Duration(interval + interval*rand.NormFloat64()*0.1)):
+		}
+		vs.vlm.background(vs)
+	}
+}
+
 type valueWriteReq struct {
 	keyA      uint64
 	keyB      uint64
@@ -901,6 +939,7 @@ type ValuesStoreStats struct {
 	maxValuesLocBlockID    uint32
 	cores                  int
 	maxValueSize           uint32
+	tombstoneAge           uint64
 	memTOCPageSize         uint32
 	memValuesPageSize      uint32
 	valuesFileSize         uint32
@@ -931,6 +970,7 @@ func (stats *ValuesStoreStats) String() string {
 			[]string{"maxValuesLocBlockID", fmt.Sprintf("%d", stats.maxValuesLocBlockID)},
 			[]string{"cores", fmt.Sprintf("%d", stats.cores)},
 			[]string{"maxValueSize", fmt.Sprintf("%d", stats.maxValueSize)},
+			[]string{"tombstoneAge", fmt.Sprintf("%d", stats.tombstoneAge)},
 			[]string{"memTOCPageSize", fmt.Sprintf("%d", stats.memTOCPageSize)},
 			[]string{"memValuesPageSize", fmt.Sprintf("%d", stats.memValuesPageSize)},
 			[]string{"valuesFileSize", fmt.Sprintf("%d", stats.valuesFileSize)},

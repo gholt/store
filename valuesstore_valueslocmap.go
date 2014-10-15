@@ -2,9 +2,11 @@ package brimstore
 
 import (
 	"fmt"
+	"log"
 	"math"
 	"sync"
 	"sync/atomic"
+	"time"
 	"unsafe"
 
 	"github.com/gholt/brimtext"
@@ -55,6 +57,13 @@ type valuesLocMapStats struct {
 	active       uint64
 	length       uint64
 	tombstones   uint64
+}
+
+type valuesLocMapBackground struct {
+	wg                  sync.WaitGroup
+	tombstoneCutoff     uint64
+	tombstonesDiscarded uint64
+	tombstonesRetained  uint64
 }
 
 func newValuesLocMap(opts *ValuesStoreOpts) *valuesLocMap {
@@ -583,4 +592,59 @@ func (vlm *valuesLocMap) split() {
 	vlm.resizingLock.Lock()
 	vlm.resizing = false
 	vlm.resizingLock.Unlock()
+}
+
+func (vlm *valuesLocMap) background(vs *ValuesStore) {
+	begin := time.Now()
+	bg := &valuesLocMapBackground{tombstoneCutoff: uint64(time.Now().UnixNano()) - vs.tombstoneAge}
+	vlm.backgroundHelper(bg)
+	bg.wg.Wait()
+	log.Printf("background run took %s: %d tombstones discarded, %d tombstones retained\n", time.Now().Sub(begin), bg.tombstonesDiscarded, bg.tombstonesRetained)
+}
+
+func (vlm *valuesLocMap) backgroundHelper(bg *valuesLocMapBackground) {
+	c := (*valuesLocMap)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vlm.c))))
+	if c != nil {
+		d := (*valuesLocMap)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vlm.d))))
+		c.backgroundHelper(bg)
+		d.backgroundHelper(bg)
+		return
+	}
+	f := func(s *valuesLocStore) {
+		var tombstonesDiscarded uint64
+		var tombstonesRetained uint64
+		for bix := len(s.buckets) - 1; bix >= 0; bix-- {
+			lix := bix % len(s.locks)
+			s.locks[lix].RLock()
+			for item := &s.buckets[bix]; item != nil; item = item.next {
+				if item.blockID > 0 && item.timestamp&1 == 1 {
+					if item.timestamp < bg.tombstoneCutoff {
+						atomic.AddInt32(&s.used, -1)
+						item.blockID = 0
+						tombstonesDiscarded++
+					} else {
+						tombstonesRetained++
+					}
+				}
+			}
+			s.locks[lix].RUnlock()
+		}
+		if tombstonesDiscarded > 0 {
+			atomic.AddUint64(&bg.tombstonesDiscarded, tombstonesDiscarded)
+		}
+		if tombstonesRetained > 0 {
+			atomic.AddUint64(&bg.tombstonesRetained, tombstonesRetained)
+		}
+		bg.wg.Done()
+	}
+	a := (*valuesLocStore)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vlm.a))))
+	if a != nil {
+		bg.wg.Add(1)
+		go f(a)
+	}
+	b := (*valuesLocStore)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vlm.b))))
+	if b != nil {
+		bg.wg.Add(1)
+		go f(b)
+	}
 }
