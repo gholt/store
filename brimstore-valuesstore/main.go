@@ -25,7 +25,7 @@ type optsStruct struct {
 	Timestamp     uint64 `long:"timestamp" description:"Timestamp value. Default: current time"`
 	TombstoneAge  int    `long:"tombstone-age" description:"Seconds to keep tombstones. Default: 4 hours"`
 	Positional    struct {
-		Tests []string `name:"tests" description:"delete lookup read run write"`
+		Tests []string `name:"tests" description:"background delete lookup read run write"`
 	} `positional-args:"yes"`
 	keyspace []byte
 	buffers  [][]byte
@@ -47,6 +47,7 @@ func main() {
 	}
 	for _, arg := range opts.Positional.Tests {
 		switch arg {
+		case "background":
 		case "delete":
 		case "lookup":
 		case "read":
@@ -99,6 +100,8 @@ func main() {
 	memstat()
 	for _, arg := range opts.Positional.Tests {
 		switch arg {
+		case "background":
+			background()
 		case "delete":
 			delete()
 		case "lookup":
@@ -136,6 +139,13 @@ func memstat() {
 	deltaAlloc := opts.st.TotalAlloc - lastAlloc
 	lastAlloc = opts.st.TotalAlloc
 	fmt.Printf("%0.2fG total alloc, %0.2fG delta\n\n", float64(opts.st.TotalAlloc)/1024/1024/1024, float64(deltaAlloc)/1024/1024/1024)
+}
+
+func background() {
+	begin := time.Now()
+	opts.vs.BackgroundNow()
+	dur := time.Now().Sub(begin)
+	fmt.Printf("%s to run background tasks\n", dur)
 }
 
 func delete() {

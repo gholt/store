@@ -200,6 +200,7 @@ type ValuesStore struct {
 	freeTOCBlockChan      chan []byte
 	pendingTOCBlockChan   chan []byte
 	tocWriterDoneChan     chan struct{}
+	backgroundNotifyChan  chan chan struct{}
 	backgroundDoneChan    chan struct{}
 	valuesLocBlocks       []valuesLocBlock
 	atValuesLocBlocksIDer uint32
@@ -294,6 +295,7 @@ func NewValuesStore(opts *ValuesStoreOpts) *ValuesStore {
 	vs.freeTOCBlockChan = make(chan []byte, vs.cores*2)
 	vs.pendingTOCBlockChan = make(chan []byte, vs.cores)
 	vs.tocWriterDoneChan = make(chan struct{}, 1)
+	vs.backgroundNotifyChan = make(chan chan struct{}, 1)
 	vs.backgroundDoneChan = make(chan struct{}, 1)
 	for i := 0; i < cap(vs.freeVMChan); i++ {
 		vm := &valuesMem{
@@ -342,7 +344,7 @@ func (vs *ValuesStore) Close() {
 		c <- nil
 	}
 	<-vs.tocWriterDoneChan
-	vs.backgroundDoneChan <- struct{}{}
+	vs.backgroundNotifyChan <- nil
 	<-vs.backgroundDoneChan
 	for vs.vlm.isResizing() {
 		time.Sleep(10 * time.Millisecond)
@@ -419,6 +421,15 @@ func (vs *ValuesStore) Delete(keyA uint64, keyB uint64, timestamp uint64) (uint6
 	oldTimestamp := vwr.timestamp
 	vs.freeVWRChans[i] <- vwr
 	return oldTimestamp, err
+}
+
+// BackgroundNow will trigger background tasks to run now instead of waiting
+// for the next interval; this function will not return until the background
+// tasks complete.
+func (vs *ValuesStore) BackgroundNow() {
+	c := make(chan struct{}, 1)
+	vs.backgroundNotifyChan <- c
+	<-c
 }
 
 // GatherStats returns overall information about the state of the ValuesStore.
@@ -895,26 +906,34 @@ func (vs *ValuesStore) recovery() {
 func (vs *ValuesStore) background() {
 	interval := float64(60 * time.Second)
 	nextRun := time.Now().Add(time.Duration(interval + interval*rand.NormFloat64()*0.1))
+WORK:
 	for {
+		var c chan struct{} = nil
 		sleep := nextRun.Sub(time.Now())
 		if sleep > 0 {
 			select {
-			case <-vs.backgroundDoneChan:
-				vs.backgroundDoneChan <- struct{}{}
-				return
+			case c = <-vs.backgroundNotifyChan:
+				if c == nil {
+					break WORK
+				}
 			case <-time.After(sleep):
 			}
 		} else {
 			select {
-			case <-vs.backgroundDoneChan:
-				vs.backgroundDoneChan <- struct{}{}
-				return
+			case c = <-vs.backgroundNotifyChan:
+				if c == nil {
+					break WORK
+				}
 			default:
 			}
 		}
 		nextRun = time.Now().Add(time.Duration(interval + interval*rand.NormFloat64()*0.1))
 		vs.vlm.background(vs)
+		if c != nil {
+			c <- struct{}{}
+		}
 	}
+	vs.backgroundDoneChan <- struct{}{}
 }
 
 type valueWriteReq struct {
