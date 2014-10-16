@@ -155,7 +155,7 @@ func NewValuesStoreOpts(envPrefix string) *ValuesStoreOpts {
 			opts.MemWriteMultiplier = val
 		}
 	}
-	if opts.MemWriteMultiplier < 15 {
+	if opts.MemWriteMultiplier <= 0 {
 		opts.MemWriteMultiplier = 15
 	}
 	if env := os.Getenv(envPrefix + "VALUES_LOC_MAP_PAGE_SIZE"); env != "" {
@@ -262,8 +262,8 @@ func NewValuesStore(opts *ValuesStoreOpts) *ValuesStore {
 		memValuesPageSize = 4096
 	}
 	memWriteMultiplier := opts.MemWriteMultiplier
-	if memWriteMultiplier < 15 {
-		memWriteMultiplier = 15
+	if memWriteMultiplier <= 0 {
+		memWriteMultiplier = 1
 	}
 	valuesFileSize := opts.ValuesFileSize
 	if valuesFileSize <= 0 || valuesFileSize > math.MaxUint32 {
