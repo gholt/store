@@ -56,6 +56,9 @@ type ValuesStoreOpts struct {
 	// written to disk. The implementation at the time of this writing will
 	// allocate Cores*2 Values Pages.
 	MemValuesPageSize int
+	// MemWriteMultiplier indicates additional memory page sets to use to
+	// increase caching of recently written values.
+	MemWriteMultiplier int
 	// ValuesLocMapPageSize controls the size of each chunk of memory allocated
 	// by for value locations. The Values Loc Map is a map from key to value
 	// location data (memory block and offset, disk file and offset) and other
@@ -147,6 +150,14 @@ func NewValuesStoreOpts(envPrefix string) *ValuesStoreOpts {
 			opts.MemValuesPageSize = 8 * 1024 * 1024
 		}
 	}
+	if env := os.Getenv(envPrefix + "MEM_WRITE_MULTIPLIER"); env != "" {
+		if val, err := strconv.Atoi(env); err == nil {
+			opts.MemWriteMultiplier = val
+		}
+	}
+	if opts.MemWriteMultiplier < 15 {
+		opts.MemWriteMultiplier = 15
+	}
 	if env := os.Getenv(envPrefix + "VALUES_LOC_MAP_PAGE_SIZE"); env != "" {
 		if val, err := strconv.Atoi(env); err == nil {
 			opts.ValuesLocMapPageSize = val
@@ -210,6 +221,7 @@ type ValuesStore struct {
 	tombstoneAge          uint64
 	memTOCPageSize        uint32
 	memValuesPageSize     uint32
+	memWriteMultiplier    int
 	valuesFileSize        uint32
 	valuesFileReaders     int
 	checksumInterval      uint32
@@ -249,6 +261,10 @@ func NewValuesStore(opts *ValuesStoreOpts) *ValuesStore {
 	if memValuesPageSize < 4096 {
 		memValuesPageSize = 4096
 	}
+	memWriteMultiplier := opts.MemWriteMultiplier
+	if memWriteMultiplier < 15 {
+		memWriteMultiplier = 15
+	}
 	valuesFileSize := opts.ValuesFileSize
 	if valuesFileSize <= 0 || valuesFileSize > math.MaxUint32 {
 		valuesFileSize = math.MaxUint32
@@ -276,19 +292,20 @@ func NewValuesStore(opts *ValuesStoreOpts) *ValuesStore {
 		memValuesPageSize = math.MaxUint32
 	}
 	vs := &ValuesStore{
-		valuesLocBlocks:   make([]valuesLocBlock, 65536),
-		vlm:               newValuesLocMap(opts),
-		cores:             cores,
-		maxValueSize:      uint32(maxValueSize),
-		tombstoneAge:      tombstoneAge,
-		memTOCPageSize:    uint32(memTOCPageSize),
-		memValuesPageSize: uint32(memValuesPageSize),
-		valuesFileSize:    uint32(valuesFileSize),
-		checksumInterval:  uint32(checksumInterval),
-		valuesFileReaders: valuesFileReaders,
+		valuesLocBlocks:    make([]valuesLocBlock, 65536),
+		vlm:                newValuesLocMap(opts),
+		cores:              cores,
+		maxValueSize:       uint32(maxValueSize),
+		tombstoneAge:       tombstoneAge,
+		memTOCPageSize:     uint32(memTOCPageSize),
+		memValuesPageSize:  uint32(memValuesPageSize),
+		memWriteMultiplier: memWriteMultiplier,
+		valuesFileSize:     uint32(valuesFileSize),
+		checksumInterval:   uint32(checksumInterval),
+		valuesFileReaders:  valuesFileReaders,
 	}
-	vs.freeableVMChan = make(chan *valuesMem, vs.cores)
-	vs.freeVMChan = make(chan *valuesMem, vs.cores*2)
+	vs.freeableVMChan = make(chan *valuesMem, vs.cores*(1+vs.memWriteMultiplier))
+	vs.freeVMChan = make(chan *valuesMem, vs.cores)
 	vs.freeVWRChans = make([]chan *valueWriteReq, vs.cores)
 	vs.pendingVWRChans = make([]chan *valueWriteReq, vs.cores)
 	vs.vfVMChan = make(chan *valuesMem, vs.cores)
@@ -297,14 +314,14 @@ func NewValuesStore(opts *ValuesStoreOpts) *ValuesStore {
 	vs.tocWriterDoneChan = make(chan struct{}, 1)
 	vs.backgroundNotifyChan = make(chan chan struct{}, 1)
 	vs.backgroundDoneChan = make(chan struct{}, 1)
-	for i := 0; i < cap(vs.freeVMChan); i++ {
+	for i := 0; i < cap(vs.freeableVMChan); i++ {
 		vm := &valuesMem{
 			vs:     vs,
 			toc:    make([]byte, 0, vs.memTOCPageSize),
 			values: make([]byte, 0, vs.memValuesPageSize),
 		}
 		vm.id = vs.addValuesLocBock(vm)
-		vs.freeVMChan <- vm
+		vs.freeableVMChan <- vm
 	}
 	for i := 0; i < len(vs.freeVWRChans); i++ {
 		vs.freeVWRChans[i] = make(chan *valueWriteReq, vs.cores*2)
@@ -340,8 +357,14 @@ func (vs *ValuesStore) MaxValueSize() uint32 {
 // Close shuts down all background processing and the ValuesStore will refuse
 // any additional writes; reads may still occur.
 func (vs *ValuesStore) Close() {
+	for i := 0; i < cap(vs.freeVMChan)*(vs.memWriteMultiplier-1); i++ {
+		<-vs.freeVMChan
+	}
 	for _, c := range vs.pendingVWRChans {
 		c <- nil
+	}
+	for i := 0; i < cap(vs.freeVMChan); i++ {
+		<-vs.freeVMChan
 	}
 	<-vs.tocWriterDoneChan
 	vs.backgroundNotifyChan <- nil
@@ -465,6 +488,7 @@ func (vs *ValuesStore) GatherStats(extended bool) *ValuesStoreStats {
 		stats.tombstoneAge = vs.tombstoneAge
 		stats.memTOCPageSize = vs.memTOCPageSize
 		stats.memValuesPageSize = vs.memValuesPageSize
+		stats.memWriteMultiplier = vs.memWriteMultiplier
 		stats.valuesFileSize = vs.valuesFileSize
 		stats.valuesFileReaders = vs.valuesFileReaders
 		stats.checksumInterval = vs.checksumInterval
@@ -973,6 +997,7 @@ type ValuesStoreStats struct {
 	tombstoneAge           uint64
 	memTOCPageSize         uint32
 	memValuesPageSize      uint32
+	memWriteMultiplier     int
 	valuesFileSize         uint32
 	valuesFileReaders      int
 	checksumInterval       uint32
@@ -1004,6 +1029,7 @@ func (stats *ValuesStoreStats) String() string {
 			[]string{"tombstoneAge", fmt.Sprintf("%d", stats.tombstoneAge)},
 			[]string{"memTOCPageSize", fmt.Sprintf("%d", stats.memTOCPageSize)},
 			[]string{"memValuesPageSize", fmt.Sprintf("%d", stats.memValuesPageSize)},
+			[]string{"memWriteMultiplier", fmt.Sprintf("%d", stats.memWriteMultiplier)},
 			[]string{"valuesFileSize", fmt.Sprintf("%d", stats.valuesFileSize)},
 			[]string{"valuesFileReaders", fmt.Sprintf("%d", stats.valuesFileReaders)},
 			[]string{"checksumInterval", fmt.Sprintf("%d", stats.checksumInterval)},
