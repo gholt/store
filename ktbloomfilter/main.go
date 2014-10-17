@@ -10,7 +10,7 @@ import (
 )
 
 func main() {
-	itemCount := uint64(1000000)
+	itemCount := uint64(781250)
 	scratch := make([]byte, 24)
 	scrambled := brimutil.NewScrambled()
 	items := make([][]uint64, itemCount)
@@ -40,7 +40,7 @@ func main() {
 			fmt.Println()
 			fmt.Println(left(), "false positives to resolve")
 		}
-		bf := brimstore.NewKTBloomFilter(itemCount, 0.01, iterations)
+		bf := brimstore.NewKTBloomFilter(itemCount, 0.01/(float64(itemCount)/100000), iterations)
 		fmt.Println(bf)
 		begin := time.Now()
 		for i := uint64(0); i < itemCount; i++ {

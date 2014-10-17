@@ -9,26 +9,30 @@ import (
 )
 
 type KTBloomFilter struct {
+	n       uint64
+	p       float64
+	salt    uint32
 	m       uint32
 	kDiv4   uint32
 	bits    []byte
-	salt    uint32
 	scratch []byte
 }
 
 func NewKTBloomFilter(n uint64, p float64, salt uint16) *KTBloomFilter {
 	m := -((float64(n) * math.Log(p)) / math.Pow(math.Log(2), 2))
 	return &KTBloomFilter{
+		n:       n,
+		p:       p,
+		salt:    uint32(salt) << 16,
 		m:       uint32(math.Ceil(m/8)) * 8,
 		kDiv4:   uint32(math.Ceil(m / float64(n) * math.Log(2) / 4)),
 		bits:    make([]byte, uint32(math.Ceil(m/8))),
-		salt:    uint32(salt) << 16,
 		scratch: make([]byte, 28),
 	}
 }
 
 func (ktbf *KTBloomFilter) String() string {
-	return fmt.Sprintf("KTBloomFilter %p m=%d k=%d bytes=%d salt:%d", ktbf, ktbf.m, ktbf.kDiv4*4, len(ktbf.bits), ktbf.salt>>16)
+	return fmt.Sprintf("KTBloomFilter %p n=%d p=%f salt=%d m=%d k=%d bytes=%d", ktbf, ktbf.n, ktbf.p, ktbf.salt>>16, ktbf.m, ktbf.kDiv4*4, len(ktbf.bits))
 }
 
 func (ktbf *KTBloomFilter) Add(keyA uint64, keyB uint64, timestamp uint64) {
