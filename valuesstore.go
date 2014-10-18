@@ -167,7 +167,7 @@ func NewValuesStoreOpts(envPrefix string) *ValuesStoreOpts {
 		}
 	}
 	if opts.ValuesLocMapPageSize <= 0 {
-		opts.ValuesLocMapPageSize = 4 * 1024 * 1024
+		opts.ValuesLocMapPageSize = 524288
 	}
 	if env := os.Getenv(envPrefix + "VALUES_LOC_MAP_SPLIT_MULTIPLIER"); env != "" {
 		if val, err := strconv.ParseFloat(env, 64); err == nil {
