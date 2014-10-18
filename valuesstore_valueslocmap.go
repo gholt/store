@@ -5,7 +5,6 @@ import (
 	"math"
 	"sync"
 	"sync/atomic"
-	"time"
 	"unsafe"
 
 	"github.com/gholt/brimtext"
@@ -39,6 +38,8 @@ import (
 // have to use an additional lock around all uses of a-e.
 type valuesLocMap struct {
 	leftMask     uint64
+	rangeStart   uint64
+	rangeStop    uint64
 	a            *valuesLocStore
 	b            *valuesLocStore
 	c            *valuesLocMap
@@ -115,6 +116,8 @@ func newValuesLocMap(opts *ValuesStoreOpts) *valuesLocMap {
 	}
 	vlm := &valuesLocMap{
 		leftMask:   uint64(1) << 63,
+		rangeStart: 0,
+		rangeStop:  math.MaxUint64,
 		cores:      cores,
 		splitCount: int(float64(bucketCount) * splitMultiplier),
 	}
@@ -627,6 +630,8 @@ func (vlm *valuesLocMap) split() {
 	}
 	newVLM := &valuesLocMap{
 		leftMask:   vlm.leftMask >> 1,
+		rangeStart: vlm.rangeStart + vlm.leftMask,
+		rangeStop:  vlm.rangeStop,
 		cores:      vlm.cores,
 		splitCount: vlm.splitCount,
 	}
@@ -634,6 +639,8 @@ func (vlm *valuesLocMap) split() {
 	atomic.StorePointer((*unsafe.Pointer)(unsafe.Pointer(&vlm.d)), unsafe.Pointer(newVLM))
 	newVLM = &valuesLocMap{
 		leftMask:   vlm.leftMask >> 1,
+		rangeStart: vlm.rangeStart,
+		rangeStop:  vlm.rangeStop - vlm.leftMask,
 		cores:      vlm.cores,
 		splitCount: vlm.splitCount,
 	}
@@ -777,10 +784,233 @@ func (vlm *valuesLocMap) unsplit() {
 	vlm.resizingLock.Unlock()
 }
 
-func (vlm *valuesLocMap) background(vs *ValuesStore) {
-	bg := &valuesLocMapBackground{tombstoneCutoff: uint64(time.Now().UnixNano()) - vs.tombstoneAge}
-	vlm.backgroundHelper(bg, nil)
-	bg.wg.Wait()
+func (vlm *valuesLocMap) background(vs *ValuesStore, iteration uint16) {
+	p := 0
+	ppower := 1
+	pincrement := uint64(1) << uint64(64-ppower)
+	pstart := uint64(0)
+	pstop := pstart + (pincrement - 1)
+	wg := &sync.WaitGroup{}
+	// Here I'm doing bloom filter scans for every partition when eventually it
+	// should just do filters for partitions we're in the ring for. Partitions
+	// we're not in the ring for (handoffs, old data from ring changes, etc.)
+	// we should just send out what data we have and the remove it locally.
+	for {
+		for i := 0; i < vlm.cores; i++ {
+			wg.Add(1)
+			go vlm.scan(iteration, p, pstart, pstop, wg)
+			if pstop == math.MaxUint64 {
+				break
+			}
+			p++
+			pstart += pincrement
+			pstop += pincrement
+		}
+		wg.Wait()
+		if pstop == math.MaxUint64 {
+			break
+		}
+	}
+	wg.Wait()
+	// This is what I had as the background job before. Need to reimplement
+	// this tombstone expiration as part of scanCount most likely.
+	// bg := &valuesLocMapBackground{tombstoneCutoff: uint64(time.Now().UnixNano()) - vs.tombstoneAge}
+	// vlm.backgroundHelper(bg, nil)
+	// bg.wg.Wait()
+}
+
+const GLH_BLOOM_FILTER_N = 1000000
+const GLH_BLOOM_FILTER_P = 0.001
+
+func (vlm *valuesLocMap) scan(iteration uint16, p int, pstart uint64, pstop uint64, wg *sync.WaitGroup) {
+	count := vlm.scanCount(pstart, pstop, 0)
+	for count > GLH_BLOOM_FILTER_N {
+		pstartNew := pstart + (pstop-pstart+1)/2
+		wg.Add(1)
+		go vlm.scan(iteration, p, pstart, pstartNew-1, wg)
+		pstart = pstartNew
+		count = vlm.scanCount(pstart, pstop, 0)
+	}
+	if count > 0 {
+		ktbf := newKTBloomFilter(GLH_BLOOM_FILTER_N, GLH_BLOOM_FILTER_P, iteration)
+		vlm.scanIntoBloomFilter(pstart, pstop, ktbf)
+		if ktbf.hasData {
+			// Here we'll send the bloom filter to the other replicas and ask
+			// them to send us back all their data that isn't in the filter.
+			// fmt.Printf("%016x %016x-%016x %s\n", p, pstart, pstop, ktbf)
+		}
+	}
+	wg.Done()
+}
+
+func (vlm *valuesLocMap) scanCount(pstart uint64, pstop uint64, count uint64) uint64 {
+	if vlm.rangeStart > pstop {
+		return count
+	}
+	if vlm.rangeStop < pstart {
+		return count
+	}
+	c := (*valuesLocMap)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vlm.c))))
+	if c != nil {
+		d := (*valuesLocMap)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vlm.d))))
+		count = c.scanCount(pstart, pstop, count)
+		if count > GLH_BLOOM_FILTER_N {
+			return count
+		}
+		return d.scanCount(pstart, pstop, count)
+	}
+	a := (*valuesLocStore)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vlm.a))))
+	b := (*valuesLocStore)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vlm.b))))
+	if b == nil {
+		if atomic.LoadInt32(&a.used) <= 0 {
+			return count
+		}
+		for bix := len(a.buckets) - 1; bix >= 0; bix-- {
+			lix := bix % len(a.locks)
+			a.locks[lix].RLock()
+			for itemA := &a.buckets[bix]; itemA != nil; itemA = itemA.next {
+				if itemA.blockID == 0 || itemA.keyA < pstart || itemA.keyA > pstop {
+					continue
+				}
+				count++
+				if count > GLH_BLOOM_FILTER_N {
+					a.locks[lix].RUnlock()
+					return count
+				}
+			}
+			a.locks[lix].RUnlock()
+		}
+	} else {
+		if atomic.LoadInt32(&a.used) <= 0 && atomic.LoadInt32(&b.used) <= 0 {
+			return count
+		}
+		for bix := len(b.buckets) - 1; bix >= 0; bix-- {
+			lix := bix % len(b.locks)
+			b.locks[lix].RLock()
+			for itemB := &b.buckets[bix]; itemB != nil; itemB = itemB.next {
+				if itemB.blockID == 0 || itemB.keyA < pstart || itemB.keyA > pstop {
+					continue
+				}
+				count++
+				if count > GLH_BLOOM_FILTER_N {
+					b.locks[lix].RUnlock()
+					return count
+				}
+			}
+			b.locks[lix].RUnlock()
+		}
+		for bix := len(a.buckets) - 1; bix >= 0; bix-- {
+			lix := bix % len(a.locks)
+			b.locks[lix].RLock()
+			a.locks[lix].RLock()
+		NEXT_ITEM_A:
+			for itemA := &a.buckets[bix]; itemA != nil; itemA = itemA.next {
+				if itemA.blockID == 0 || itemA.keyA < pstart || itemA.keyA > pstop {
+					continue
+				}
+				for itemB := &a.buckets[bix]; itemB != nil; itemB = itemB.next {
+					if itemB.blockID == 0 {
+						continue
+					}
+					if itemB.keyA == itemA.keyA && itemB.keyB == itemA.keyB {
+						if itemB.timestamp >= itemA.timestamp {
+							count++
+							if count > GLH_BLOOM_FILTER_N {
+								a.locks[lix].RUnlock()
+								b.locks[lix].RUnlock()
+								return count
+							}
+							continue NEXT_ITEM_A
+						}
+						break
+					}
+				}
+				count++
+				if count > GLH_BLOOM_FILTER_N {
+					a.locks[lix].RUnlock()
+					b.locks[lix].RUnlock()
+					return count
+				}
+			}
+			a.locks[lix].RUnlock()
+			b.locks[lix].RUnlock()
+		}
+	}
+	return count
+}
+
+func (vlm *valuesLocMap) scanIntoBloomFilter(pstart uint64, pstop uint64, ktbf *ktBloomFilter) {
+	if vlm.rangeStart > pstop {
+		return
+	}
+	if vlm.rangeStop < pstart {
+		return
+	}
+	c := (*valuesLocMap)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vlm.c))))
+	if c != nil {
+		d := (*valuesLocMap)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vlm.d))))
+		c.scanIntoBloomFilter(pstart, pstop, ktbf)
+		d.scanIntoBloomFilter(pstart, pstop, ktbf)
+		return
+	}
+	a := (*valuesLocStore)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vlm.a))))
+	b := (*valuesLocStore)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vlm.b))))
+	if b == nil {
+		if atomic.LoadInt32(&a.used) <= 0 {
+			return
+		}
+		for bix := len(a.buckets) - 1; bix >= 0; bix-- {
+			lix := bix % len(a.locks)
+			a.locks[lix].RLock()
+			for itemA := &a.buckets[bix]; itemA != nil; itemA = itemA.next {
+				if itemA.blockID == 0 || itemA.keyA < pstart || itemA.keyA > pstop {
+					continue
+				}
+				ktbf.add(itemA.keyA, itemA.keyB, itemA.timestamp)
+			}
+		}
+	} else {
+		if atomic.LoadInt32(&a.used) <= 0 && atomic.LoadInt32(&b.used) <= 0 {
+			return
+		}
+		for bix := len(b.buckets) - 1; bix >= 0; bix-- {
+			lix := bix % len(b.locks)
+			b.locks[lix].RLock()
+			for itemB := &b.buckets[bix]; itemB != nil; itemB = itemB.next {
+				if itemB.blockID == 0 || itemB.keyA < pstart || itemB.keyA > pstop {
+					continue
+				}
+				ktbf.add(itemB.keyA, itemB.keyB, itemB.timestamp)
+			}
+			b.locks[lix].RUnlock()
+		}
+		for bix := len(a.buckets) - 1; bix >= 0; bix-- {
+			lix := bix % len(a.locks)
+			b.locks[lix].RLock()
+			a.locks[lix].RLock()
+		NEXT_ITEM_A:
+			for itemA := &a.buckets[bix]; itemA != nil; itemA = itemA.next {
+				if itemA.blockID == 0 || itemA.keyA < pstart || itemA.keyA > pstop {
+					continue
+				}
+				for itemB := &a.buckets[bix]; itemB != nil; itemB = itemB.next {
+					if itemB.blockID == 0 {
+						continue
+					}
+					if itemB.keyA == itemA.keyA && itemB.keyB == itemA.keyB {
+						if itemB.timestamp >= itemA.timestamp {
+							ktbf.add(itemB.keyA, itemB.keyB, itemB.timestamp)
+							continue NEXT_ITEM_A
+						}
+						break
+					}
+				}
+				ktbf.add(itemA.keyA, itemA.keyB, itemA.timestamp)
+			}
+			a.locks[lix].RUnlock()
+			b.locks[lix].RUnlock()
+		}
+	}
 }
 
 func (vlm *valuesLocMap) backgroundHelper(bg *valuesLocMapBackground, vlmPrev *valuesLocMap) {

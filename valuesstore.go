@@ -928,6 +928,7 @@ func (vs *ValuesStore) recovery() {
 }
 
 func (vs *ValuesStore) background() {
+	iteration := uint16(0)
 	interval := float64(60 * time.Second)
 	nextRun := time.Now().Add(time.Duration(interval + interval*rand.NormFloat64()*0.1))
 WORK:
@@ -952,9 +953,14 @@ WORK:
 			}
 		}
 		nextRun = time.Now().Add(time.Duration(interval + interval*rand.NormFloat64()*0.1))
-		vs.vlm.background(vs)
+		vs.vlm.background(vs, iteration)
 		if c != nil {
 			c <- struct{}{}
+		}
+		if iteration == math.MaxUint16 {
+			iteration = 0
+		} else {
+			iteration++
 		}
 	}
 	vs.backgroundDoneChan <- struct{}{}

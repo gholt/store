@@ -325,6 +325,8 @@ func write() {
 				keys = opts.keyspace[numberPer*client*16 : numberPer*(client+1)*16]
 			}
 			for o := 0; o < len(keys); o += 16 {
+				// test putting all keys in a certain range:
+				// if oldTimestamp, err := opts.vs.Write(binary.BigEndian.Uint64(keys[o:]) & 0x000fffffffffffff, binary.BigEndian.Uint64(keys[o+8:]), timestamp, opts.value); err != nil {
 				if oldTimestamp, err := opts.vs.Write(binary.BigEndian.Uint64(keys[o:]), binary.BigEndian.Uint64(keys[o+8:]), timestamp, opts.value); err != nil {
 					panic(err)
 				} else if oldTimestamp > timestamp {
