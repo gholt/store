@@ -17,6 +17,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unsafe"
 
 	"github.com/gholt/brimtext"
 	"github.com/gholt/brimutil"
@@ -57,7 +58,8 @@ type ValuesStoreOpts struct {
 	// allocate Cores*2 Values Pages.
 	MemValuesPageSize int
 	// MemWriteMultiplier indicates additional memory page sets to use to
-	// increase caching of recently written values.
+	// increase caching of recently written values. Using a multiplier less
+	// than 3 will also impact write speed.
 	MemWriteMultiplier int
 	// ValuesLocMapPageSize controls the size of each chunk of memory allocated
 	// by for value locations. The Values Loc Map is a map from key to value
@@ -70,7 +72,8 @@ type ValuesStoreOpts struct {
 	// bit distribution is to make even use of memory. This page size setting
 	// indicates how large each memory block will be, but the number of memory
 	// blocks depends on the key count. At the time of this writing, each key
-	// requires 42 bytes of location data.
+	// requires 48 bytes of location data (assuming the compiler pads to 48, 42
+	// is specified).
 	ValuesLocMapPageSize int
 	// ValuesLocMapSplitMultiplier indicates how full a Values Loc Map Page can
 	// get before being split into two pages. Each page is a map (hash table),
@@ -137,7 +140,7 @@ func NewValuesStoreOpts(envPrefix string) *ValuesStoreOpts {
 		}
 	}
 	if opts.MemTOCPageSize <= 0 {
-		opts.MemTOCPageSize = 8 * 1024 * 1024
+		opts.MemTOCPageSize = 4 * 1024 * 1024
 	}
 	if env := os.Getenv(envPrefix + "MEM_VALUES_PAGE_SIZE"); env != "" {
 		if val, err := strconv.Atoi(env); err == nil {
@@ -145,9 +148,9 @@ func NewValuesStoreOpts(envPrefix string) *ValuesStoreOpts {
 		}
 	}
 	if opts.MemValuesPageSize <= 0 {
-		opts.MemValuesPageSize = 1 << brimutil.PowerOfTwoNeeded(uint64(opts.MaxValueSize+4))
-		if opts.MemValuesPageSize < 8*1024*1024 {
-			opts.MemValuesPageSize = 8 * 1024 * 1024
+		opts.MemValuesPageSize = 1 << brimutil.PowerOfTwoNeeded(uint64(opts.MaxValueSize))
+		if opts.MemValuesPageSize < 4*1024*1024 {
+			opts.MemValuesPageSize = 4 * 1024 * 1024
 		}
 	}
 	if env := os.Getenv(envPrefix + "MEM_WRITE_MULTIPLIER"); env != "" {
@@ -156,7 +159,7 @@ func NewValuesStoreOpts(envPrefix string) *ValuesStoreOpts {
 		}
 	}
 	if opts.MemWriteMultiplier <= 0 {
-		opts.MemWriteMultiplier = 15
+		opts.MemWriteMultiplier = 3
 	}
 	if env := os.Getenv(envPrefix + "VALUES_LOC_MAP_PAGE_SIZE"); env != "" {
 		if val, err := strconv.Atoi(env); err == nil {
@@ -164,7 +167,7 @@ func NewValuesStoreOpts(envPrefix string) *ValuesStoreOpts {
 		}
 	}
 	if opts.ValuesLocMapPageSize <= 0 {
-		opts.ValuesLocMapPageSize = 8 * 1024 * 1024
+		opts.ValuesLocMapPageSize = 4 * 1024 * 1024
 	}
 	if env := os.Getenv(envPrefix + "VALUES_LOC_MAP_SPLIT_MULTIPLIER"); env != "" {
 		if val, err := strconv.ParseFloat(env, 64); err == nil {
@@ -254,12 +257,12 @@ func NewValuesStore(opts *ValuesStoreOpts) *ValuesStore {
 	}
 	tombstoneAge *= uint64(time.Second)
 	memTOCPageSize := opts.MemTOCPageSize
-	if memTOCPageSize < 4096 {
-		memTOCPageSize = 4096
+	if memTOCPageSize < int(unsafe.Sizeof(valueLoc{})) {
+		memTOCPageSize = int(unsafe.Sizeof(valueLoc{}))
 	}
 	memValuesPageSize := opts.MemValuesPageSize
-	if memValuesPageSize < 4096 {
-		memValuesPageSize = 4096
+	if memValuesPageSize < int(maxValueSize) {
+		memValuesPageSize = int(maxValueSize)
 	}
 	memWriteMultiplier := opts.MemWriteMultiplier
 	if memWriteMultiplier <= 0 {
@@ -274,25 +277,25 @@ func NewValuesStore(opts *ValuesStoreOpts) *ValuesStore {
 		valuesFileReaders = 1
 	}
 	checksumInterval := opts.ChecksumInterval
-	if checksumInterval < 1024 {
-		checksumInterval = 1024
-	} else if checksumInterval >= 4294967296 {
-		checksumInterval = 4294967295
+	if checksumInterval < 1 {
+		checksumInterval = 1
+	} else if checksumInterval > math.MaxUint32 {
+		checksumInterval = math.MaxUint32
 	}
-	if memTOCPageSize < checksumInterval/2+1 {
-		memTOCPageSize = checksumInterval/2 + 1
+	if memTOCPageSize < checksumInterval/4+1 {
+		memTOCPageSize = checksumInterval/4 + 1
 	}
 	if memTOCPageSize > math.MaxUint32 {
 		memTOCPageSize = math.MaxUint32
 	}
-	if memValuesPageSize < checksumInterval/2+1 {
-		memValuesPageSize = checksumInterval/2 + 1
+	if memValuesPageSize < checksumInterval/4+1 {
+		memValuesPageSize = checksumInterval/4 + 1
 	}
 	if memValuesPageSize > math.MaxUint32 {
 		memValuesPageSize = math.MaxUint32
 	}
 	vs := &ValuesStore{
-		valuesLocBlocks:    make([]valuesLocBlock, 65536),
+		valuesLocBlocks:    make([]valuesLocBlock, math.MaxUint16),
 		vlm:                newValuesLocMap(opts),
 		cores:              cores,
 		maxValueSize:       uint32(maxValueSize),

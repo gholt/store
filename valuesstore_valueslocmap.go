@@ -102,17 +102,20 @@ func newValuesLocMap(opts *ValuesStoreOpts) *valuesLocMap {
 		cores = 1
 	}
 	valuesLocMapPageSize := opts.ValuesLocMapPageSize
-	if valuesLocMapPageSize < 4096 {
-		valuesLocMapPageSize = 4096
+	if valuesLocMapPageSize < 1 {
+		valuesLocMapPageSize = 1
 	}
 	bucketCount := valuesLocMapPageSize / int(unsafe.Sizeof(valueLoc{}))
+	if bucketCount < 1 {
+		bucketCount = 1
+	}
 	lockCount := cores
 	if lockCount > bucketCount {
 		lockCount = bucketCount
 	}
 	splitMultiplier := opts.ValuesLocMapSplitMultiplier
 	if splitMultiplier <= 0 {
-		splitMultiplier = 3.0
+		splitMultiplier = 0.1
 	}
 	vlm := &valuesLocMap{
 		leftMask:   uint64(1) << 63,
@@ -402,7 +405,6 @@ func (vlm *valuesLocMap) gatherStatsHelper(stats *valuesLocMapStats) {
 	f := func(s *valuesLocStore) {
 		if stats.buckets == 0 {
 			stats.buckets = uint64(len(s.buckets))
-			stats.bucketCounts = make([]uint64, len(s.buckets))
 		}
 		stats.wg.Add(1)
 		go func() {
@@ -453,9 +455,6 @@ func (vlm *valuesLocMap) gatherStatsHelper(stats *valuesLocMapStats) {
 			}
 			if stats.extended {
 				atomic.AddUint64(&stats.storages, 1)
-				for bix := 0; bix < len(bucketCounts); bix++ {
-					atomic.AddUint64(&stats.bucketCounts[bix], bucketCounts[bix])
-				}
 				atomic.AddUint64(&stats.pointerLocs, pointerLocs)
 				atomic.AddUint64(&stats.locs, locs)
 				atomic.AddUint64(&stats.used, used)
@@ -483,19 +482,6 @@ func (vlm *valuesLocMap) gatherStatsHelper(stats *valuesLocMapStats) {
 
 func (stats *valuesLocMapStats) String() string {
 	if stats.extended {
-		averageBucketCount := uint64(0)
-		minBucketCount := uint64(math.MaxUint64)
-		maxBucketCount := uint64(0)
-		for i := 0; i < len(stats.bucketCounts); i++ {
-			averageBucketCount += stats.bucketCounts[i]
-			if stats.bucketCounts[i] < minBucketCount {
-				minBucketCount = stats.bucketCounts[i]
-			}
-			if stats.bucketCounts[i] > maxBucketCount {
-				maxBucketCount = stats.bucketCounts[i]
-			}
-		}
-		averageBucketCount /= stats.buckets
 		depthCounts := fmt.Sprintf("%d", stats.depthCounts[0])
 		for i := 1; i < len(stats.depthCounts); i++ {
 			depthCounts += fmt.Sprintf(" %d", stats.depthCounts[i])
@@ -505,10 +491,8 @@ func (stats *valuesLocMapStats) String() string {
 			[]string{"depthCounts", depthCounts},
 			[]string{"sections", fmt.Sprintf("%d", stats.sections)},
 			[]string{"storages", fmt.Sprintf("%d", stats.storages)},
-			[]string{"buckets", fmt.Sprintf("%d", stats.buckets)},
-			[]string{"averageBucketCount", fmt.Sprintf("%d", averageBucketCount)},
-			[]string{"minBucketCount", fmt.Sprintf("%d %.1f%%", minBucketCount, float64(averageBucketCount-minBucketCount)/float64(averageBucketCount)*100)},
-			[]string{"maxBucketCount", fmt.Sprintf("%d %.1f%%", maxBucketCount, float64(maxBucketCount-averageBucketCount)/float64(averageBucketCount)*100)},
+			[]string{"valuesLocMapPageSize", fmt.Sprintf("%d", stats.buckets*uint64(unsafe.Sizeof(valueLoc{})))},
+			[]string{"bucketsPerPage", fmt.Sprintf("%d", stats.buckets)},
 			[]string{"splitCount", fmt.Sprintf("%d", stats.splitCount)},
 			[]string{"locs", fmt.Sprintf("%d", stats.locs)},
 			[]string{"pointerLocs", fmt.Sprintf("%d %.1f%%", stats.pointerLocs, float64(stats.pointerLocs)/float64(stats.locs)*100)},
@@ -785,6 +769,11 @@ func (vlm *valuesLocMap) unsplit() {
 }
 
 func (vlm *valuesLocMap) background(vs *ValuesStore, iteration uint16) {
+	// GLH: Just for now while I'm doing other testing.
+	if iteration >= 0 {
+		return
+	}
+
 	p := 0
 	ppower := 1
 	pincrement := uint64(1) << uint64(64-ppower)
