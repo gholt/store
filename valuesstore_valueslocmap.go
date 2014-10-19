@@ -488,7 +488,7 @@ func (vlm *valuesLocMap) split() {
 	b := vlm.b
 	vlm.resizingLock.Unlock()
 	wg := &sync.WaitGroup{}
-	f := func(coreOffset int, clear bool) {
+	f := func(coreOffset int) {
 		for bix := len(a.buckets) - 1 - coreOffset; bix >= 0; bix -= vlm.cores {
 			lix := bix % len(a.locks)
 			b.locks[lix].Lock()
@@ -515,10 +515,8 @@ func (vlm *valuesLocMap) split() {
 							itemB.offset = itemA.offset
 							itemB.length = itemA.length
 						}
-						if clear {
-							atomic.AddInt32(&a.used, -1)
-							itemA.blockID = 0
-						}
+						atomic.AddInt32(&a.used, -1)
+						itemA.blockID = 0
 						continue NEXT_ITEM_A
 					}
 				}
@@ -541,10 +539,8 @@ func (vlm *valuesLocMap) split() {
 						length:    itemA.length,
 					}
 				}
-				if clear {
-					atomic.AddInt32(&a.used, -1)
-					itemA.blockID = 0
-				}
+				atomic.AddInt32(&a.used, -1)
+				itemA.blockID = 0
 			}
 			a.locks[lix].Unlock()
 			b.locks[lix].Unlock()
@@ -553,15 +549,10 @@ func (vlm *valuesLocMap) split() {
 	}
 	wg.Add(vlm.cores)
 	for core := 0; core < vlm.cores; core++ {
-		go f(core, false)
+		go f(core)
 	}
 	wg.Wait()
 	vlm.resizingLock.Lock()
-	wg.Add(vlm.cores)
-	for core := 0; core < vlm.cores; core++ {
-		go f(core, true)
-	}
-	wg.Wait()
 	vlm.c = &valuesLocMap{
 		leftMask:   vlm.leftMask >> 1,
 		rangeStart: vlm.rangeStart,
