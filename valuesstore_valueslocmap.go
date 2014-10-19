@@ -117,8 +117,8 @@ func (vlm *valuesLocMap) get(keyA uint64, keyB uint64) (uint64, uint16, uint32, 
 	var blockID uint16
 	var offset uint32
 	var length uint32
+	vlm.resizingLock.RLock()
 	for {
-		vlm.resizingLock.RLock()
 		if vlm.c == nil {
 			break
 		}
@@ -128,6 +128,7 @@ func (vlm *valuesLocMap) get(keyA uint64, keyB uint64) (uint64, uint16, uint32, 
 		} else {
 			vlm = vlm.d
 		}
+		vlm.resizingLock.RLock()
 		runlock.RUnlock()
 	}
 	bix := keyB % uint64(len(vlm.a.buckets))
@@ -169,8 +170,8 @@ func (vlm *valuesLocMap) get(keyA uint64, keyB uint64) (uint64, uint16, uint32, 
 func (vlm *valuesLocMap) set(keyA uint64, keyB uint64, timestamp uint64, blockID uint16, offset uint32, length uint32, evenIfSameTimestamp bool) uint64 {
 	var oldTimestamp uint64
 	var vlmPrev *valuesLocMap
+	vlm.resizingLock.RLock()
 	for {
-		vlm.resizingLock.RLock()
 		if vlm.c == nil {
 			break
 		}
@@ -181,6 +182,7 @@ func (vlm *valuesLocMap) set(keyA uint64, keyB uint64, timestamp uint64, blockID
 		} else {
 			vlm = vlm.d
 		}
+		vlm.resizingLock.RLock()
 		runlock.RUnlock()
 	}
 	bix := keyB % uint64(len(vlm.a.buckets))
