@@ -147,7 +147,7 @@ func (vlm *valuesLocMap) get(keyA uint64, keyB uint64) (uint64, uint16, uint32, 
 	var offset uint32
 	var length uint32
 VLM_SELECTION:
-	// traverse the tree until we hit a leaf node (no c [and therefore no d])
+	// Traverse the tree until we hit a leaf node (no c [and therefore no d]).
 	for {
 		c := (*valuesLocMap)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vlm.c))))
 		if c == nil {
@@ -236,7 +236,7 @@ func (vlm *valuesLocMap) set(keyA uint64, keyB uint64, timestamp uint64, blockID
 	var oldTimestamp uint64
 	var vlmPrev *valuesLocMap
 VLM_SELECTION:
-	// traverse the tree until we hit a leaf node (no c [and therefore no d])
+	// Traverse the tree until we hit a leaf node (no c [and therefore no d]).
 	for {
 		c := (*valuesLocMap)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vlm.c))))
 		if c == nil {
@@ -393,9 +393,9 @@ VLM_SELECTION:
 			b := (*valuesLocStore)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vlm.b))))
 			if b != nil {
 				// If b is set, a split started while we were writing, so we'll
-				// re-write to b checking a a competing value (should at least
-				// be the one we just wrote) and we're safe, assuming another
-				// split doesn't occur during our write.
+				// re-write to b checking a for a competing value (should at
+				// least be the one we just wrote) and we're safe, assuming
+				// another split doesn't occur during our write.
 				f(b, a)
 			} else {
 				// If b isn't set, either no split happened while we were
@@ -419,6 +419,7 @@ VLM_SELECTION:
 							break
 						}
 					}
+					a.locks[lix].Unlock()
 					vlm = d
 					goto VLM_SELECTION
 				} else {
