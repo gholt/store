@@ -5,6 +5,7 @@ import (
 	"math"
 	"sync"
 	"sync/atomic"
+	"time"
 	"unsafe"
 
 	"github.com/gholt/brimtext"
@@ -42,9 +43,10 @@ import (
 // If you would rather have perfect correctness at the cost of speed, you will
 // have to use an additional lock around all uses of a-e. On test hardware, 40
 // cores Intel(R) Xeon(R) CPU E5-2680 v2 @ 2.80GHz, the write speed measured
-// was approximately twice as fast without the extra lock safety (test used 1
-// billion values, each 128 bytes). The read speed increase depended on whether
-// the keys existed (TODO%) or not (TODO%).
+// was 80% faster without the extra lock safety (test used 1 billion values,
+// each 128 bytes). Process restart recovery was 45% faster. Deletes were 147%
+// faster. The read speed increase depended on whether the keys existed (14%),
+// were marked deleted (240%), or didn't exist at all (496%).
 type valuesLocMap struct {
 	leftMask     uint64
 	rangeStart   uint64
@@ -146,6 +148,7 @@ func (vlm *valuesLocMap) get(keyA uint64, keyB uint64) (uint64, uint16, uint32, 
 	var blockID uint16
 	var offset uint32
 	var length uint32
+	root := vlm
 VLM_SELECTION:
 	// Traverse the tree until we hit a leaf node (no c [and therefore no d]).
 	for {
@@ -191,10 +194,15 @@ VLM_SELECTION:
 		// If we're on the left side, even if a split is in progress or happens
 		// while we're reading it won't matter because we'd still read from the
 		// same memory block, assuming more than one split doesn't occur while
-		// we're reading. If an unsplit is in progress or happens while we're
-		// reading, it won't matter since we'd still read from the same memory
-		// block, again assuming more than one unsplit doesn't occur.
+		// we're reading.
 		f(a, nil)
+		// If an unsplit happened while we were reading, store a will end up
+		// nil and we need to retry the read.
+		a = (*valuesLocStore)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vlm.a))))
+		if a == nil {
+			vlm = root
+			goto VLM_SELECTION
+		}
 	} else {
 		// If we're on the right side, then things might be a bit trickier...
 		b := (*valuesLocStore)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vlm.b))))
@@ -207,7 +215,14 @@ VLM_SELECTION:
 			// If no split is in progress, we'll read from a and fallback to e
 			// if it exists...
 			f(a, (*valuesLocStore)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vlm.e)))))
-			// After we're done reading, we'll double check b...
+			// If an unsplit happened while we were reading, store a will end
+			// up nil and we need to retry the read.
+			a = (*valuesLocStore)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vlm.a))))
+			if a == nil {
+				vlm = root
+				goto VLM_SELECTION
+			}
+			// If we pass that test, we'll double check b...
 			b := (*valuesLocStore)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vlm.b))))
 			if b != nil {
 				// If b is set, a split started while we were reading, so we'll
@@ -234,7 +249,10 @@ VLM_SELECTION:
 
 func (vlm *valuesLocMap) set(keyA uint64, keyB uint64, timestamp uint64, blockID uint16, offset uint32, length uint32, evenIfSameTimestamp bool) uint64 {
 	var oldTimestamp uint64
+	var originalOldTimestampCheck bool
+	var originalOldTimestamp uint64
 	var vlmPrev *valuesLocMap
+	root := vlm
 VLM_SELECTION:
 	// Traverse the tree until we hit a leaf node (no c [and therefore no d]).
 	for {
@@ -358,22 +376,47 @@ VLM_SELECTION:
 		// If we're on the left side, even if a split is in progress or happens
 		// while we're writing it won't matter because we'd still write to the
 		// same memory block, assuming more than one split doesn't occur while
-		// we're writing. If an unsplit is in progress or happens while we're
-		// writing, it won't matter since we'd still write to the same memory
-		// block, again assuming more than one unsplit doesn't occur.
+		// we're writing.
 		f(a, nil)
-		// Next, we read b and e and if both are nil (no split/unsplit in
-		// progress) we check a's used counter to see if we should request a
-		// split/unsplit.
-		b := (*valuesLocStore)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vlm.b))))
-		if b == nil {
-			e := (*valuesLocStore)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vlm.e))))
-			if e == nil {
-				used := atomic.LoadInt32(&a.used)
-				if int(used) > vlm.splitCount {
-					go vlm.split()
-				} else if used == 0 && vlmPrev != nil {
-					go vlmPrev.unsplit()
+		// If our write was not superseded...
+		if oldTimestamp < timestamp || (evenIfSameTimestamp && oldTimestamp == timestamp) {
+			// If an unsplit happened while we were writing, store a will end
+			// up nil and we need to clear what we wrote and retry the write.
+			aAgain := (*valuesLocStore)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vlm.a))))
+			if aAgain == nil {
+				a.locks[lix].Lock()
+				for item := &a.buckets[bix]; item != nil; item = item.next {
+					if item.blockID == 0 {
+						continue
+					}
+					if item.keyA == keyA && item.keyB == keyB {
+						if item.timestamp == timestamp && item.blockID == blockID && item.offset == offset && item.length == length {
+							item.blockID = 0
+						}
+						break
+					}
+				}
+				a.locks[lix].Unlock()
+				if !originalOldTimestampCheck {
+					originalOldTimestampCheck = true
+					originalOldTimestamp = oldTimestamp
+				}
+				vlm = root
+				goto VLM_SELECTION
+			}
+			// Otherwise, we read b and e and if both are nil (no split/unsplit
+			// in progress) we check a's used counter to see if we should
+			// request a split/unsplit.
+			b := (*valuesLocStore)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vlm.b))))
+			if b == nil {
+				e := (*valuesLocStore)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vlm.e))))
+				if e == nil {
+					used := atomic.LoadInt32(&a.used)
+					if int(used) > vlm.splitCount {
+						go vlm.split()
+					} else if used == 0 && vlmPrev != nil {
+						go vlmPrev.unsplit()
+					}
 				}
 			}
 		}
@@ -389,24 +432,13 @@ VLM_SELECTION:
 			// If no split is in progress, we'll write to a checking e (if it
 			// exists) for any competing value...
 			f(a, (*valuesLocStore)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vlm.e)))))
-			// After we're done writing, we'll double check b...
-			b := (*valuesLocStore)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vlm.b))))
-			if b != nil {
-				// If b is set, a split started while we were writing, so we'll
-				// re-write to b checking a for a competing value (should at
-				// least be the one we just wrote) and we're safe, assuming
-				// another split doesn't occur during our write.
-				f(b, a)
-			} else {
-				// If b isn't set, either no split happened while we were
-				// writing, or the split happened and finished while we were
-				// writing, so we'll double check d to find out...
-				d := (*valuesLocMap)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vlm.d))))
-				if d != nil {
-					// If a complete split occurred while we were writing,
-					// we'll undo our write and then we'll traverse the tree
-					// node and jump back to any further tree node traversal
-					// and retry the write.
+			// If our write was not superseded...
+			if oldTimestamp < timestamp || (evenIfSameTimestamp && oldTimestamp == timestamp) {
+				// If an unsplit happened while we were writing, store a will
+				// end up nil and we need to clear what we wrote and retry the
+				// write.
+				aAgain := (*valuesLocStore)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vlm.a))))
+				if aAgain == nil {
 					a.locks[lix].Lock()
 					for item := &a.buckets[bix]; item != nil; item = item.next {
 						if item.blockID == 0 {
@@ -420,25 +452,76 @@ VLM_SELECTION:
 						}
 					}
 					a.locks[lix].Unlock()
-					vlm = d
+					if !originalOldTimestampCheck {
+						originalOldTimestampCheck = true
+						originalOldTimestamp = oldTimestamp
+					}
+					vlm = root
 					goto VLM_SELECTION
+				}
+				// If we pass that test, we'll double check b...
+				b := (*valuesLocStore)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vlm.b))))
+				if b != nil {
+					// If b is set, a split started while we were writing, so
+					// we'll re-write to b checking a for a competing value
+					// (should at least be the one we just wrote) and we're
+					// safe, assuming another split doesn't occur during our
+					// write.
+					if !originalOldTimestampCheck {
+						originalOldTimestampCheck = true
+						originalOldTimestamp = oldTimestamp
+					}
+					f(b, a)
 				} else {
-					// If no split is progress or had ocurred while we were
-					// writing, we check e to see if an unsplit is in progress
-					// and, if not, we check a's used counter to see if we
-					// should request a split/unsplit.
-					e := (*valuesLocStore)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vlm.e))))
-					if e == nil {
-						used := atomic.LoadInt32(&a.used)
-						if int(used) > vlm.splitCount {
-							go vlm.split()
-						} else if used == 0 && vlmPrev != nil {
-							go vlmPrev.unsplit()
+					// If b isn't set, either no split happened while we were
+					// writing, or the split happened and finished while we
+					// were writing, so we'll double check d to find out...
+					d := (*valuesLocMap)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vlm.d))))
+					if d != nil {
+						// If a complete split occurred while we were writing,
+						// we'll clear our write and then we'll traverse the
+						// tree node and jump back to any further tree node
+						// traversal and retry the write.
+						a.locks[lix].Lock()
+						for item := &a.buckets[bix]; item != nil; item = item.next {
+							if item.blockID == 0 {
+								continue
+							}
+							if item.keyA == keyA && item.keyB == keyB {
+								if item.timestamp == timestamp && item.blockID == blockID && item.offset == offset && item.length == length {
+									item.blockID = 0
+								}
+								break
+							}
+						}
+						a.locks[lix].Unlock()
+						if !originalOldTimestampCheck {
+							originalOldTimestampCheck = true
+							originalOldTimestamp = oldTimestamp
+						}
+						vlm = d
+						goto VLM_SELECTION
+					} else {
+						// If no split is progress or had ocurred while we were
+						// writing, we check e to see if an unsplit is in
+						// progress and, if not, we check a's used counter to
+						// see if we should request a split/unsplit.
+						e := (*valuesLocStore)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vlm.e))))
+						if e == nil {
+							used := atomic.LoadInt32(&a.used)
+							if int(used) > vlm.splitCount {
+								go vlm.split()
+							} else if used == 0 && vlmPrev != nil {
+								go vlmPrev.unsplit()
+							}
 						}
 					}
 				}
 			}
 		}
+	}
+	if originalOldTimestampCheck && originalOldTimestamp < oldTimestamp {
+		oldTimestamp = originalOldTimestamp
 	}
 	return oldTimestamp
 }
@@ -776,6 +859,8 @@ func (vlm *valuesLocMap) unsplit() {
 	atomic.StorePointer((*unsafe.Pointer)(unsafe.Pointer(&vlm.b)), nil)
 	atomic.StorePointer((*unsafe.Pointer)(unsafe.Pointer(&vlm.e)), unsafe.Pointer(e))
 	atomic.StorePointer((*unsafe.Pointer)(unsafe.Pointer(&vlm.a)), unsafe.Pointer(a))
+	atomic.StorePointer((*unsafe.Pointer)(unsafe.Pointer(&c.a)), nil)
+	atomic.StorePointer((*unsafe.Pointer)(unsafe.Pointer(&d.a)), nil)
 	atomic.StorePointer((*unsafe.Pointer)(unsafe.Pointer(&vlm.c)), nil)
 	atomic.StorePointer((*unsafe.Pointer)(unsafe.Pointer(&vlm.d)), nil)
 	wg := &sync.WaitGroup{}
@@ -872,6 +957,12 @@ func (vlm *valuesLocMap) unsplit() {
 }
 
 func (vlm *valuesLocMap) background(vs *ValuesStore, iteration uint16) {
+	// This is what I had as the background job before. Need to reimplement
+	// this tombstone expiration as part of scanCount most likely.
+	bg := &valuesLocMapBackground{tombstoneCutoff: uint64(time.Now().UnixNano()) - vs.tombstoneAge}
+	vlm.backgroundHelper(bg, nil)
+	bg.wg.Wait()
+
 	// GLH: Just for now while I'm doing other testing.
 	if iteration >= 0 {
 		return
@@ -904,11 +995,6 @@ func (vlm *valuesLocMap) background(vs *ValuesStore, iteration uint16) {
 		}
 	}
 	wg.Wait()
-	// This is what I had as the background job before. Need to reimplement
-	// this tombstone expiration as part of scanCount most likely.
-	// bg := &valuesLocMapBackground{tombstoneCutoff: uint64(time.Now().UnixNano()) - vs.tombstoneAge}
-	// vlm.backgroundHelper(bg, nil)
-	// bg.wg.Wait()
 }
 
 const GLH_BLOOM_FILTER_N = 1000000
