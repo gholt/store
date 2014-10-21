@@ -962,6 +962,11 @@ func (vlm *valuesLocMap) background(vs *ValuesStore, iteration uint16) {
 	// vlm.backgroundHelper(bg, nil)
 	// bg.wg.Wait()
 
+	// GLH: Just for now since this can be pretty impacting.
+	if vs != nil {
+		return
+	}
+
 	p := 0
 	ppower := 10
 	pincrement := uint64(1) << uint64(64-ppower)
