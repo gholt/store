@@ -5,7 +5,6 @@ import (
 	"math"
 	"sync"
 	"sync/atomic"
-	"time"
 	"unsafe"
 
 	"github.com/gholt/brimtext"
@@ -36,25 +35,27 @@ import (
 // bad and is running slow, this code should still be safe as it is meant to be
 // run with the data stored on multiple server replicas where if one server is
 // behaving badly the other servers will supersede it. In addition, background
-// routines are in place (TODO) to detect and repair any out of place data and
+// routines are in place to detect and repair any out of place data and
 // so these rare anomalies shoud be resolved fairly quickly. Any repairs done
-// will be reported in case their rarity isn't as uncommon as they should be.
+// will be reported via the gatherStats' outOfPlaceKeyDetections value in case
+// their rarity isn't as uncommon as they should be.
 //
 // If you would rather have perfect correctness at the cost of speed, you will
 // have to use an additional lock around all uses of a-e.
 type valuesLocMap struct {
-	leftMask     uint64
-	rangeStart   uint64
-	rangeStop    uint64
-	a            *valuesLocStore
-	b            *valuesLocStore
-	c            *valuesLocMap
-	d            *valuesLocMap
-	e            *valuesLocStore
-	resizing     bool
-	resizingLock sync.RWMutex
-	cores        int
-	splitCount   int
+	leftMask                uint64
+	rangeStart              uint64
+	rangeStop               uint64
+	a                       *valuesLocStore
+	b                       *valuesLocStore
+	c                       *valuesLocMap
+	d                       *valuesLocMap
+	e                       *valuesLocStore
+	resizing                bool
+	resizingLock            sync.RWMutex
+	cores                   int
+	splitCount              int
+	outOfPlaceKeyDetections int32
 }
 
 type valuesLocStore struct {
@@ -74,22 +75,23 @@ type valueLoc struct {
 }
 
 type valuesLocMapStats struct {
-	extended     bool
-	wg           sync.WaitGroup
-	depth        uint64
-	depthCounts  []uint64
-	sections     uint64
-	storages     uint64
-	buckets      uint64
-	bucketCounts []uint64
-	splitCount   uint64
-	locs         uint64
-	pointerLocs  uint64
-	unused       uint64
-	used         uint64
-	active       uint64
-	length       uint64
-	tombstones   uint64
+	extended                bool
+	wg                      sync.WaitGroup
+	depth                   uint64
+	depthCounts             []uint64
+	sections                uint64
+	storages                uint64
+	buckets                 uint64
+	bucketCounts            []uint64
+	splitCount              uint64
+	outOfPlaceKeyDetections int32
+	locs                    uint64
+	pointerLocs             uint64
+	unused                  uint64
+	used                    uint64
+	active                  uint64
+	length                  uint64
+	tombstones              uint64
 }
 
 type valuesLocMapBackground struct {
@@ -547,6 +549,7 @@ func (vlm *valuesLocMap) gatherStats(extended bool) *valuesLocMapStats {
 		stats.extended = true
 		stats.depthCounts = []uint64{0}
 		stats.splitCount = uint64(vlm.splitCount)
+		stats.outOfPlaceKeyDetections = vlm.outOfPlaceKeyDetections
 	}
 	vlm.gatherStatsHelper(stats)
 	stats.wg.Wait()
@@ -676,6 +679,7 @@ func (stats *valuesLocMapStats) String() string {
 			[]string{"valuesLocMapPageSize", fmt.Sprintf("%d", stats.buckets*uint64(unsafe.Sizeof(valueLoc{})))},
 			[]string{"bucketsPerPage", fmt.Sprintf("%d", stats.buckets)},
 			[]string{"splitCount", fmt.Sprintf("%d", stats.splitCount)},
+			[]string{"outOfPlaceKeyDetections", fmt.Sprintf("%d", stats.outOfPlaceKeyDetections)},
 			[]string{"locs", fmt.Sprintf("%d", stats.locs)},
 			[]string{"pointerLocs", fmt.Sprintf("%d %.1f%%", stats.pointerLocs, float64(stats.pointerLocs)/float64(stats.locs)*100)},
 			[]string{"unused", fmt.Sprintf("%d %.1f%%", stats.unused, float64(stats.unused)/float64(stats.locs)*100)},
@@ -954,17 +958,12 @@ func (vlm *valuesLocMap) unsplit() {
 func (vlm *valuesLocMap) background(vs *ValuesStore, iteration uint16) {
 	// This is what I had as the background job before. Need to reimplement
 	// this tombstone expiration as part of scanCount most likely.
-	bg := &valuesLocMapBackground{tombstoneCutoff: uint64(time.Now().UnixNano()) - vs.tombstoneAge}
-	vlm.backgroundHelper(bg, nil)
-	bg.wg.Wait()
-
-	// GLH: Just for now while I'm doing other testing.
-	if iteration >= 0 {
-		return
-	}
+	// bg := &valuesLocMapBackground{tombstoneCutoff: uint64(time.Now().UnixNano()) - vs.tombstoneAge}
+	// vlm.backgroundHelper(bg, nil)
+	// bg.wg.Wait()
 
 	p := 0
-	ppower := 1
+	ppower := 10
 	pincrement := uint64(1) << uint64(64-ppower)
 	pstart := uint64(0)
 	pstop := pstart + (pincrement - 1)
@@ -992,20 +991,20 @@ func (vlm *valuesLocMap) background(vs *ValuesStore, iteration uint16) {
 	wg.Wait()
 }
 
-const GLH_BLOOM_FILTER_N = 1000000
-const GLH_BLOOM_FILTER_P = 0.001
+const _GLH_BLOOM_FILTER_N = 1000000
+const _GLH_BLOOM_FILTER_P = 0.001
 
 func (vlm *valuesLocMap) scan(iteration uint16, p int, pstart uint64, pstop uint64, wg *sync.WaitGroup) {
-	count := vlm.scanCount(pstart, pstop, 0)
-	for count > GLH_BLOOM_FILTER_N {
+	count := vlm.scanCount(vlm, pstart, pstop, 0)
+	for count > _GLH_BLOOM_FILTER_N {
 		pstartNew := pstart + (pstop-pstart+1)/2
 		wg.Add(1)
 		go vlm.scan(iteration, p, pstart, pstartNew-1, wg)
 		pstart = pstartNew
-		count = vlm.scanCount(pstart, pstop, 0)
+		count = vlm.scanCount(vlm, pstart, pstop, 0)
 	}
 	if count > 0 {
-		ktbf := newKTBloomFilter(GLH_BLOOM_FILTER_N, GLH_BLOOM_FILTER_P, iteration)
+		ktbf := newKTBloomFilter(_GLH_BLOOM_FILTER_N, _GLH_BLOOM_FILTER_P, iteration)
 		vlm.scanIntoBloomFilter(pstart, pstop, ktbf)
 		if ktbf.hasData {
 			// Here we'll send the bloom filter to the other replicas and ask
@@ -1016,7 +1015,7 @@ func (vlm *valuesLocMap) scan(iteration uint16, p int, pstart uint64, pstop uint
 	wg.Done()
 }
 
-func (vlm *valuesLocMap) scanCount(pstart uint64, pstop uint64, count uint64) uint64 {
+func (vlm *valuesLocMap) scanCount(root *valuesLocMap, pstart uint64, pstop uint64, count uint64) uint64 {
 	if vlm.rangeStart > pstop {
 		return count
 	}
@@ -1026,11 +1025,11 @@ func (vlm *valuesLocMap) scanCount(pstart uint64, pstop uint64, count uint64) ui
 	c := (*valuesLocMap)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vlm.c))))
 	if c != nil {
 		d := (*valuesLocMap)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vlm.d))))
-		count = c.scanCount(pstart, pstop, count)
-		if count > GLH_BLOOM_FILTER_N {
+		count = c.scanCount(root, pstart, pstop, count)
+		if count > _GLH_BLOOM_FILTER_N {
 			return count
 		}
-		return d.scanCount(pstart, pstop, count)
+		return d.scanCount(root, pstart, pstop, count)
 	}
 	a := (*valuesLocStore)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vlm.a))))
 	b := (*valuesLocStore)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vlm.b))))
@@ -1042,15 +1041,21 @@ func (vlm *valuesLocMap) scanCount(pstart uint64, pstop uint64, count uint64) ui
 			lix := bix % len(a.locks)
 			a.locks[lix].RLock()
 			for itemA := &a.buckets[bix]; itemA != nil; itemA = itemA.next {
-				// TODO: We should be able check for data out of place here and
-				// correct it (also report it). Such repairs should be
-				// exceptionally rare, but we'll only really know if we have
-				// detection and reporting.
-				if itemA.blockID == 0 || itemA.keyA < pstart || itemA.keyA > pstop {
+				if itemA.blockID == 0 {
+					continue
+				}
+				if itemA.keyA < vlm.rangeStart || itemA.keyA > vlm.rangeStop {
+					// Out of place key, extract and reinsert.
+					atomic.AddInt32(&vlm.outOfPlaceKeyDetections, 1)
+					go root.set(itemA.keyA, itemA.keyB, itemA.timestamp, itemA.blockID, itemA.offset, itemA.length, false)
+					itemA.blockID = 0
+					continue
+				}
+				if itemA.keyA < pstart || itemA.keyA > pstop {
 					continue
 				}
 				count++
-				if count > GLH_BLOOM_FILTER_N {
+				if count > _GLH_BLOOM_FILTER_N {
 					a.locks[lix].RUnlock()
 					return count
 				}
@@ -1069,7 +1074,7 @@ func (vlm *valuesLocMap) scanCount(pstart uint64, pstop uint64, count uint64) ui
 					continue
 				}
 				count++
-				if count > GLH_BLOOM_FILTER_N {
+				if count > _GLH_BLOOM_FILTER_N {
 					b.locks[lix].RUnlock()
 					return count
 				}
@@ -1092,7 +1097,7 @@ func (vlm *valuesLocMap) scanCount(pstart uint64, pstop uint64, count uint64) ui
 					if itemB.keyA == itemA.keyA && itemB.keyB == itemA.keyB {
 						if itemB.timestamp >= itemA.timestamp {
 							count++
-							if count > GLH_BLOOM_FILTER_N {
+							if count > _GLH_BLOOM_FILTER_N {
 								a.locks[lix].RUnlock()
 								b.locks[lix].RUnlock()
 								return count
@@ -1103,7 +1108,7 @@ func (vlm *valuesLocMap) scanCount(pstart uint64, pstop uint64, count uint64) ui
 					}
 				}
 				count++
-				if count > GLH_BLOOM_FILTER_N {
+				if count > _GLH_BLOOM_FILTER_N {
 					a.locks[lix].RUnlock()
 					b.locks[lix].RUnlock()
 					return count
@@ -1145,6 +1150,7 @@ func (vlm *valuesLocMap) scanIntoBloomFilter(pstart uint64, pstop uint64, ktbf *
 				}
 				ktbf.add(itemA.keyA, itemA.keyB, itemA.timestamp)
 			}
+			a.locks[lix].RUnlock()
 		}
 	} else {
 		if atomic.LoadInt32(&a.used) <= 0 && atomic.LoadInt32(&b.used) <= 0 {
