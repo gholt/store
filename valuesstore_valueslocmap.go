@@ -13,13 +13,13 @@ import (
 
 // OVERALL NOTES:
 //
-// a is used to store at first, growth may then cause a split.
-// While splitting, b will be set, c and d will still be nil.
-// Once the split is complete, c and d will be set.
-// Shrinking may cause an unsplit.
-// During unsplit, a and e will be set, c and d will become nil.
-// e is considered read-only/fallback during unsplit.
-// Once unsplit is done, e will become nil.
+//  a is used to store at first, growth may then cause a split.
+//  While splitting, b will be set, c and d will still be nil.
+//  Once the split is complete, c and d will be set.
+//  Shrinking may cause an unsplit.
+//  During unsplit, a and e will be set, c and d will become nil.
+//  e is considered read-only/fallback during unsplit.
+//  Once unsplit is done, e will become nil.
 //
 // FOR SPEED'S SAKE THERE IS AN ASSUMPTION THAT ALL READS AND WRITES ACTIVE AT
 // THE START OR DURING ONE RESIZE WILL BE COMPLETED BEFORE ANOTHER RESIZE OF
