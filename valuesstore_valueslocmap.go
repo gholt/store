@@ -41,12 +41,7 @@ import (
 // will be reported in case their rarity isn't as uncommon as they should be.
 //
 // If you would rather have perfect correctness at the cost of speed, you will
-// have to use an additional lock around all uses of a-e. On test hardware, 40
-// cores Intel(R) Xeon(R) CPU E5-2680 v2 @ 2.80GHz, the write speed measured
-// was 80% faster without the extra lock safety (test used 1 billion values,
-// each 128 bytes). Process restart recovery was 45% faster. Deletes were 147%
-// faster. The read speed increase depended on whether the keys existed (14%),
-// were marked deleted (240%), or didn't exist at all (496%).
+// have to use an additional lock around all uses of a-e.
 type valuesLocMap struct {
 	leftMask     uint64
 	rangeStart   uint64
