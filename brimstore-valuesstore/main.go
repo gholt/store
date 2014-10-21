@@ -29,7 +29,6 @@ type optsStruct struct {
 	} `positional-args:"yes"`
 	keyspace []byte
 	buffers  [][]byte
-	value    []byte
 	st       runtime.MemStats
 	vs       *brimstore.ValuesStore
 }
@@ -75,14 +74,6 @@ func main() {
 	opts.buffers = make([][]byte, opts.Clients)
 	for i := 0; i < opts.Clients; i++ {
 		opts.buffers[i] = make([]byte, 4*1024*1024)
-	}
-	opts.value = make([]byte, opts.Length)
-	brimutil.NewSeededScrambled(int64(opts.Random)).Read(opts.value)
-	if len(opts.value) > 10 {
-		copy(opts.value, []byte("START67890"))
-	}
-	if len(opts.value) > 20 {
-		copy(opts.value[len(opts.value)-10:], []byte("123456STOP"))
 	}
 	fmt.Println(opts.Cores, "cores")
 	fmt.Println(opts.Clients, "clients")
@@ -315,6 +306,17 @@ func write() {
 	wg.Add(opts.Clients)
 	for i := 0; i < opts.Clients; i++ {
 		go func(client int) {
+			value := make([]byte, opts.Length)
+			randomness := value
+			if len(value) > 10 {
+				copy(value, []byte("START67890"))
+				randomness = value[10:]
+				if len(value) > 20 {
+					copy(value[len(value)-10:], []byte("123456STOP"))
+					randomness = value[10 : len(value)-10]
+				}
+			}
+			scr := brimutil.NewScrambled()
 			var s uint64
 			number := len(opts.keyspace) / 16
 			numberPer := number / opts.Clients
@@ -325,9 +327,10 @@ func write() {
 				keys = opts.keyspace[numberPer*client*16 : numberPer*(client+1)*16]
 			}
 			for o := 0; o < len(keys); o += 16 {
+				scr.Read(randomness)
 				// test putting all keys in a certain range:
-				// if oldTimestamp, err := opts.vs.Write(binary.BigEndian.Uint64(keys[o:]) & 0x000fffffffffffff, binary.BigEndian.Uint64(keys[o+8:]), timestamp, opts.value); err != nil {
-				if oldTimestamp, err := opts.vs.Write(binary.BigEndian.Uint64(keys[o:]), binary.BigEndian.Uint64(keys[o+8:]), timestamp, opts.value); err != nil {
+				// if oldTimestamp, err := opts.vs.Write(binary.BigEndian.Uint64(keys[o:]) & 0x000fffffffffffff, binary.BigEndian.Uint64(keys[o+8:]), timestamp, value); err != nil {
+				if oldTimestamp, err := opts.vs.Write(binary.BigEndian.Uint64(keys[o:]), binary.BigEndian.Uint64(keys[o+8:]), timestamp, value); err != nil {
 					panic(err)
 				} else if oldTimestamp > timestamp {
 					s++
