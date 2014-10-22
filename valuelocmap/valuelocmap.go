@@ -1,14 +1,110 @@
-package brimstore
+package valuelocmap
 
 import (
 	"fmt"
 	"math"
+	"os"
+	"runtime"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"unsafe"
 
 	"github.com/gholt/brimtext"
 )
+
+type config struct {
+	cores           int
+	pageSize        int
+	splitMultiplier float64
+}
+
+func resolveConfig(opts ...func(*config)) *config {
+	cfg := &config{}
+	if env := os.Getenv("BRIMSTORE_VALUELOCMAP_CORES"); env != "" {
+		if val, err := strconv.Atoi(env); err == nil {
+			cfg.cores = val
+		}
+	} else if env = os.Getenv("BRIMSTORE_CORES"); env != "" {
+		if val, err := strconv.Atoi(env); err == nil {
+			cfg.cores = val
+		}
+	}
+	if cfg.cores <= 0 {
+		cfg.cores = runtime.GOMAXPROCS(0)
+	}
+	if env := os.Getenv("BRIMSTORE_VALUELOCMAP_PAGESIZE"); env != "" {
+		if val, err := strconv.Atoi(env); err == nil {
+			cfg.pageSize = val
+		}
+	}
+	if cfg.pageSize <= 0 {
+		cfg.pageSize = 524288
+	}
+	if env := os.Getenv("BRIMSTORE_VALUESLOCMAP_SPLITMULTIPLIER"); env != "" {
+		if val, err := strconv.ParseFloat(env, 64); err == nil {
+			cfg.splitMultiplier = val
+		}
+	}
+	if cfg.splitMultiplier <= 0 {
+		cfg.splitMultiplier = 3.0
+	}
+	for _, opt := range opts {
+		opt(cfg)
+	}
+	if cfg.cores < 1 {
+		cfg.cores = 1
+	}
+	if cfg.pageSize < 1 {
+		cfg.pageSize = 1
+	}
+	if cfg.splitMultiplier <= 0 {
+		cfg.splitMultiplier = 0.01
+	}
+	return cfg
+}
+
+func OptCores(n int) func(*config) {
+	return func(cfg *config) {
+		cfg.cores = n
+	}
+}
+
+// OptPageSize controls the size of each chunk of memory allocated
+// by a ValueLocMap.
+// TODO: Figure out how to doc this stuff.
+// The Value Loc Map is a map from key to value
+// location data (memory block and offset, disk file and offset) and other
+// metadata (timestamp, length, etc.). A Value Loc Map Page is a block of
+// memory where sections of location data is stored. The blocks are
+// arranged by the high bits of the keys and distributed within each block
+// by the low bits of the keys. The high bit coalescing is to speed
+// replication and other routines that work with ranges of keys and the low
+// bit distribution is to make even use of memory. This page size setting
+// indicates how large each memory block will be, but the number of memory
+// blocks depends on the key count. At the time of this writing, each key
+// requires 48 bytes of location data (assuming the compiler pads to 48, 42
+// is specified).
+func OptPageSize(b int) func(*config) {
+	return func(cfg *config) {
+		cfg.pageSize = b
+	}
+}
+
+// OptSplitMultiplier indicates how full a Values Loc Map Page can
+// get before being split into two pages. Each page is a map (hash table),
+// so this indicates the load factor before splitting. For example, 1.0
+// would split once a page had as many items in it as its
+// ValuesLocMapPageSize would indicate. When a page is "overfull", each
+// item will, on average, point to another individually allocated item
+// (think of a slice of linked lists, each list having two items). Setting
+// this lower can decrease the individual allocations and pointer
+// traversing but at the expense of splitting and copying more often.
+func OptSplitMultiplier(m float64) func(*config) {
+	return func(cfg *config) {
+		cfg.splitMultiplier = m
+	}
+}
 
 // OVERALL NOTES:
 //
@@ -101,27 +197,17 @@ type valuesLocMapBackground struct {
 	tombstonesRetained  uint64
 }
 
-func newValuesLocMap(opts *ValuesStoreOpts) *valuesLocMap {
-	if opts == nil {
-		opts = NewValuesStoreOpts("")
-	}
-	cores := opts.Cores
-	if cores < 1 {
-		cores = 1
-	}
-	valuesLocMapPageSize := opts.ValuesLocMapPageSize
-	if valuesLocMapPageSize < 1 {
-		valuesLocMapPageSize = 1
-	}
-	bucketCount := valuesLocMapPageSize / int(unsafe.Sizeof(valueLoc{}))
+func NewValueLocMap(opts ...func(*config)) *valuesLocMap {
+	cfg := resolveConfig(opts...)
+	bucketCount := cfg.pageSize / int(unsafe.Sizeof(valueLoc{}))
 	if bucketCount < 1 {
 		bucketCount = 1
 	}
-	lockCount := cores
+	lockCount := cfg.cores
 	if lockCount > bucketCount {
 		lockCount = bucketCount
 	}
-	splitMultiplier := opts.ValuesLocMapSplitMultiplier
+	splitMultiplier := cfg.splitMultiplier
 	if splitMultiplier <= 0 {
 		splitMultiplier = 0.1
 	}
@@ -129,8 +215,8 @@ func newValuesLocMap(opts *ValuesStoreOpts) *valuesLocMap {
 		leftMask:   uint64(1) << 63,
 		rangeStart: 0,
 		rangeStop:  math.MaxUint64,
-		cores:      cores,
-		splitCount: int(float64(bucketCount) * splitMultiplier),
+		cores:      cfg.cores,
+		splitCount: int(float64(bucketCount) * cfg.splitMultiplier),
 	}
 	a := &valuesLocStore{
 		buckets: make([]valueLoc, bucketCount),
@@ -140,7 +226,7 @@ func newValuesLocMap(opts *ValuesStoreOpts) *valuesLocMap {
 	return vlm
 }
 
-func (vlm *valuesLocMap) get(keyA uint64, keyB uint64) (uint64, uint16, uint32, uint32) {
+func (vlm *valuesLocMap) Get(keyA uint64, keyB uint64) (uint64, uint16, uint32, uint32) {
 	var timestamp uint64
 	var blockID uint16
 	var offset uint32
@@ -244,7 +330,7 @@ VLM_SELECTION:
 	return timestamp, blockID, offset, length
 }
 
-func (vlm *valuesLocMap) set(keyA uint64, keyB uint64, timestamp uint64, blockID uint16, offset uint32, length uint32, evenIfSameTimestamp bool) uint64 {
+func (vlm *valuesLocMap) Set(keyA uint64, keyB uint64, timestamp uint64, blockID uint16, offset uint32, length uint32, evenIfSameTimestamp bool) uint64 {
 	var oldTimestamp uint64
 	var originalOldTimestampCheck bool
 	var originalOldTimestamp uint64
@@ -955,18 +1041,20 @@ func (vlm *valuesLocMap) unsplit() {
 	vlm.resizingLock.Unlock()
 }
 
-func (vlm *valuesLocMap) background(vs *ValuesStore, iteration uint16) {
+func (vlm *valuesLocMap) Background(iteration uint16) {
 	// This is what I had as the background job before. Need to reimplement
 	// this tombstone expiration as part of scanCount most likely.
 	// bg := &valuesLocMapBackground{tombstoneCutoff: uint64(time.Now().UnixNano()) - vs.tombstoneAge}
 	// vlm.backgroundHelper(bg, nil)
 	// bg.wg.Wait()
 
-	// GLH: Just for now since this can be pretty impacting.
-	if vs != nil {
+	// GLH: Just for now...
+	if iteration >= 0 {
 		return
 	}
+}
 
+/*
 	p := 0
 	ppower := 10
 	pincrement := uint64(1) << uint64(64-ppower)
@@ -1255,3 +1343,4 @@ func (vlm *valuesLocMap) backgroundHelper(bg *valuesLocMapBackground, vlmPrev *v
 		go f(e)
 	}
 }
+*/

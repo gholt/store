@@ -17,12 +17,18 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-	"unsafe"
 
+	"github.com/gholt/brimstore/valuelocmap"
 	"github.com/gholt/brimtext"
 	"github.com/gholt/brimutil"
 	"github.com/spaolacci/murmur3"
 )
+
+type ValueLocMap interface {
+	Get(keyA uint64, keyB uint64) (timestamp uint64, blockID uint16, offset uint32, length uint32)
+	Set(keyA uint64, keyB uint64, timestamp uint64, blockID uint16, offset uint32, length uint32, evenIfSameTimestamp bool) (previousTimestamp uint64)
+	Background(iteration uint16)
+}
 
 var ErrValueNotFound error = errors.New("value not found")
 
@@ -61,30 +67,6 @@ type ValuesStoreOpts struct {
 	// increase caching of recently written values. Using a multiplier less
 	// than 3 will also impact write speed.
 	MemWriteMultiplier int
-	// ValuesLocMapPageSize controls the size of each chunk of memory allocated
-	// by for value locations. The Values Loc Map is a map from key to value
-	// location data (memory block and offset, disk file and offset) and other
-	// metadata (timestamp, length, etc.). A Value Loc Map Page is a block of
-	// memory where sections of location data is stored. The blocks are
-	// arranged by the high bits of the keys and distributed within each block
-	// by the low bits of the keys. The high bit coalescing is to speed
-	// replication and other routines that work with ranges of keys and the low
-	// bit distribution is to make even use of memory. This page size setting
-	// indicates how large each memory block will be, but the number of memory
-	// blocks depends on the key count. At the time of this writing, each key
-	// requires 48 bytes of location data (assuming the compiler pads to 48, 42
-	// is specified).
-	ValuesLocMapPageSize int
-	// ValuesLocMapSplitMultiplier indicates how full a Values Loc Map Page can
-	// get before being split into two pages. Each page is a map (hash table),
-	// so this indicates the load factor before splitting. For example, 1.0
-	// would split once a page had as many items in it as its
-	// ValuesLocMapPageSize would indicate. When a page is "overfull", each
-	// item will, on average, point to another individually allocated item
-	// (think of a slice of linked lists, each list having two items). Setting
-	// this lower can decrease the individual allocations and pointer
-	// traversing but at the expense of splitting and copying more often.
-	ValuesLocMapSplitMultiplier float64
 	// ValuesFileSize indicates the size of a values file on disk before
 	// closing it and opening a new file. This also caps the size of the TOC
 	// files (Table of Contents of what is contained within a values file), but
@@ -161,22 +143,6 @@ func NewValuesStoreOpts(envPrefix string) *ValuesStoreOpts {
 	if opts.MemWriteMultiplier <= 0 {
 		opts.MemWriteMultiplier = 3
 	}
-	if env := os.Getenv(envPrefix + "VALUES_LOC_MAP_PAGE_SIZE"); env != "" {
-		if val, err := strconv.Atoi(env); err == nil {
-			opts.ValuesLocMapPageSize = val
-		}
-	}
-	if opts.ValuesLocMapPageSize <= 0 {
-		opts.ValuesLocMapPageSize = 524288
-	}
-	if env := os.Getenv(envPrefix + "VALUES_LOC_MAP_SPLIT_MULTIPLIER"); env != "" {
-		if val, err := strconv.ParseFloat(env, 64); err == nil {
-			opts.ValuesLocMapSplitMultiplier = val
-		}
-	}
-	if opts.ValuesLocMapSplitMultiplier <= 0 {
-		opts.ValuesLocMapSplitMultiplier = 3.0
-	}
 	if env := os.Getenv(envPrefix + "VALUES_FILE_SIZE"); env != "" {
 		if val, err := strconv.Atoi(env); err == nil {
 			opts.ValuesFileSize = val
@@ -218,7 +184,7 @@ type ValuesStore struct {
 	backgroundDoneChan    chan struct{}
 	valuesLocBlocks       []valuesLocBlock
 	atValuesLocBlocksIDer uint32
-	vlm                   *valuesLocMap
+	vlm                   ValueLocMap
 	cores                 int
 	maxValueSize          uint32
 	tombstoneAge          uint64
@@ -257,8 +223,8 @@ func NewValuesStore(opts *ValuesStoreOpts) *ValuesStore {
 	}
 	tombstoneAge *= uint64(time.Second)
 	memTOCPageSize := opts.MemTOCPageSize
-	if memTOCPageSize < int(unsafe.Sizeof(valueLoc{})) {
-		memTOCPageSize = int(unsafe.Sizeof(valueLoc{}))
+	if memTOCPageSize < 32 {
+		memTOCPageSize = 32
 	}
 	memValuesPageSize := opts.MemValuesPageSize
 	if memValuesPageSize < int(maxValueSize) {
@@ -296,7 +262,7 @@ func NewValuesStore(opts *ValuesStoreOpts) *ValuesStore {
 	}
 	vs := &ValuesStore{
 		valuesLocBlocks:    make([]valuesLocBlock, math.MaxUint16),
-		vlm:                newValuesLocMap(opts),
+		vlm:                valuelocmap.NewValueLocMap(),
 		cores:              cores,
 		maxValueSize:       uint32(maxValueSize),
 		tombstoneAge:       tombstoneAge,
@@ -372,9 +338,6 @@ func (vs *ValuesStore) Close() {
 	<-vs.tocWriterDoneChan
 	vs.backgroundNotifyChan <- nil
 	<-vs.backgroundDoneChan
-	for vs.vlm.isResizing() {
-		time.Sleep(10 * time.Millisecond)
-	}
 }
 
 // Lookup will return timestamp, length, err for keyA, keyB.
@@ -386,7 +349,7 @@ func (vs *ValuesStore) Close() {
 //
 // This may be called even after Close.
 func (vs *ValuesStore) Lookup(keyA uint64, keyB uint64) (uint64, uint32, error) {
-	timestamp, id, _, length := vs.vlm.get(keyA, keyB)
+	timestamp, id, _, length := vs.vlm.Get(keyA, keyB)
 	if id == 0 || timestamp&1 == 1 {
 		return timestamp, 0, ErrValueNotFound
 	}
@@ -404,7 +367,7 @@ func (vs *ValuesStore) Lookup(keyA uint64, keyB uint64) (uint64, uint32, error) 
 //
 // This may be called even after Close.
 func (vs *ValuesStore) Read(keyA uint64, keyB uint64, value []byte) (uint64, []byte, error) {
-	timestamp, id, offset, length := vs.vlm.get(keyA, keyB)
+	timestamp, id, offset, length := vs.vlm.Get(keyA, keyB)
 	if id == 0 || timestamp&1 == 1 {
 		return timestamp, value, ErrValueNotFound
 	}
@@ -495,9 +458,9 @@ func (vs *ValuesStore) GatherStats(extended bool) *ValuesStoreStats {
 		stats.valuesFileSize = vs.valuesFileSize
 		stats.valuesFileReaders = vs.valuesFileReaders
 		stats.checksumInterval = vs.checksumInterval
-		stats.vlmStats = vs.vlm.gatherStats(true)
+		//stats.vlmStats = vs.vlm.gatherStats(true)
 	} else {
-		stats.vlmStats = vs.vlm.gatherStats(false)
+		//stats.vlmStats = vs.vlm.gatherStats(false)
 	}
 	return stats
 }
@@ -539,7 +502,7 @@ func (vs *ValuesStore) memClearer() {
 			timestamp := binary.BigEndian.Uint64(vm.toc[vmTOCOffset+16:])
 			vmMemOffset := binary.BigEndian.Uint32(vm.toc[vmTOCOffset+24:])
 			length := binary.BigEndian.Uint32(vm.toc[vmTOCOffset+28:])
-			oldTimestamp := vs.vlm.set(keyA, keyB, timestamp, vm.vfID, vm.vfOffset+vmMemOffset, length, true)
+			oldTimestamp := vs.vlm.Set(keyA, keyB, timestamp, vm.vfID, vm.vfOffset+vmMemOffset, length, true)
 			if oldTimestamp != timestamp {
 				continue
 			}
@@ -603,7 +566,7 @@ func (vs *ValuesStore) memWriter(pendingVWRChan chan *valueWriteReq) {
 		vm.values = vm.values[:vmMemOffset+length]
 		vm.discardLock.Unlock()
 		copy(vm.values[vmMemOffset:], vwr.value)
-		oldTimestamp := vs.vlm.set(vwr.keyA, vwr.keyB, vwr.timestamp, vm.id, uint32(vmMemOffset), uint32(length), false)
+		oldTimestamp := vs.vlm.Set(vwr.keyA, vwr.keyB, vwr.timestamp, vm.id, uint32(vmMemOffset), uint32(length), false)
 		if oldTimestamp < vwr.timestamp {
 			vm.toc = vm.toc[:vmTOCOffset+32]
 			binary.BigEndian.PutUint64(vm.toc[vmTOCOffset:], vwr.keyA)
@@ -784,7 +747,7 @@ func (vs *ValuesStore) recovery() {
 				}
 				for i := len(wrs) - 1; i >= 0; i-- {
 					wr := &wrs[i]
-					if vs.vlm.set(wr.keyA, wr.keyB, wr.timestamp, wr.blockID, wr.offset, wr.length, false) < wr.timestamp {
+					if vs.vlm.Set(wr.keyA, wr.keyB, wr.timestamp, wr.blockID, wr.offset, wr.length, false) < wr.timestamp {
 						atomic.AddInt64(&count, 1)
 					}
 				}
@@ -956,7 +919,7 @@ WORK:
 			}
 		}
 		nextRun = time.Now().Add(time.Duration(interval + interval*rand.NormFloat64()*0.1))
-		vs.vlm.background(vs, iteration)
+		vs.vlm.Background(iteration)
 		if c != nil {
 			c <- struct{}{}
 		}
@@ -1010,7 +973,7 @@ type ValuesStoreStats struct {
 	valuesFileSize         uint32
 	valuesFileReaders      int
 	checksumInterval       uint32
-	vlmStats               *valuesLocMapStats
+	//vlmStats               *valuesLocMapStats
 }
 
 func (stats *ValuesStoreStats) String() string {
@@ -1042,19 +1005,21 @@ func (stats *ValuesStoreStats) String() string {
 			[]string{"valuesFileSize", fmt.Sprintf("%d", stats.valuesFileSize)},
 			[]string{"valuesFileReaders", fmt.Sprintf("%d", stats.valuesFileReaders)},
 			[]string{"checksumInterval", fmt.Sprintf("%d", stats.checksumInterval)},
-			[]string{"vlm", stats.vlmStats.String()},
+			//[]string{"vlm", stats.vlmStats.String()},
 		}, nil)
 	} else {
 		return brimtext.Align([][]string{
-			[]string{"vlm", stats.vlmStats.String()},
+		//[]string{"vlm", stats.vlmStats.String()},
 		}, nil)
 	}
 }
 
 func (stats *ValuesStoreStats) ValueCount() uint64 {
-	return stats.vlmStats.active
+	//return stats.vlmStats.active
+	return 0
 }
 
 func (stats *ValuesStoreStats) ValuesLength() uint64 {
-	return stats.vlmStats.length
+	//return stats.vlmStats.length
+	return 0
 }
