@@ -64,46 +64,38 @@ func resolveConfig(opts ...func(*config)) *config {
 	return cfg
 }
 
+// OptCores indicates how many cores may be in use (for calculating the number
+// of locks to create, for example) and how many cores may be used for
+// background jobs. Defaults to env BRIMSTORE_VALUELOCMAP_CORES,
+// BRIMSTORE_CORES, or GOMAXPROCS.
 func OptCores(n int) func(*config) {
 	return func(cfg *config) {
 		cfg.cores = n
 	}
 }
 
-// OptPageSize controls the size of each chunk of memory allocated
-// by a ValueLocMap.
-// TODO: Figure out how to doc this stuff.
-// The Value Loc Map is a map from key to value
-// location data (memory block and offset, disk file and offset) and other
-// metadata (timestamp, length, etc.). A Value Loc Map Page is a block of
-// memory where sections of location data is stored. The blocks are
-// arranged by the high bits of the keys and distributed within each block
-// by the low bits of the keys. The high bit coalescing is to speed
-// replication and other routines that work with ranges of keys and the low
-// bit distribution is to make even use of memory. This page size setting
-// indicates how large each memory block will be, but the number of memory
-// blocks depends on the key count. At the time of this writing, each key
-// requires 48 bytes of location data (assuming the compiler pads to 48, 42
-// is specified).
+// OptPageSize controls the size of each chunk of memory allocated. Defaults to
+// env BRIMSTORE_VALUELOCMAP_PAGESIZE or 524,288.
 func OptPageSize(b int) func(*config) {
 	return func(cfg *config) {
 		cfg.pageSize = b
 	}
 }
 
-// OptSplitMultiplier indicates how full a Values Loc Map Page can
-// get before being split into two pages. Each page is a map (hash table),
-// so this indicates the load factor before splitting. For example, 1.0
-// would split once a page had as many items in it as its
-// ValuesLocMapPageSize would indicate. When a page is "overfull", each
-// item will, on average, point to another individually allocated item
-// (think of a slice of linked lists, each list having two items). Setting
-// this lower can decrease the individual allocations and pointer
-// traversing but at the expense of splitting and copying more often.
+// OptSplitMultiplier indicates how full a memory page can get before being
+// split into two pages. Defaults to env BRIMSTORE_VALUELOCMAP_SPLITMULTIPLIER
+// or 3.0.
 func OptSplitMultiplier(m float64) func(*config) {
 	return func(cfg *config) {
 		cfg.splitMultiplier = m
 	}
+}
+
+type ValueLocMap struct {
+	root                    *valueLocNode
+	cores                   int
+	splitCount              int
+	outOfPlaceKeyDetections int32
 }
 
 // OVERALL NOTES:
@@ -138,14 +130,14 @@ func OptSplitMultiplier(m float64) func(*config) {
 //
 // If you would rather have perfect correctness at the cost of speed, you will
 // have to use an additional lock around all uses of a-e.
-type valuesLocMap struct {
+type valueLocNode struct {
 	leftMask                uint64
 	rangeStart              uint64
 	rangeStop               uint64
 	a                       *valuesLocStore
 	b                       *valuesLocStore
-	c                       *valuesLocMap
-	d                       *valuesLocMap
+	c                       *valueLocNode
+	d                       *valueLocNode
 	e                       *valuesLocStore
 	resizing                bool
 	resizingLock            sync.RWMutex
@@ -197,7 +189,7 @@ type valuesLocMapBackground struct {
 	tombstonesRetained  uint64
 }
 
-func NewValueLocMap(opts ...func(*config)) *valuesLocMap {
+func NewValueLocMap(opts ...func(*config)) *ValueLocMap {
 	cfg := resolveConfig(opts...)
 	bucketCount := cfg.pageSize / int(unsafe.Sizeof(valueLoc{}))
 	if bucketCount < 1 {
@@ -211,41 +203,41 @@ func NewValueLocMap(opts ...func(*config)) *valuesLocMap {
 	if splitMultiplier <= 0 {
 		splitMultiplier = 0.1
 	}
-	vlm := &valuesLocMap{
-		leftMask:   uint64(1) << 63,
-		rangeStart: 0,
-		rangeStop:  math.MaxUint64,
+	return &ValueLocMap{
+		root: &valueLocNode{
+			leftMask:   uint64(1) << 63,
+			rangeStart: 0,
+			rangeStop:  math.MaxUint64,
+			a: &valuesLocStore{
+				buckets: make([]valueLoc, bucketCount),
+				locks:   make([]sync.RWMutex, lockCount),
+			},
+		},
 		cores:      cfg.cores,
 		splitCount: int(float64(bucketCount) * cfg.splitMultiplier),
 	}
-	a := &valuesLocStore{
-		buckets: make([]valueLoc, bucketCount),
-		locks:   make([]sync.RWMutex, lockCount),
-	}
-	atomic.StorePointer((*unsafe.Pointer)(unsafe.Pointer(&vlm.a)), unsafe.Pointer(a))
-	return vlm
 }
 
-func (vlm *valuesLocMap) Get(keyA uint64, keyB uint64) (uint64, uint16, uint32, uint32) {
+func (vlm *ValueLocMap) Get(keyA uint64, keyB uint64) (uint64, uint16, uint32, uint32) {
 	var timestamp uint64
 	var blockID uint16
 	var offset uint32
 	var length uint32
-	root := vlm
-VLM_SELECTION:
+	vln := vlm.root
+VLN_SELECTION:
 	// Traverse the tree until we hit a leaf node (no c [and therefore no d]).
 	for {
-		c := (*valuesLocMap)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vlm.c))))
+		c := (*valueLocNode)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vln.c))))
 		if c == nil {
 			break
 		}
-		if keyA&vlm.leftMask == 0 {
-			vlm = c
+		if keyA&vln.leftMask == 0 {
+			vln = c
 		} else {
-			vlm = (*valuesLocMap)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vlm.d))))
+			vln = (*valueLocNode)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vln.d))))
 		}
 	}
-	a := (*valuesLocStore)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vlm.a))))
+	a := (*valuesLocStore)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vln.a))))
 	bix := keyB % uint64(len(a.buckets))
 	lix := bix % uint64(len(a.locks))
 	f := func(s *valuesLocStore, fb *valuesLocStore) {
@@ -273,7 +265,7 @@ VLM_SELECTION:
 		}
 		s.locks[lix].RUnlock()
 	}
-	if keyA&vlm.leftMask == 0 {
+	if keyA&vln.leftMask == 0 {
 		// If we're on the left side, even if a split is in progress or happens
 		// while we're reading it won't matter because we'd still read from the
 		// same memory block, assuming more than one split doesn't occur while
@@ -281,14 +273,14 @@ VLM_SELECTION:
 		f(a, nil)
 		// If an unsplit happened while we were reading, store a will end up
 		// nil and we need to retry the read.
-		a = (*valuesLocStore)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vlm.a))))
+		a = (*valuesLocStore)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vln.a))))
 		if a == nil {
-			vlm = root
-			goto VLM_SELECTION
+			vln = vlm.root
+			goto VLN_SELECTION
 		}
 	} else {
 		// If we're on the right side, then things might be a bit trickier...
-		b := (*valuesLocStore)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vlm.b))))
+		b := (*valuesLocStore)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vln.b))))
 		if b != nil {
 			// If a split is in progress, then we can read from b and fallback
 			// to a and we're safe, assuming another split doesn't occur during
@@ -297,16 +289,16 @@ VLM_SELECTION:
 		} else {
 			// If no split is in progress, we'll read from a and fallback to e
 			// if it exists...
-			f(a, (*valuesLocStore)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vlm.e)))))
+			f(a, (*valuesLocStore)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vln.e)))))
 			// If an unsplit happened while we were reading, store a will end
 			// up nil and we need to retry the read.
-			a = (*valuesLocStore)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vlm.a))))
+			a = (*valuesLocStore)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vln.a))))
 			if a == nil {
-				vlm = root
-				goto VLM_SELECTION
+				vln = vlm.root
+				goto VLN_SELECTION
 			}
 			// If we pass that test, we'll double check b...
-			b := (*valuesLocStore)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vlm.b))))
+			b := (*valuesLocStore)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vln.b))))
 			if b != nil {
 				// If b is set, a split started while we were reading, so we'll
 				// re-read from b and fallback to a and we're safe, assuming
@@ -316,13 +308,13 @@ VLM_SELECTION:
 				// If b isn't set, either no split happened while we were
 				// reading, or the split happened and finished while we were
 				// reading, so we'll double check d to find out...
-				d := (*valuesLocMap)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vlm.d))))
+				d := (*valueLocNode)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vln.d))))
 				if d != nil {
 					// If a complete split occurred while we were reading,
 					// we'll traverse the tree node and jump back to any
 					// further tree node traversal and retry the read.
-					vlm = d
-					goto VLM_SELECTION
+					vln = d
+					goto VLN_SELECTION
 				}
 			}
 		}
@@ -330,27 +322,27 @@ VLM_SELECTION:
 	return timestamp, blockID, offset, length
 }
 
-func (vlm *valuesLocMap) Set(keyA uint64, keyB uint64, timestamp uint64, blockID uint16, offset uint32, length uint32, evenIfSameTimestamp bool) uint64 {
+func (vlm *ValueLocMap) Set(keyA uint64, keyB uint64, timestamp uint64, blockID uint16, offset uint32, length uint32, evenIfSameTimestamp bool) uint64 {
 	var oldTimestamp uint64
 	var originalOldTimestampCheck bool
 	var originalOldTimestamp uint64
-	var vlmPrev *valuesLocMap
-	root := vlm
-VLM_SELECTION:
+	var vlmPrev *valueLocNode
+	vln := vlm.root
+VLN_SELECTION:
 	// Traverse the tree until we hit a leaf node (no c [and therefore no d]).
 	for {
-		c := (*valuesLocMap)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vlm.c))))
+		c := (*valueLocNode)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vln.c))))
 		if c == nil {
 			break
 		}
-		vlmPrev = vlm
-		if keyA&vlm.leftMask == 0 {
-			vlm = c
+		vlmPrev = vln
+		if keyA&vln.leftMask == 0 {
+			vln = c
 		} else {
-			vlm = (*valuesLocMap)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vlm.d))))
+			vln = (*valueLocNode)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vln.d))))
 		}
 	}
-	a := (*valuesLocStore)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vlm.a))))
+	a := (*valuesLocStore)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vln.a))))
 	bix := keyB % uint64(len(a.buckets))
 	lix := bix % uint64(len(a.locks))
 	f := func(s *valuesLocStore, fb *valuesLocStore) {
@@ -455,7 +447,7 @@ VLM_SELECTION:
 		}
 		s.locks[lix].Unlock()
 	}
-	if keyA&vlm.leftMask == 0 {
+	if keyA&vln.leftMask == 0 {
 		// If we're on the left side, even if a split is in progress or happens
 		// while we're writing it won't matter because we'd still write to the
 		// same memory block, assuming more than one split doesn't occur while
@@ -465,7 +457,7 @@ VLM_SELECTION:
 		if oldTimestamp < timestamp || (evenIfSameTimestamp && oldTimestamp == timestamp) {
 			// If an unsplit happened while we were writing, store a will end
 			// up nil and we need to clear what we wrote and retry the write.
-			aAgain := (*valuesLocStore)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vlm.a))))
+			aAgain := (*valuesLocStore)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vln.a))))
 			if aAgain == nil {
 				a.locks[lix].Lock()
 				for item := &a.buckets[bix]; item != nil; item = item.next {
@@ -484,28 +476,28 @@ VLM_SELECTION:
 					originalOldTimestampCheck = true
 					originalOldTimestamp = oldTimestamp
 				}
-				vlm = root
-				goto VLM_SELECTION
+				vln = vlm.root
+				goto VLN_SELECTION
 			}
 			// Otherwise, we read b and e and if both are nil (no split/unsplit
 			// in progress) we check a's used counter to see if we should
 			// request a split/unsplit.
-			b := (*valuesLocStore)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vlm.b))))
+			b := (*valuesLocStore)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vln.b))))
 			if b == nil {
-				e := (*valuesLocStore)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vlm.e))))
+				e := (*valuesLocStore)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vln.e))))
 				if e == nil {
 					used := atomic.LoadInt32(&a.used)
 					if int(used) > vlm.splitCount {
-						go vlm.split()
+						go vln.split(vlm.cores)
 					} else if used == 0 && vlmPrev != nil {
-						go vlmPrev.unsplit()
+						go vlmPrev.unsplit(vlm.cores)
 					}
 				}
 			}
 		}
 	} else {
 		// If we're on the right side, then things might be a bit trickier...
-		b := (*valuesLocStore)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vlm.b))))
+		b := (*valuesLocStore)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vln.b))))
 		if b != nil {
 			// If a split is in progress, then we can write to b checking a for
 			// any competing value and we're safe, assuming another split
@@ -514,13 +506,13 @@ VLM_SELECTION:
 		} else {
 			// If no split is in progress, we'll write to a checking e (if it
 			// exists) for any competing value...
-			f(a, (*valuesLocStore)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vlm.e)))))
+			f(a, (*valuesLocStore)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vln.e)))))
 			// If our write was not superseded...
 			if oldTimestamp < timestamp || (evenIfSameTimestamp && oldTimestamp == timestamp) {
 				// If an unsplit happened while we were writing, store a will
 				// end up nil and we need to clear what we wrote and retry the
 				// write.
-				aAgain := (*valuesLocStore)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vlm.a))))
+				aAgain := (*valuesLocStore)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vln.a))))
 				if aAgain == nil {
 					a.locks[lix].Lock()
 					for item := &a.buckets[bix]; item != nil; item = item.next {
@@ -539,11 +531,11 @@ VLM_SELECTION:
 						originalOldTimestampCheck = true
 						originalOldTimestamp = oldTimestamp
 					}
-					vlm = root
-					goto VLM_SELECTION
+					vln = vlm.root
+					goto VLN_SELECTION
 				}
 				// If we pass that test, we'll double check b...
-				b := (*valuesLocStore)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vlm.b))))
+				b := (*valuesLocStore)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vln.b))))
 				if b != nil {
 					// If b is set, a split started while we were writing, so
 					// we'll re-write to b checking a for a competing value
@@ -559,7 +551,7 @@ VLM_SELECTION:
 					// If b isn't set, either no split happened while we were
 					// writing, or the split happened and finished while we
 					// were writing, so we'll double check d to find out...
-					d := (*valuesLocMap)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vlm.d))))
+					d := (*valueLocNode)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vln.d))))
 					if d != nil {
 						// If a complete split occurred while we were writing,
 						// we'll clear our write and then we'll traverse the
@@ -582,20 +574,20 @@ VLM_SELECTION:
 							originalOldTimestampCheck = true
 							originalOldTimestamp = oldTimestamp
 						}
-						vlm = d
-						goto VLM_SELECTION
+						vln = d
+						goto VLN_SELECTION
 					} else {
 						// If no split is progress or had ocurred while we were
 						// writing, we check e to see if an unsplit is in
 						// progress and, if not, we check a's used counter to
 						// see if we should request a split/unsplit.
-						e := (*valuesLocStore)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vlm.e))))
+						e := (*valuesLocStore)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vln.e))))
 						if e == nil {
 							used := atomic.LoadInt32(&a.used)
 							if int(used) > vlm.splitCount {
-								go vlm.split()
+								go vln.split(vlm.cores)
 							} else if used == 0 && vlmPrev != nil {
-								go vlmPrev.unsplit()
+								go vlmPrev.unsplit(vlm.cores)
 							}
 						}
 					}
@@ -609,27 +601,31 @@ VLM_SELECTION:
 	return oldTimestamp
 }
 
-func (vlm *valuesLocMap) isResizing() bool {
-	vlm.resizingLock.RLock()
-	if vlm.resizing {
-		vlm.resizingLock.RUnlock()
+func (vlm *ValueLocMap) isResizing() bool {
+	return vlm.root.isResizing()
+}
+
+func (vln *valueLocNode) isResizing() bool {
+	vln.resizingLock.RLock()
+	if vln.resizing {
+		vln.resizingLock.RUnlock()
 		return true
 	}
-	c := (*valuesLocMap)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vlm.c))))
+	c := (*valueLocNode)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vln.c))))
 	if c != nil && c.isResizing() {
-		vlm.resizingLock.RUnlock()
+		vln.resizingLock.RUnlock()
 		return true
 	}
-	d := (*valuesLocMap)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vlm.d))))
+	d := (*valueLocNode)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vln.d))))
 	if d != nil && d.isResizing() {
-		vlm.resizingLock.RUnlock()
+		vln.resizingLock.RUnlock()
 		return true
 	}
-	vlm.resizingLock.RUnlock()
+	vln.resizingLock.RUnlock()
 	return false
 }
 
-func (vlm *valuesLocMap) gatherStats(extended bool) *valuesLocMapStats {
+func (vlm *ValueLocMap) gatherStats(extended bool) *valuesLocMapStats {
 	stats := &valuesLocMapStats{}
 	if extended {
 		stats.extended = true
@@ -637,7 +633,7 @@ func (vlm *valuesLocMap) gatherStats(extended bool) *valuesLocMapStats {
 		stats.splitCount = uint64(vlm.splitCount)
 		stats.outOfPlaceKeyDetections = vlm.outOfPlaceKeyDetections
 	}
-	vlm.gatherStatsHelper(stats)
+	vlm.root.gatherStatsHelper(stats)
 	stats.wg.Wait()
 	if extended {
 		stats.depthCounts = stats.depthCounts[1:]
@@ -645,7 +641,7 @@ func (vlm *valuesLocMap) gatherStats(extended bool) *valuesLocMapStats {
 	return stats
 }
 
-func (vlm *valuesLocMap) gatherStatsHelper(stats *valuesLocMapStats) {
+func (vln *valueLocNode) gatherStatsHelper(stats *valuesLocMapStats) {
 	if stats.extended {
 		stats.sections++
 		stats.depth++
@@ -655,9 +651,9 @@ func (vlm *valuesLocMap) gatherStatsHelper(stats *valuesLocMapStats) {
 			stats.depthCounts = append(stats.depthCounts, 1)
 		}
 	}
-	c := (*valuesLocMap)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vlm.c))))
+	c := (*valueLocNode)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vln.c))))
 	if c != nil {
-		d := (*valuesLocMap)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vlm.d))))
+		d := (*valueLocNode)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vln.d))))
 		if stats.extended {
 			depthOrig := stats.depth
 			c.gatherStatsHelper(stats)
@@ -737,15 +733,15 @@ func (vlm *valuesLocMap) gatherStatsHelper(stats *valuesLocMapStats) {
 			stats.wg.Done()
 		}()
 	}
-	a := (*valuesLocStore)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vlm.a))))
+	a := (*valuesLocStore)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vln.a))))
 	if a != nil {
 		f(a)
 	}
-	b := (*valuesLocStore)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vlm.b))))
+	b := (*valuesLocStore)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vln.b))))
 	if b != nil {
 		f(b)
 	}
-	e := (*valuesLocStore)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vlm.e))))
+	e := (*valuesLocStore)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vln.e))))
 	if e != nil {
 		f(e)
 	}
@@ -782,32 +778,32 @@ func (stats *valuesLocMapStats) String() string {
 	}
 }
 
-func (vlm *valuesLocMap) split() {
-	vlm.resizingLock.Lock()
-	a := (*valuesLocStore)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vlm.a))))
-	c := (*valuesLocMap)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vlm.c))))
-	if vlm.resizing || c != nil || int(atomic.LoadInt32(&a.used)) < vlm.splitCount {
-		vlm.resizingLock.Unlock()
+func (vln *valueLocNode) split(cores int) {
+	vln.resizingLock.Lock()
+	a := (*valuesLocStore)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vln.a))))
+	c := (*valueLocNode)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vln.c))))
+	if vln.resizing || c != nil || int(atomic.LoadInt32(&a.used)) < vln.splitCount {
+		vln.resizingLock.Unlock()
 		return
 	}
-	vlm.resizing = true
-	vlm.resizingLock.Unlock()
+	vln.resizing = true
+	vln.resizingLock.Unlock()
 	b := &valuesLocStore{
 		buckets: make([]valueLoc, len(a.buckets)),
 		locks:   make([]sync.RWMutex, len(a.locks)),
 	}
-	atomic.StorePointer((*unsafe.Pointer)(unsafe.Pointer(&vlm.b)), unsafe.Pointer(b))
+	atomic.StorePointer((*unsafe.Pointer)(unsafe.Pointer(&vln.b)), unsafe.Pointer(b))
 	wg := &sync.WaitGroup{}
 	var copies uint32
 	var clears uint32
 	f := func(coreOffset int, clear bool) {
-		for bix := len(a.buckets) - 1 - coreOffset; bix >= 0; bix -= vlm.cores {
+		for bix := len(a.buckets) - 1 - coreOffset; bix >= 0; bix -= cores {
 			lix := bix % len(a.locks)
 			b.locks[lix].Lock()
 			a.locks[lix].Lock()
 		NEXT_ITEM_A:
 			for itemA := &a.buckets[bix]; itemA != nil; itemA = itemA.next {
-				if itemA.blockID == 0 || itemA.keyA&vlm.leftMask == 0 {
+				if itemA.blockID == 0 || itemA.keyA&vln.leftMask == 0 {
 					continue
 				}
 				var unusedItemB *valueLoc
@@ -869,8 +865,8 @@ func (vlm *valuesLocMap) split() {
 	}
 	for passes := 0; passes < 2 || copies > 0; passes++ {
 		copies = 0
-		wg.Add(vlm.cores)
-		for core := 0; core < vlm.cores; core++ {
+		wg.Add(cores)
+		for core := 0; core < cores; core++ {
 			go f(core, false)
 		}
 		wg.Wait()
@@ -878,81 +874,77 @@ func (vlm *valuesLocMap) split() {
 	for passes := 0; passes < 2 || copies > 0 || clears > 0; passes++ {
 		copies = 0
 		clears = 0
-		wg.Add(vlm.cores)
-		for core := 0; core < vlm.cores; core++ {
+		wg.Add(cores)
+		for core := 0; core < cores; core++ {
 			go f(core, true)
 		}
 		wg.Wait()
 	}
-	newVLM := &valuesLocMap{
-		leftMask:   vlm.leftMask >> 1,
-		rangeStart: vlm.rangeStart + vlm.leftMask,
-		rangeStop:  vlm.rangeStop,
-		cores:      vlm.cores,
-		splitCount: vlm.splitCount,
+	newVLN := &valueLocNode{
+		leftMask:   vln.leftMask >> 1,
+		rangeStart: vln.rangeStart + vln.leftMask,
+		rangeStop:  vln.rangeStop,
+		a:          b,
 	}
-	atomic.StorePointer((*unsafe.Pointer)(unsafe.Pointer(&newVLM.a)), unsafe.Pointer(b))
-	atomic.StorePointer((*unsafe.Pointer)(unsafe.Pointer(&vlm.d)), unsafe.Pointer(newVLM))
-	newVLM = &valuesLocMap{
-		leftMask:   vlm.leftMask >> 1,
-		rangeStart: vlm.rangeStart,
-		rangeStop:  vlm.rangeStop - vlm.leftMask,
-		cores:      vlm.cores,
-		splitCount: vlm.splitCount,
+	atomic.StorePointer((*unsafe.Pointer)(unsafe.Pointer(&vln.d)), unsafe.Pointer(newVLN))
+	newVLN = &valueLocNode{
+		leftMask:   vln.leftMask >> 1,
+		rangeStart: vln.rangeStart,
+		rangeStop:  vln.rangeStop - vln.leftMask,
+		a:          a,
 	}
-	atomic.StorePointer((*unsafe.Pointer)(unsafe.Pointer(&newVLM.a)), unsafe.Pointer(a))
-	atomic.StorePointer((*unsafe.Pointer)(unsafe.Pointer(&vlm.c)), unsafe.Pointer(newVLM))
-	vlm.resizingLock.Lock()
-	vlm.resizing = false
-	vlm.resizingLock.Unlock()
+	atomic.StorePointer((*unsafe.Pointer)(unsafe.Pointer(&vln.c)), unsafe.Pointer(newVLN))
+	vln.resizingLock.Lock()
+	vln.resizing = false
+	vln.resizingLock.Unlock()
 }
 
-func (vlm *valuesLocMap) unsplit() {
-	vlm.resizingLock.Lock()
-	c := (*valuesLocMap)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vlm.c))))
-	if vlm.resizing || c == nil {
-		vlm.resizingLock.Unlock()
+func (vln *valueLocNode) unsplit(cores int) {
+	vln.resizingLock.Lock()
+	c := (*valueLocNode)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vln.c))))
+	if vln.resizing || c == nil {
+		vln.resizingLock.Unlock()
 		return
 	}
 	c.resizingLock.Lock()
-	cc := (*valuesLocMap)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&c.c))))
+	cc := (*valueLocNode)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&c.c))))
 	if c.resizing || cc != nil {
 		c.resizingLock.Unlock()
-		vlm.resizingLock.Unlock()
+		vln.resizingLock.Unlock()
 		return
 	}
-	d := (*valuesLocMap)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vlm.d))))
+	d := (*valueLocNode)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vln.d))))
 	d.resizingLock.Lock()
-	dc := (*valuesLocMap)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&d.c))))
+	dc := (*valueLocNode)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&d.c))))
 	if d.resizing || dc != nil {
 		d.resizingLock.Unlock()
 		c.resizingLock.Unlock()
-		vlm.resizingLock.Unlock()
+		vln.resizingLock.Unlock()
 		return
 	}
 	d.resizing = true
 	c.resizing = true
-	vlm.resizing = true
+	vln.resizing = true
 	d.resizingLock.Unlock()
 	c.resizingLock.Unlock()
-	vlm.resizingLock.Unlock()
+	vln.resizingLock.Unlock()
 	a := (*valuesLocStore)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&c.a))))
 	e := (*valuesLocStore)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&d.a))))
 	// Even if a has less items than e, we copy items from e to a because
 	// get/set and other routines assume a is left and e is right.
-	atomic.StorePointer((*unsafe.Pointer)(unsafe.Pointer(&vlm.a)), nil)
-	atomic.StorePointer((*unsafe.Pointer)(unsafe.Pointer(&vlm.b)), nil)
-	atomic.StorePointer((*unsafe.Pointer)(unsafe.Pointer(&vlm.e)), unsafe.Pointer(e))
-	atomic.StorePointer((*unsafe.Pointer)(unsafe.Pointer(&vlm.a)), unsafe.Pointer(a))
+	atomic.StorePointer((*unsafe.Pointer)(unsafe.Pointer(&vln.a)), nil)
+	atomic.StorePointer((*unsafe.Pointer)(unsafe.Pointer(&vln.b)), nil)
+	atomic.StorePointer((*unsafe.Pointer)(unsafe.Pointer(&vln.e)), unsafe.Pointer(e))
+	atomic.StorePointer((*unsafe.Pointer)(unsafe.Pointer(&vln.a)), unsafe.Pointer(a))
 	atomic.StorePointer((*unsafe.Pointer)(unsafe.Pointer(&c.a)), nil)
 	atomic.StorePointer((*unsafe.Pointer)(unsafe.Pointer(&d.a)), nil)
-	atomic.StorePointer((*unsafe.Pointer)(unsafe.Pointer(&vlm.c)), nil)
-	atomic.StorePointer((*unsafe.Pointer)(unsafe.Pointer(&vlm.d)), nil)
+	atomic.StorePointer((*unsafe.Pointer)(unsafe.Pointer(&vln.c)), nil)
+	atomic.StorePointer((*unsafe.Pointer)(unsafe.Pointer(&vln.d)), nil)
 	wg := &sync.WaitGroup{}
 	var copies uint32
 	var clears uint32
 	f := func(coreOffset int, clear bool) {
-		for bix := len(e.buckets) - 1 - coreOffset; bix >= 0; bix -= vlm.cores {
+		for bix := len(e.buckets) - 1 - coreOffset; bix >= 0; bix -= cores {
 			lix := bix % len(e.locks)
 			a.locks[lix].Lock()
 			e.locks[lix].Lock()
@@ -1020,8 +1012,8 @@ func (vlm *valuesLocMap) unsplit() {
 	}
 	for passes := 0; passes < 2 || copies > 0; passes++ {
 		copies = 0
-		wg.Add(vlm.cores)
-		for core := 0; core < vlm.cores; core++ {
+		wg.Add(cores)
+		for core := 0; core < cores; core++ {
 			go f(core, false)
 		}
 		wg.Wait()
@@ -1029,19 +1021,19 @@ func (vlm *valuesLocMap) unsplit() {
 	for passes := 0; passes < 2 || copies > 0 || clears > 0; passes++ {
 		copies = 0
 		clears = 0
-		wg.Add(vlm.cores)
-		for core := 0; core < vlm.cores; core++ {
+		wg.Add(cores)
+		for core := 0; core < cores; core++ {
 			go f(core, true)
 		}
 		wg.Wait()
 	}
-	atomic.StorePointer((*unsafe.Pointer)(unsafe.Pointer(&vlm.e)), nil)
-	vlm.resizingLock.Lock()
-	vlm.resizing = false
-	vlm.resizingLock.Unlock()
+	atomic.StorePointer((*unsafe.Pointer)(unsafe.Pointer(&vln.e)), nil)
+	vln.resizingLock.Lock()
+	vln.resizing = false
+	vln.resizingLock.Unlock()
 }
 
-func (vlm *valuesLocMap) Background(iteration uint16) {
+func (vlm *ValueLocMap) Background(iteration uint16) {
 	// This is what I had as the background job before. Need to reimplement
 	// this tombstone expiration as part of scanCount most likely.
 	// bg := &valuesLocMapBackground{tombstoneCutoff: uint64(time.Now().UnixNano()) - vs.tombstoneAge}
@@ -1087,18 +1079,18 @@ func (vlm *valuesLocMap) Background(iteration uint16) {
 const _GLH_BLOOM_FILTER_N = 1000000
 const _GLH_BLOOM_FILTER_P = 0.001
 
-func (vlm *valuesLocMap) scan(iteration uint16, p int, pstart uint64, pstop uint64, wg *sync.WaitGroup) {
-	count := vlm.scanCount(vlm, pstart, pstop, 0)
+func (vlm *ValueLocMap) scan(iteration uint16, p int, pstart uint64, pstop uint64, wg *sync.WaitGroup) {
+	count := vlm.root.scanCount(vlm, pstart, pstop, 0)
 	for count > _GLH_BLOOM_FILTER_N {
 		pstartNew := pstart + (pstop-pstart+1)/2
 		wg.Add(1)
-		go vlm.scan(iteration, p, pstart, pstartNew-1, wg)
+		go vlm.root.scan(iteration, p, pstart, pstartNew-1, wg)
 		pstart = pstartNew
-		count = vlm.scanCount(vlm, pstart, pstop, 0)
+		count = vlm.root.scanCount(vlm, pstart, pstop, 0)
 	}
 	if count > 0 {
 		ktbf := newKTBloomFilter(_GLH_BLOOM_FILTER_N, _GLH_BLOOM_FILTER_P, iteration)
-		vlm.scanIntoBloomFilter(pstart, pstop, ktbf)
+		vlm.root.scanIntoBloomFilter(pstart, pstop, ktbf)
 		if ktbf.hasData {
 			// Here we'll send the bloom filter to the other replicas and ask
 			// them to send us back all their data that isn't in the filter.
@@ -1108,24 +1100,24 @@ func (vlm *valuesLocMap) scan(iteration uint16, p int, pstart uint64, pstop uint
 	wg.Done()
 }
 
-func (vlm *valuesLocMap) scanCount(root *valuesLocMap, pstart uint64, pstop uint64, count uint64) uint64 {
-	if vlm.rangeStart > pstop {
+func (vln *valueLocNode) scanCount(root *ValueLocMap, pstart uint64, pstop uint64, count uint64) uint64 {
+	if vln.rangeStart > pstop {
 		return count
 	}
-	if vlm.rangeStop < pstart {
+	if vln.rangeStop < pstart {
 		return count
 	}
-	c := (*valuesLocMap)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vlm.c))))
+	c := (*valueLocNode)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vln.c))))
 	if c != nil {
-		d := (*valuesLocMap)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vlm.d))))
+		d := (*valueLocNode)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vln.d))))
 		count = c.scanCount(root, pstart, pstop, count)
 		if count > _GLH_BLOOM_FILTER_N {
 			return count
 		}
 		return d.scanCount(root, pstart, pstop, count)
 	}
-	a := (*valuesLocStore)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vlm.a))))
-	b := (*valuesLocStore)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vlm.b))))
+	a := (*valuesLocStore)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vln.a))))
+	b := (*valuesLocStore)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vln.b))))
 	if b == nil {
 		if atomic.LoadInt32(&a.used) <= 0 {
 			return count
@@ -1137,7 +1129,7 @@ func (vlm *valuesLocMap) scanCount(root *valuesLocMap, pstart uint64, pstop uint
 				if itemA.blockID == 0 {
 					continue
 				}
-				if itemA.keyA < vlm.rangeStart || itemA.keyA > vlm.rangeStop {
+				if itemA.keyA < vln.rangeStart || itemA.keyA > vln.rangeStop {
 					// Out of place key, extract and reinsert.
 					atomic.AddInt32(&vlm.outOfPlaceKeyDetections, 1)
 					go root.set(itemA.keyA, itemA.keyB, itemA.timestamp, itemA.blockID, itemA.offset, itemA.length, false)
@@ -1214,22 +1206,22 @@ func (vlm *valuesLocMap) scanCount(root *valuesLocMap, pstart uint64, pstop uint
 	return count
 }
 
-func (vlm *valuesLocMap) scanIntoBloomFilter(pstart uint64, pstop uint64, ktbf *ktBloomFilter) {
-	if vlm.rangeStart > pstop {
+func (vln *valueLocNode) scanIntoBloomFilter(pstart uint64, pstop uint64, ktbf *ktBloomFilter) {
+	if vln.rangeStart > pstop {
 		return
 	}
-	if vlm.rangeStop < pstart {
+	if vln.rangeStop < pstart {
 		return
 	}
-	c := (*valuesLocMap)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vlm.c))))
+	c := (*valueLocNode)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vln.c))))
 	if c != nil {
-		d := (*valuesLocMap)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vlm.d))))
+		d := (*valueLocNode)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vln.d))))
 		c.scanIntoBloomFilter(pstart, pstop, ktbf)
 		d.scanIntoBloomFilter(pstart, pstop, ktbf)
 		return
 	}
-	a := (*valuesLocStore)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vlm.a))))
-	b := (*valuesLocStore)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vlm.b))))
+	a := (*valuesLocStore)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vln.a))))
+	b := (*valuesLocStore)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vln.b))))
 	if b == nil {
 		if atomic.LoadInt32(&a.used) <= 0 {
 			return
@@ -1289,12 +1281,12 @@ func (vlm *valuesLocMap) scanIntoBloomFilter(pstart uint64, pstop uint64, ktbf *
 	}
 }
 
-func (vlm *valuesLocMap) backgroundHelper(bg *valuesLocMapBackground, vlmPrev *valuesLocMap) {
-	c := (*valuesLocMap)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vlm.c))))
+func (vln *valueLocNode) backgroundHelper(bg *valuesLocMapBackground, vlmPrev *valueLocNode) {
+	c := (*valueLocNode)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vln.c))))
 	if c != nil {
-		d := (*valuesLocMap)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vlm.d))))
-		c.backgroundHelper(bg, vlm)
-		d.backgroundHelper(bg, vlm)
+		d := (*valueLocNode)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vln.d))))
+		c.backgroundHelper(bg, vln)
+		d.backgroundHelper(bg, vln)
 		return
 	}
 	f := func(s *valuesLocStore) {
@@ -1327,17 +1319,17 @@ func (vlm *valuesLocMap) backgroundHelper(bg *valuesLocMapBackground, vlmPrev *v
 		}
 		bg.wg.Done()
 	}
-	a := (*valuesLocStore)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vlm.a))))
+	a := (*valuesLocStore)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vln.a))))
 	if a != nil {
 		bg.wg.Add(1)
 		go f(a)
 	}
-	b := (*valuesLocStore)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vlm.b))))
+	b := (*valuesLocStore)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vln.b))))
 	if b != nil {
 		bg.wg.Add(1)
 		go f(b)
 	}
-	e := (*valuesLocStore)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vlm.e))))
+	e := (*valuesLocStore)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vln.e))))
 	if e != nil {
 		bg.wg.Add(1)
 		go f(e)
