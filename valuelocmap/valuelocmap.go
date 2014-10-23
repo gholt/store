@@ -120,6 +120,13 @@ func resolveConfig(opts ...func(*config)) *config {
 	return cfg
 }
 
+// OptList returns a slice with the opts given; useful if you want to possibly
+// append more options to the list before using it with
+// NewValueLocMap(list...).
+func OptList(opts ...func(*config)) []func(*config) {
+	return opts
+}
+
 // OptCores indicates how many cores may be in use (for calculating the number
 // of locks to create, for example) and how many cores may be used for resizes.
 // Defaults to env BRIMSTORE_VALUELOCMAP_CORES, BRIMSTORE_CORES, or GOMAXPROCS.
@@ -917,14 +924,6 @@ func (vln *valueLocNode) gatherStatsHelper(stats *valueLocMapStats) {
 	if e != nil {
 		f(e)
 	}
-}
-
-func (stats *valueLocMapStats) Count() uint64 {
-	return stats.active
-}
-
-func (stats *valueLocMapStats) Length() uint64 {
-	return stats.length
 }
 
 func (stats *valueLocMapStats) String() string {

@@ -14,7 +14,7 @@ import (
 )
 
 type valuesFile struct {
-	vs           *ValuesStore
+	vs           *ValueStore
 	id           uint16
 	bts          int64
 	writerFP     io.WriteCloser
@@ -36,10 +36,10 @@ type valuesFileWriteBuf struct {
 	vms    []*valuesMem
 }
 
-func newValuesFile(vs *ValuesStore, bts int64) *valuesFile {
+func newValuesFile(vs *ValueStore, bts int64) *valuesFile {
 	vf := &valuesFile{vs: vs, bts: bts}
 	name := fmt.Sprintf("%d.values", vf.bts)
-	vf.readerFPs = make([]brimutil.ChecksummedReader, vs.valuesFileReaders)
+	vf.readerFPs = make([]brimutil.ChecksummedReader, vs.valueFileReaders)
 	vf.readerLocks = make([]sync.Mutex, len(vf.readerFPs))
 	vf.readerLens = make([][]byte, len(vf.readerFPs))
 	for i := 0; i < len(vf.readerFPs); i++ {
@@ -54,7 +54,7 @@ func newValuesFile(vs *ValuesStore, bts int64) *valuesFile {
 	return vf
 }
 
-func createValuesFile(vs *ValuesStore) *valuesFile {
+func createValuesFile(vs *ValueStore) *valuesFile {
 	vf := &valuesFile{vs: vs, bts: time.Now().UnixNano()}
 	name := fmt.Sprintf("%d.values", vf.bts)
 	fp, err := os.Create(name)
@@ -78,7 +78,7 @@ func createValuesFile(vs *ValuesStore) *valuesFile {
 	for i := 0; i < vs.cores; i++ {
 		go vf.checksummer()
 	}
-	vf.readerFPs = make([]brimutil.ChecksummedReader, vs.valuesFileReaders)
+	vf.readerFPs = make([]brimutil.ChecksummedReader, vs.valueFileReaders)
 	vf.readerLocks = make([]sync.Mutex, len(vf.readerFPs))
 	vf.readerLens = make([][]byte, len(vf.readerFPs))
 	for i := 0; i < len(vf.readerFPs); i++ {

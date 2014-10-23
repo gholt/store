@@ -30,7 +30,7 @@ type optsStruct struct {
 	keyspace []byte
 	buffers  [][]byte
 	st       runtime.MemStats
-	vs       *brimstore.ValuesStore
+	vs       *brimstore.ValueStore
 }
 
 var opts optsStruct
@@ -81,11 +81,11 @@ func main() {
 	fmt.Println(opts.Length, "value length")
 	memstat()
 	begin := time.Now()
-	vsOpts := brimstore.NewValuesStoreOpts("")
+	vsopts := brimstore.OptList(brimstore.OptCores(opts.Cores))
 	if opts.TombstoneAge > 0 {
-		// TODO: vsOpts.TombstoneAge = opts.TombstoneAge
+		vsopts = append(vsopts, brimstore.OptTombstoneAge(opts.TombstoneAge))
 	}
-	opts.vs = brimstore.NewValuesStore(vsOpts)
+	opts.vs = brimstore.NewValueStore(vsopts...)
 	dur := time.Now().Sub(begin)
 	fmt.Println(dur, "to start ValuesStore")
 	memstat()
@@ -112,14 +112,14 @@ func main() {
 	fmt.Println(dur, "to close ValuesStore")
 	memstat()
 	begin = time.Now()
-	stats := opts.vs.GatherStats(opts.ExtendedStats)
+	statsCount, statsLength, stats := opts.vs.GatherStats(0, opts.ExtendedStats)
 	dur = time.Now().Sub(begin)
 	fmt.Println(dur, "to gather stats")
 	if opts.ExtendedStats {
 		fmt.Println(stats.String())
 	} else {
-		fmt.Println(stats.ValueCount(), "ValueCount")
-		fmt.Println(stats.ValuesLength(), "ValuesLength")
+		fmt.Println(statsCount, "ValueCount")
+		fmt.Println(statsLength, "ValuesLength")
 	}
 	memstat()
 }

@@ -23,6 +23,229 @@ import (
 	"github.com/spaolacci/murmur3"
 )
 
+type config struct {
+	cores              int
+	backgroundCores    int
+	backgroundInterval int
+	maxValueSize       int
+	checksumInterval   int
+	pageSize           int
+	minValueAlloc      int
+	writePagesPerCore  int
+	tombstoneAge       int
+	valueFileSize      int
+	valueFileReaders   int
+}
+
+func resolveConfig(opts ...func(*config)) *config {
+	cfg := &config{}
+	cfg.cores = runtime.GOMAXPROCS(0)
+	if env := os.Getenv("BRIMSTORE_CORES"); env != "" {
+		if val, err := strconv.Atoi(env); err == nil {
+			cfg.cores = val
+		}
+	}
+	cfg.backgroundCores = 1
+	if env := os.Getenv("BRIMSTORE_BACKGROUNDCORES"); env != "" {
+		if val, err := strconv.Atoi(env); err == nil {
+			cfg.backgroundCores = val
+		}
+	}
+	cfg.backgroundInterval = 60
+	if env := os.Getenv("BRIMSTORE_BACKGROUNDINTERVAL"); env != "" {
+		if val, err := strconv.Atoi(env); err == nil {
+			cfg.backgroundInterval = val
+		}
+	}
+	cfg.maxValueSize = 4 * 1024 * 1024
+	if env := os.Getenv("BRIMSTORE_MAXVALUESIZE"); env != "" {
+		if val, err := strconv.Atoi(env); err == nil {
+			cfg.maxValueSize = val
+		}
+	}
+	cfg.checksumInterval = 65532
+	if env := os.Getenv("BRIMSTORE_CHECKSUMINTERVAL"); env != "" {
+		if val, err := strconv.Atoi(env); err == nil {
+			cfg.checksumInterval = val
+		}
+	}
+	cfg.pageSize = 4 * 1024 * 1024
+	if env := os.Getenv("BRIMSTORE_PAGESIZE"); env != "" {
+		if val, err := strconv.Atoi(env); err == nil {
+			cfg.pageSize = val
+		}
+	}
+	cfg.writePagesPerCore = 3
+	if env := os.Getenv("BRIMSTORE_WRITEPAGESPERCORE"); env != "" {
+		if val, err := strconv.Atoi(env); err == nil {
+			cfg.writePagesPerCore = val
+		}
+	}
+	cfg.tombstoneAge = 4 * 60 * 60
+	if env := os.Getenv("BRIMSTORE_TOMBSTONEAGE"); env != "" {
+		if val, err := strconv.Atoi(env); err == nil {
+			cfg.tombstoneAge = val
+		}
+	}
+	cfg.valueFileSize = math.MaxUint32
+	if env := os.Getenv("BRIMSTORE_VALUEFILESIZE"); env != "" {
+		if val, err := strconv.Atoi(env); err == nil {
+			cfg.valueFileSize = val
+		}
+	}
+	cfg.valueFileReaders = cfg.cores
+	if env := os.Getenv("BRIMSTORE_VALUEFILEREADERS"); env != "" {
+		if val, err := strconv.Atoi(env); err == nil {
+			cfg.valueFileReaders = val
+		}
+	}
+	for _, opt := range opts {
+		opt(cfg)
+	}
+	if cfg.cores < 1 {
+		cfg.cores = 1
+	}
+	if cfg.backgroundCores < 1 {
+		cfg.backgroundCores = 1
+	}
+	if cfg.backgroundInterval < 1 {
+		cfg.backgroundInterval = 1
+	}
+	if cfg.maxValueSize < 0 {
+		cfg.maxValueSize = 0
+	}
+	if cfg.maxValueSize > math.MaxUint32 {
+		cfg.maxValueSize = math.MaxUint32
+	}
+	if cfg.checksumInterval < 1 {
+		cfg.checksumInterval = 1
+	}
+	// Ensure each page will have at least checksumInterval worth of data in it
+	// so that each page written will at least flush the previous page's data.
+	if cfg.pageSize < cfg.maxValueSize+cfg.checksumInterval {
+		cfg.pageSize = cfg.maxValueSize + cfg.checksumInterval
+	}
+	// Absolute minimum: timestamp leader plus at least one TOC entry
+	if cfg.pageSize < 40 {
+		cfg.pageSize = 40
+	}
+	if cfg.pageSize > math.MaxUint32 {
+		cfg.pageSize = math.MaxUint32
+	}
+	// Ensure a full TOC page will have an associated data page of at least
+	// checksumInterval in size, again so that each page written will at least
+	// flush the previous page's data.
+	cfg.minValueAlloc = cfg.checksumInterval/(cfg.pageSize/32+1) + 1
+	if cfg.writePagesPerCore < 2 {
+		cfg.writePagesPerCore = 2
+	}
+	if cfg.tombstoneAge < 0 {
+		cfg.tombstoneAge = 0
+	}
+	if cfg.valueFileSize < 48+cfg.maxValueSize { // header value trailer
+		cfg.valueFileSize = 48 + cfg.maxValueSize
+	}
+	if cfg.valueFileSize > math.MaxUint32 {
+		cfg.valueFileSize = math.MaxUint32
+	}
+	if cfg.valueFileReaders < 1 {
+		cfg.valueFileReaders = 1
+	}
+	return cfg
+}
+
+// OptList returns a slice with the opts given; useful if you want to possibly
+// append more options to the list before using it with NewValueStore(list...).
+func OptList(opts ...func(*config)) []func(*config) {
+	return opts
+}
+
+// OptCores indicates how many cores may be in use (for calculating the number
+// of locks to create, for example) and how many cores may be used for resizes.
+// Defaults to env BRIMSTORE_CORES, or GOMAXPROCS.
+func OptCores(cores int) func(*config) {
+	return func(cfg *config) {
+		cfg.cores = cores
+	}
+}
+
+// OptBackgroundCores indicates how many cores may be used for background jobs.
+// Defaults to env BRIMSTORE_BACKGROUNDCORES or 1.
+func OptBackgroundCores(cores int) func(*config) {
+	return func(cfg *config) {
+		cfg.backgroundCores = cores
+	}
+}
+
+// OptBackgroundInterval indicates the minimum number of seconds betweeen the
+// starts of background jobs. For example, if set to 60 seconds and the jobs
+// take 10 seconds to run, they will wait 50 seconds (with a small amount of
+// randomization) between the stop of one run and the start of the next. This
+// is really just meant to keep nearly empty structures from using a lot of
+// resources doing nearly nothing. Normally, you'd want your jobs to be running
+// constantly so that replication and cleanup are as fast as possible and the
+// load constant. The default of 60 seconds is almost always fine. Defaults to
+// env BRIMSTORE_BACKGROUNDINTERVAL or 60.
+func OptBackgroundInterval(seconds int) func(*config) {
+	return func(cfg *config) {
+		cfg.backgroundInterval = seconds
+	}
+}
+
+// OptMaxValueSize indicates the maximum number of bytes any given value may
+// be. Defaults to env BRIMSTORE_MAXVALUESIZE or 4,194,304.
+func OptMaxValueSize(bytes int) func(*config) {
+	return func(cfg *config) {
+		cfg.maxValueSize = bytes
+	}
+}
+
+// OptPageSize controls the size of each chunk of memory allocated. Defaults to
+// env BRIMSTORE_PAGESIZE or 4,194,304.
+func OptPageSize(bytes int) func(*config) {
+	return func(cfg *config) {
+		cfg.pageSize = bytes
+	}
+}
+
+// OptWritePagesPerCore controls how many pages are created per core for
+// caching recently written values. Defaults to env BRIMSTORE_WRITEPAGESPERCORE
+// or 3.
+func OptWritePagesPerCore(number int) func(*config) {
+	return func(cfg *config) {
+		cfg.writePagesPerCore = number
+	}
+}
+
+// OptTombstoneAge indicates how many seconds old a deletion marker may be
+// before it is permanently removed. Defaults to env BRIMSTORE_TOMBSTONEAGE or
+// 14,400 (4 hours).
+func OptTombstoneAge(seconds int) func(*config) {
+	return func(cfg *config) {
+		cfg.tombstoneAge = seconds
+	}
+}
+
+// OptValueFileSize indicates how large a value size can be before closing it
+// and opening a new one. Defaults to env BRIMSTORE_VALUEFILESIZE or
+// 4,294,967,295.
+func OptValueFileSize(bytes int) func(*config) {
+	return func(cfg *config) {
+		cfg.valueFileSize = bytes
+	}
+}
+
+// OptValueFileReaders indicates how many open file descriptors are allowed per
+// value file for reading. Defaults to env BRIMSTORE_VALUEFILEREADERS or the
+// configured number of cores.
+func OptValueFileReaders(bytes int) func(*config) {
+	return func(cfg *config) {
+		cfg.valueFileReaders = bytes
+	}
+}
+
+var ErrValueNotFound error = errors.New("value not found")
+
 type ValueLocMap interface {
 	Get(keyA uint64, keyB uint64) (timestamp uint64, blockID uint16, offset uint32, length uint32)
 	Set(keyA uint64, keyB uint64, timestamp uint64, blockID uint16, offset uint32, length uint32, evenIfSameTimestamp bool) (previousTimestamp uint64)
@@ -33,137 +256,7 @@ type ValueLocMap interface {
 	SetReplicationChan(chan interface{})
 }
 
-var ErrValueNotFound error = errors.New("value not found")
-
-// ValuesStoreOpts allows configuration of the ValuesStore, although normally
-// the defaults are best.
-//
-// Note that due to implementation changes, many of these options may be
-// deprecated in the future. Cores and MaxValueSize are the two options that
-// are likely to always be supported.
-type ValuesStoreOpts struct {
-	// Cores controls the number of goroutines spawned to process data. The
-	// actual number of CPU cores used can only truly be controlled by
-	// GOMAXPROCS, this will just indicate how many goroutines can spawned for
-	// a given task. For example, if GOMAXPROCS is 8 and Cores is 1, 8 cores
-	// will likely still be in use as different tasks may each launch 1
-	// goroutine.
-	Cores int
-	// MaxValueSize indicates the maximum length for values stored. Attempting
-	// to store a value beyond this cap will result in an error returned.
-	MaxValueSize int
-	// MemTOCPageSize controls TOC buffer memory allocation. A TOC is a Table
-	// Of Contents which has metadata about values stored. A TOC Page is a
-	// block of memory where this metadata is buffered before being written to
-	// disk. The implementation at the time of this writing will allocate
-	// Cores*4 TOC Pages.
-	MemTOCPageSize int
-	// MemValuesPageSize controls value buffer memory allocation. A Values Page
-	// is a block of memory where actual value content is buffered before being
-	// written to disk. The implementation at the time of this writing will
-	// allocate Cores*2 Values Pages.
-	MemValuesPageSize int
-	// MemWriteMultiplier indicates additional memory page sets to use to
-	// increase caching of recently written values. Using a multiplier less
-	// than 3 will also impact write speed.
-	MemWriteMultiplier int
-	// ValuesFileSize indicates the size of a values file on disk before
-	// closing it and opening a new file. This also caps the size of the TOC
-	// files (Table of Contents of what is contained within a values file), but
-	// usually the TOC files are smaller than the values files unless the
-	// average value size is very small or there are a lot of deletes.
-	ValuesFileSize int
-	// ValuesFileReaders controls how many times an individual values file is
-	// opened for reading. A higher number will allow more concurrent reads,
-	// but at the expense of open file descriptors.
-	ValuesFileReaders int
-	// ChecksumInterval controls how many on-disk bytes will be written before
-	// emitting a 32-bit checksum for those bytes. Both TOC files and values
-	// files have checksums at this interval. For example, if set to 65532 then
-	// every 65532 bytes written and additional 4 byte checksum will be written
-	// for those bytes, giving 65536 "chunks" on disk. This also controls the
-	// block size written to disk at once since bytes are buffered to the
-	// checksum interval before be checksummed and then written to disk.
-	ChecksumInterval int
-}
-
-func NewValuesStoreOpts(envPrefix string) *ValuesStoreOpts {
-	if envPrefix == "" {
-		envPrefix = "BRIMSTORE_VALUESSTORE_"
-	}
-	opts := &ValuesStoreOpts{}
-	if env := os.Getenv(envPrefix + "CORES"); env != "" {
-		if val, err := strconv.Atoi(env); err == nil {
-			opts.Cores = val
-		}
-	}
-	if opts.Cores <= 0 {
-		opts.Cores = runtime.GOMAXPROCS(0)
-	}
-	if env := os.Getenv(envPrefix + "MAX_VALUE_SIZE"); env != "" {
-		if val, err := strconv.Atoi(env); err == nil {
-			opts.MaxValueSize = val
-		}
-	}
-	if opts.MaxValueSize <= 0 {
-		opts.MaxValueSize = 4 * 1024 * 1024
-	}
-	if env := os.Getenv(envPrefix + "MEM_TOC_PAGE_SIZE"); env != "" {
-		if val, err := strconv.Atoi(env); err == nil {
-			opts.MemTOCPageSize = val
-		}
-	}
-	if opts.MemTOCPageSize <= 0 {
-		opts.MemTOCPageSize = 4 * 1024 * 1024
-	}
-	if env := os.Getenv(envPrefix + "MEM_VALUES_PAGE_SIZE"); env != "" {
-		if val, err := strconv.Atoi(env); err == nil {
-			opts.MemValuesPageSize = val
-		}
-	}
-	if opts.MemValuesPageSize <= 0 {
-		opts.MemValuesPageSize = 1 << brimutil.PowerOfTwoNeeded(uint64(opts.MaxValueSize))
-		if opts.MemValuesPageSize < 4*1024*1024 {
-			opts.MemValuesPageSize = 4 * 1024 * 1024
-		}
-	}
-	if env := os.Getenv(envPrefix + "MEM_WRITE_MULTIPLIER"); env != "" {
-		if val, err := strconv.Atoi(env); err == nil {
-			opts.MemWriteMultiplier = val
-		}
-	}
-	if opts.MemWriteMultiplier <= 0 {
-		opts.MemWriteMultiplier = 3
-	}
-	if env := os.Getenv(envPrefix + "VALUES_FILE_SIZE"); env != "" {
-		if val, err := strconv.Atoi(env); err == nil {
-			opts.ValuesFileSize = val
-		}
-	}
-	if opts.ValuesFileSize <= 0 {
-		opts.ValuesFileSize = math.MaxUint32
-	}
-	if env := os.Getenv(envPrefix + "VALUES_FILE_READERS"); env != "" {
-		if val, err := strconv.Atoi(env); err == nil {
-			opts.ValuesFileReaders = val
-		}
-	}
-	if opts.ValuesFileReaders <= 0 {
-		opts.ValuesFileReaders = opts.Cores
-	}
-	if env := os.Getenv(envPrefix + "CHECKSUM_INTERVAL"); env != "" {
-		if val, err := strconv.Atoi(env); err == nil {
-			opts.ChecksumInterval = val
-		}
-	}
-	if opts.ChecksumInterval <= 0 {
-		opts.ChecksumInterval = 65532
-	}
-	return opts
-}
-
-// ValuesStore: See NewValuesStore.
-type ValuesStore struct {
+type ValueStore struct {
 	freeableVMChan        chan *valuesMem
 	freeVMChan            chan *valuesMem
 	freeVWRChans          []chan *valueWriteReq
@@ -177,86 +270,78 @@ type ValuesStore struct {
 	vlm                   ValueLocMap
 	cores                 int
 	maxValueSize          uint32
-	memTOCPageSize        uint32
-	memValuesPageSize     uint32
-	memWriteMultiplier    int
-	valuesFileSize        uint32
-	valuesFileReaders     int
+	pageSize              uint32
+	minValueAlloc         int
+	writePagesPerCore     int
+	valueFileSize         uint32
+	valueFileReaders      int
 	checksumInterval      uint32
 }
 
-// NewValuesStore creates a ValuesStore for use in storing []byte values
-// referenced by 128 bit keys; opts may be nil to use the defaults.
+type valueWriteReq struct {
+	keyA      uint64
+	keyB      uint64
+	timestamp uint64
+	value     []byte
+	errChan   chan error
+}
+
+type valuesLocBlock interface {
+	timestamp() int64
+	read(keyA uint64, keyB uint64, timestamp uint64, offset uint32, length uint32, value []byte) (uint64, []byte, error)
+}
+
+type valuesStoreStats struct {
+	debug                  bool
+	freeableVMChanCap      int
+	freeableVMChanIn       int
+	freeVMChanCap          int
+	freeVMChanIn           int
+	freeVWRChans           int
+	freeVWRChansCap        int
+	freeVWRChansIn         int
+	pendingVWRChans        int
+	pendingVWRChansCap     int
+	pendingVWRChansIn      int
+	vfVMChanCap            int
+	vfVMChanIn             int
+	freeTOCBlockChanCap    int
+	freeTOCBlockChanIn     int
+	pendingTOCBlockChanCap int
+	pendingTOCBlockChanIn  int
+	maxValuesLocBlockID    uint32
+	cores                  int
+	maxValueSize           uint32
+	pageSize               uint32
+	writePagesPerCore      int
+	valueFileSize          uint32
+	valueFileReaders       int
+	checksumInterval       uint32
+	vlmCount               uint64
+	vlmLength              uint64
+	vlmDebugInfo           fmt.Stringer
+}
+
+// NewValueStore creates a ValueStore for use in storing []byte values
+// referenced by 128 bit keys.
 //
 // Note that a lot of buffering and multiple cores can be in use and therefore
 // Close should be called prior to the process exiting to ensure all processing
 // is done and the buffers are flushed.
-func NewValuesStore(opts *ValuesStoreOpts) *ValuesStore {
-	if opts == nil {
-		opts = NewValuesStoreOpts("")
+func NewValueStore(opts ...func(*config)) *ValueStore {
+	cfg := resolveConfig(opts...)
+	vs := &ValueStore{
+		valuesLocBlocks:   make([]valuesLocBlock, math.MaxUint16),
+		vlm:               valuelocmap.NewValueLocMap(),
+		cores:             cfg.cores,
+		maxValueSize:      uint32(cfg.maxValueSize),
+		checksumInterval:  uint32(cfg.checksumInterval),
+		pageSize:          uint32(cfg.pageSize),
+		writePagesPerCore: cfg.writePagesPerCore,
+		valueFileSize:     uint32(cfg.valueFileSize),
+		valueFileReaders:  cfg.valueFileReaders,
 	}
-	cores := opts.Cores
-	if cores < 1 {
-		cores = 1
-	}
-	maxValueSize := opts.MaxValueSize
-	if maxValueSize < 0 {
-		maxValueSize = 0
-	}
-	if maxValueSize > math.MaxUint32 {
-		maxValueSize = math.MaxUint32
-	}
-	memTOCPageSize := opts.MemTOCPageSize
-	if memTOCPageSize < 32 {
-		memTOCPageSize = 32
-	}
-	memValuesPageSize := opts.MemValuesPageSize
-	if memValuesPageSize < int(maxValueSize) {
-		memValuesPageSize = int(maxValueSize)
-	}
-	memWriteMultiplier := opts.MemWriteMultiplier
-	if memWriteMultiplier <= 0 {
-		memWriteMultiplier = 1
-	}
-	valuesFileSize := opts.ValuesFileSize
-	if valuesFileSize <= 0 || valuesFileSize > math.MaxUint32 {
-		valuesFileSize = math.MaxUint32
-	}
-	valuesFileReaders := opts.ValuesFileReaders
-	if valuesFileReaders < 1 {
-		valuesFileReaders = 1
-	}
-	checksumInterval := opts.ChecksumInterval
-	if checksumInterval < 1 {
-		checksumInterval = 1
-	} else if checksumInterval > math.MaxUint32 {
-		checksumInterval = math.MaxUint32
-	}
-	if memTOCPageSize < checksumInterval/4+1 {
-		memTOCPageSize = checksumInterval/4 + 1
-	}
-	if memTOCPageSize > math.MaxUint32 {
-		memTOCPageSize = math.MaxUint32
-	}
-	if memValuesPageSize < checksumInterval/4+1 {
-		memValuesPageSize = checksumInterval/4 + 1
-	}
-	if memValuesPageSize > math.MaxUint32 {
-		memValuesPageSize = math.MaxUint32
-	}
-	vs := &ValuesStore{
-		valuesLocBlocks:    make([]valuesLocBlock, math.MaxUint16),
-		vlm:                valuelocmap.NewValueLocMap(),
-		cores:              cores,
-		maxValueSize:       uint32(maxValueSize),
-		memTOCPageSize:     uint32(memTOCPageSize),
-		memValuesPageSize:  uint32(memValuesPageSize),
-		memWriteMultiplier: memWriteMultiplier,
-		valuesFileSize:     uint32(valuesFileSize),
-		checksumInterval:   uint32(checksumInterval),
-		valuesFileReaders:  valuesFileReaders,
-	}
-	vs.freeableVMChan = make(chan *valuesMem, vs.cores*(1+vs.memWriteMultiplier))
+	vs.freeableVMChan = make(chan *valuesMem, vs.cores*vs.writePagesPerCore)
 	vs.freeVMChan = make(chan *valuesMem, vs.cores)
 	vs.freeVWRChans = make([]chan *valueWriteReq, vs.cores)
 	vs.pendingVWRChans = make([]chan *valueWriteReq, vs.cores)
@@ -267,8 +352,8 @@ func NewValuesStore(opts *ValuesStoreOpts) *ValuesStore {
 	for i := 0; i < cap(vs.freeableVMChan); i++ {
 		vm := &valuesMem{
 			vs:     vs,
-			toc:    make([]byte, 0, vs.memTOCPageSize),
-			values: make([]byte, 0, vs.memValuesPageSize),
+			toc:    make([]byte, 0, vs.pageSize),
+			values: make([]byte, 0, vs.pageSize),
 		}
 		vm.id = vs.addValuesLocBock(vm)
 		vs.freeableVMChan <- vm
@@ -283,7 +368,7 @@ func NewValuesStore(opts *ValuesStoreOpts) *ValuesStore {
 		vs.pendingVWRChans[i] = make(chan *valueWriteReq)
 	}
 	for i := 0; i < cap(vs.freeTOCBlockChan); i++ {
-		vs.freeTOCBlockChan <- make([]byte, 0, vs.memTOCPageSize)
+		vs.freeTOCBlockChan <- make([]byte, 0, vs.pageSize)
 	}
 	go vs.tocWriter()
 	go vs.vfWriter()
@@ -298,22 +383,19 @@ func NewValuesStore(opts *ValuesStoreOpts) *ValuesStore {
 	return vs
 }
 
-// MaxValueSize returns the maximum length of a value the ValuesStore can
+// MaxValueSize returns the maximum length of a value the ValueStore can
 // accept.
-func (vs *ValuesStore) MaxValueSize() uint32 {
+func (vs *ValueStore) MaxValueSize() uint32 {
 	return vs.maxValueSize
 }
 
-// Close shuts down all background processing and the ValuesStore will refuse
+// Close shuts down all background processing and the ValueStore will refuse
 // any additional writes; reads may still occur.
-func (vs *ValuesStore) Close() {
-	for i := 0; i < cap(vs.freeVMChan)*(vs.memWriteMultiplier-1); i++ {
-		<-vs.freeVMChan
-	}
+func (vs *ValueStore) Close() {
 	for _, c := range vs.pendingVWRChans {
 		c <- nil
 	}
-	for i := 0; i < cap(vs.freeVMChan); i++ {
+	for i := 0; i < cap(vs.freeableVMChan); i++ {
 		<-vs.freeVMChan
 	}
 	<-vs.tocWriterDoneChan
@@ -328,7 +410,7 @@ func (vs *ValuesStore) Close() {
 // marker (aka tombstone).
 //
 // This may be called even after Close.
-func (vs *ValuesStore) Lookup(keyA uint64, keyB uint64) (uint64, uint32, error) {
+func (vs *ValueStore) Lookup(keyA uint64, keyB uint64) (uint64, uint32, error) {
 	timestamp, id, _, length := vs.vlm.Get(keyA, keyB)
 	if id == 0 || timestamp&1 == 1 {
 		return timestamp, 0, ErrValueNotFound
@@ -346,7 +428,7 @@ func (vs *ValuesStore) Lookup(keyA uint64, keyB uint64) (uint64, uint32, error) 
 // marker (aka tombstone).
 //
 // This may be called even after Close.
-func (vs *ValuesStore) Read(keyA uint64, keyB uint64, value []byte) (uint64, []byte, error) {
+func (vs *ValueStore) Read(keyA uint64, keyB uint64, value []byte) (uint64, []byte, error) {
 	timestamp, id, offset, length := vs.vlm.Get(keyA, keyB)
 	if id == 0 || timestamp&1 == 1 {
 		return timestamp, value, ErrValueNotFound
@@ -359,7 +441,7 @@ func (vs *ValuesStore) Read(keyA uint64, keyB uint64, value []byte) (uint64, []b
 // reported as an error.
 //
 // This may no longer be called after Close.
-func (vs *ValuesStore) Write(keyA uint64, keyB uint64, timestamp uint64, value []byte) (uint64, error) {
+func (vs *ValueStore) Write(keyA uint64, keyB uint64, timestamp uint64, value []byte) (uint64, error) {
 	i := int(keyA>>1) % len(vs.freeVWRChans)
 	vwr := <-vs.freeVWRChans[i]
 	vwr.keyA = keyA
@@ -378,7 +460,7 @@ func (vs *ValuesStore) Write(keyA uint64, keyB uint64, timestamp uint64, value [
 // timestamp already in place is not reported as an error.
 //
 // This may no longer be called after Close.
-func (vs *ValuesStore) Delete(keyA uint64, keyB uint64, timestamp uint64) (uint64, error) {
+func (vs *ValueStore) Delete(keyA uint64, keyB uint64, timestamp uint64) (uint64, error) {
 	i := int(keyA>>1) % len(vs.freeVWRChans)
 	vwr := <-vs.freeVWRChans[i]
 	vwr.keyA = keyA
@@ -395,15 +477,15 @@ func (vs *ValuesStore) Delete(keyA uint64, keyB uint64, timestamp uint64) (uint6
 // BackgroundNow will trigger background tasks to run now instead of waiting
 // for the next interval; this function will not return until the background
 // tasks complete.
-func (vs *ValuesStore) BackgroundNow(goroutines int) {
+func (vs *ValueStore) BackgroundNow(goroutines int) {
 	vs.vlm.BackgroundNow(goroutines)
 }
 
-// GatherStats returns overall information about the state of the ValuesStore.
+// GatherStats returns overall information about the state of the ValueStore.
 //
 // This may be called even after Close.
-func (vs *ValuesStore) GatherStats(debug bool) *ValuesStoreStats {
-	stats := &ValuesStoreStats{}
+func (vs *ValueStore) GatherStats(goroutines int, debug bool) (count uint64, length uint64, debugInfo fmt.Stringer) {
+	stats := &valuesStoreStats{}
 	if debug {
 		stats.debug = debug
 		stats.freeableVMChanCap = cap(vs.freeableVMChan)
@@ -429,24 +511,23 @@ func (vs *ValuesStore) GatherStats(debug bool) *ValuesStoreStats {
 		stats.maxValuesLocBlockID = atomic.LoadUint32(&vs.atValuesLocBlocksIDer)
 		stats.cores = vs.cores
 		stats.maxValueSize = vs.maxValueSize
-		stats.memTOCPageSize = vs.memTOCPageSize
-		stats.memValuesPageSize = vs.memValuesPageSize
-		stats.memWriteMultiplier = vs.memWriteMultiplier
-		stats.valuesFileSize = vs.valuesFileSize
-		stats.valuesFileReaders = vs.valuesFileReaders
+		stats.pageSize = vs.pageSize
+		stats.writePagesPerCore = vs.writePagesPerCore
+		stats.valueFileSize = vs.valueFileSize
+		stats.valueFileReaders = vs.valueFileReaders
 		stats.checksumInterval = vs.checksumInterval
-		stats.vlmCount, stats.vlmLength, stats.vlmDebugInfo = vs.vlm.GatherStats(0, true)
+		stats.vlmCount, stats.vlmLength, stats.vlmDebugInfo = vs.vlm.GatherStats(goroutines, true)
 	} else {
-		stats.vlmCount, stats.vlmLength, stats.vlmDebugInfo = vs.vlm.GatherStats(0, false)
+		stats.vlmCount, stats.vlmLength, stats.vlmDebugInfo = vs.vlm.GatherStats(goroutines, false)
 	}
-	return stats
+	return stats.vlmCount, stats.vlmLength, stats
 }
 
-func (vs *ValuesStore) valuesLocBlock(valuesLocBlockID uint16) valuesLocBlock {
+func (vs *ValueStore) valuesLocBlock(valuesLocBlockID uint16) valuesLocBlock {
 	return vs.valuesLocBlocks[valuesLocBlockID]
 }
 
-func (vs *ValuesStore) addValuesLocBock(block valuesLocBlock) uint16 {
+func (vs *ValueStore) addValuesLocBock(block valuesLocBlock) uint16 {
 	id := atomic.AddUint32(&vs.atValuesLocBlocksIDer, 1)
 	if id >= 65536 {
 		panic("too many valuesLocBlocks")
@@ -455,7 +536,7 @@ func (vs *ValuesStore) addValuesLocBock(block valuesLocBlock) uint16 {
 	return uint16(id)
 }
 
-func (vs *ValuesStore) memClearer() {
+func (vs *ValueStore) memClearer() {
 	var tb []byte
 	var tbTS int64
 	var tbOffset int
@@ -512,7 +593,7 @@ func (vs *ValuesStore) memClearer() {
 	}
 }
 
-func (vs *ValuesStore) memWriter(pendingVWRChan chan *valueWriteReq) {
+func (vs *ValueStore) memWriter(pendingVWRChan chan *valueWriteReq) {
 	var vm *valuesMem
 	var vmTOCOffset int
 	var vmMemOffset int
@@ -530,7 +611,11 @@ func (vs *ValuesStore) memWriter(pendingVWRChan chan *valueWriteReq) {
 			vwr.errChan <- fmt.Errorf("value length of %d > %d", length, vs.maxValueSize)
 			continue
 		}
-		if vm != nil && (vmTOCOffset+32 > cap(vm.toc) || vmMemOffset+length > cap(vm.values)) {
+		alloc := length
+		if alloc < vs.minValueAlloc {
+			alloc = vs.minValueAlloc
+		}
+		if vm != nil && (vmTOCOffset+32 > cap(vm.toc) || vmMemOffset+alloc > cap(vm.values)) {
 			vs.vfVMChan <- vm
 			vm = nil
 		}
@@ -540,9 +625,14 @@ func (vs *ValuesStore) memWriter(pendingVWRChan chan *valueWriteReq) {
 			vmMemOffset = 0
 		}
 		vm.discardLock.Lock()
-		vm.values = vm.values[:vmMemOffset+length]
+		vm.values = vm.values[:vmMemOffset+alloc]
 		vm.discardLock.Unlock()
 		copy(vm.values[vmMemOffset:], vwr.value)
+		if alloc > length {
+			for i, j := vmMemOffset+length, vmMemOffset+alloc; i < j; i++ {
+				vm.values[i] = 0
+			}
+		}
 		oldTimestamp := vs.vlm.Set(vwr.keyA, vwr.keyB, vwr.timestamp, vm.id, uint32(vmMemOffset), uint32(length), false)
 		if oldTimestamp < vwr.timestamp {
 			vm.toc = vm.toc[:vmTOCOffset+32]
@@ -552,7 +642,7 @@ func (vs *ValuesStore) memWriter(pendingVWRChan chan *valueWriteReq) {
 			binary.BigEndian.PutUint32(vm.toc[vmTOCOffset+24:], uint32(vmMemOffset))
 			binary.BigEndian.PutUint32(vm.toc[vmTOCOffset+28:], uint32(length))
 			vmTOCOffset += 32
-			vmMemOffset += length
+			vmMemOffset += alloc
 		} else {
 			vm.discardLock.Lock()
 			vm.values = vm.values[:vmMemOffset]
@@ -563,7 +653,7 @@ func (vs *ValuesStore) memWriter(pendingVWRChan chan *valueWriteReq) {
 	}
 }
 
-func (vs *ValuesStore) vfWriter() {
+func (vs *ValueStore) vfWriter() {
 	var vf *valuesFile
 	memWritersLeft := vs.cores
 	var tocLen uint64
@@ -583,7 +673,7 @@ func (vs *ValuesStore) vfWriter() {
 			}
 			continue
 		}
-		if vf != nil && (tocLen+uint64(len(vm.toc)) >= uint64(vs.valuesFileSize) || valuesLen+uint64(len(vm.values)) > uint64(vs.valuesFileSize)) {
+		if vf != nil && (tocLen+uint64(len(vm.toc)) >= uint64(vs.valueFileSize) || valuesLen+uint64(len(vm.values)) > uint64(vs.valueFileSize)) {
 			vf.close()
 			vf = nil
 		}
@@ -598,7 +688,7 @@ func (vs *ValuesStore) vfWriter() {
 	}
 }
 
-func (vs *ValuesStore) tocWriter() {
+func (vs *ValueStore) tocWriter() {
 	var btsA uint64
 	var writerA io.WriteCloser
 	var offsetA uint64
@@ -687,7 +777,7 @@ func (vs *ValuesStore) tocWriter() {
 	vs.tocWriterDoneChan <- struct{}{}
 }
 
-func (vs *ValuesStore) recovery() {
+func (vs *ValueStore) recovery() {
 	start := time.Now()
 	dfp, err := os.Open(".")
 	if err != nil {
@@ -866,56 +956,12 @@ func (vs *ValuesStore) recovery() {
 	wg.Wait()
 	if fromDiskCount > 0 {
 		dur := time.Now().Sub(start)
-		log.Printf("%d key locations loaded in %s, %.0f/s; %d caused change; %d resulting locations.\n", fromDiskCount, dur, float64(fromDiskCount)/(float64(dur)/float64(time.Second)), count, vs.GatherStats(false).ValueCount())
+		valueCount, valueLength, _ := vs.GatherStats(vs.cores, false)
+		log.Printf("%d key locations loaded in %s, %.0f/s; %d caused change; %d resulting locations referencing %d bytes.\n", fromDiskCount, dur, float64(fromDiskCount)/(float64(dur)/float64(time.Second)), count, valueCount, valueLength)
 	}
 }
 
-type valueWriteReq struct {
-	keyA      uint64
-	keyB      uint64
-	timestamp uint64
-	value     []byte
-	errChan   chan error
-}
-
-type valuesLocBlock interface {
-	timestamp() int64
-	read(keyA uint64, keyB uint64, timestamp uint64, offset uint32, length uint32, value []byte) (uint64, []byte, error)
-}
-
-type ValuesStoreStats struct {
-	debug                  bool
-	freeableVMChanCap      int
-	freeableVMChanIn       int
-	freeVMChanCap          int
-	freeVMChanIn           int
-	freeVWRChans           int
-	freeVWRChansCap        int
-	freeVWRChansIn         int
-	pendingVWRChans        int
-	pendingVWRChansCap     int
-	pendingVWRChansIn      int
-	vfVMChanCap            int
-	vfVMChanIn             int
-	freeTOCBlockChanCap    int
-	freeTOCBlockChanIn     int
-	pendingTOCBlockChanCap int
-	pendingTOCBlockChanIn  int
-	maxValuesLocBlockID    uint32
-	cores                  int
-	maxValueSize           uint32
-	memTOCPageSize         uint32
-	memValuesPageSize      uint32
-	memWriteMultiplier     int
-	valuesFileSize         uint32
-	valuesFileReaders      int
-	checksumInterval       uint32
-	vlmCount               uint64
-	vlmLength              uint64
-	vlmDebugInfo           fmt.Stringer
-}
-
-func (stats *ValuesStoreStats) String() string {
+func (stats *valuesStoreStats) String() string {
 	if stats.debug {
 		return brimtext.Align([][]string{
 			[]string{"freeableVMChanCap", fmt.Sprintf("%d", stats.freeableVMChanCap)},
@@ -937,28 +983,19 @@ func (stats *ValuesStoreStats) String() string {
 			[]string{"maxValuesLocBlockID", fmt.Sprintf("%d", stats.maxValuesLocBlockID)},
 			[]string{"cores", fmt.Sprintf("%d", stats.cores)},
 			[]string{"maxValueSize", fmt.Sprintf("%d", stats.maxValueSize)},
-			[]string{"memTOCPageSize", fmt.Sprintf("%d", stats.memTOCPageSize)},
-			[]string{"memValuesPageSize", fmt.Sprintf("%d", stats.memValuesPageSize)},
-			[]string{"memWriteMultiplier", fmt.Sprintf("%d", stats.memWriteMultiplier)},
-			[]string{"valuesFileSize", fmt.Sprintf("%d", stats.valuesFileSize)},
-			[]string{"valuesFileReaders", fmt.Sprintf("%d", stats.valuesFileReaders)},
+			[]string{"pageSize", fmt.Sprintf("%d", stats.pageSize)},
+			[]string{"writePagesPerCore", fmt.Sprintf("%d", stats.writePagesPerCore)},
+			[]string{"valueFileSize", fmt.Sprintf("%d", stats.valueFileSize)},
+			[]string{"valueFileReaders", fmt.Sprintf("%d", stats.valueFileReaders)},
 			[]string{"checksumInterval", fmt.Sprintf("%d", stats.checksumInterval)},
 			[]string{"vlmCount", fmt.Sprintf("%d", stats.vlmCount)},
-			[]string{"vlmLength", fmt.Sprintf("%d", stats.vlmCount)},
+			[]string{"vlmLength", fmt.Sprintf("%d", stats.vlmLength)},
 			[]string{"vlmDebugInfo", stats.vlmDebugInfo.String()},
 		}, nil)
 	} else {
 		return brimtext.Align([][]string{
 			[]string{"vlmCount", fmt.Sprintf("%d", stats.vlmCount)},
-			[]string{"vlmLength", fmt.Sprintf("%d", stats.vlmCount)},
+			[]string{"vlmLength", fmt.Sprintf("%d", stats.vlmLength)},
 		}, nil)
 	}
-}
-
-func (stats *ValuesStoreStats) ValueCount() uint64 {
-	return stats.vlmCount
-}
-
-func (stats *ValuesStoreStats) ValuesLength() uint64 {
-	return stats.vlmLength
 }

@@ -6,7 +6,7 @@ import (
 )
 
 type valuesMem struct {
-	vs          *ValuesStore
+	vs          *ValueStore
 	id          uint16
 	vfID        uint16
 	vfOffset    uint32
