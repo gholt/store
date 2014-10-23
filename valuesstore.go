@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"math"
+	"math/rand"
 	"os"
 	"runtime"
 	"sort"
@@ -250,10 +251,6 @@ type ValueLocMap interface {
 	Get(keyA uint64, keyB uint64) (timestamp uint64, blockID uint16, offset uint32, length uint32)
 	Set(keyA uint64, keyB uint64, timestamp uint64, blockID uint16, offset uint32, length uint32, evenIfSameTimestamp bool) (previousTimestamp uint64)
 	GatherStats(goroutines int, debug bool) (count uint64, length uint64, debugInfo fmt.Stringer)
-	BackgroundStart()
-	BackgroundStop()
-	BackgroundNow(goroutines int)
-	SetReplicationChan(chan interface{})
 }
 
 type ValueStore struct {
@@ -269,6 +266,8 @@ type ValueStore struct {
 	atValuesLocBlocksIDer uint32
 	vlm                   ValueLocMap
 	cores                 int
+	backgroundCores       int
+	backgroundInterval    int
 	maxValueSize          uint32
 	pageSize              uint32
 	minValueAlloc         int
@@ -276,6 +275,9 @@ type ValueStore struct {
 	valueFileSize         uint32
 	valueFileReaders      int
 	checksumInterval      uint32
+	backgroundNotifyChan  chan *backgroundNotification
+	backgroundDoneChan    chan struct{}
+	backgroundIteration   uint16
 }
 
 type valueWriteReq struct {
@@ -311,6 +313,8 @@ type valuesStoreStats struct {
 	pendingTOCBlockChanIn  int
 	maxValuesLocBlockID    uint32
 	cores                  int
+	backgroundCores        int
+	backgroundInterval     int
 	maxValueSize           uint32
 	pageSize               uint32
 	writePagesPerCore      int
@@ -320,6 +324,19 @@ type valuesStoreStats struct {
 	vlmCount               uint64
 	vlmLength              uint64
 	vlmDebugInfo           fmt.Stringer
+}
+
+type backgroundNotification struct {
+	goroutines int
+	doneChan   chan struct{}
+}
+
+type valueLocMapBackground struct {
+	vlm             *ValueLocMap
+	goroutines      int
+	funcChan        chan func()
+	iteration       uint16
+	tombstoneCutoff uint64
 }
 
 // NewValueStore creates a ValueStore for use in storing []byte values
@@ -379,7 +396,6 @@ func NewValueStore(opts ...func(*config)) *ValueStore {
 		go vs.memWriter(vs.pendingVWRChans[i])
 	}
 	vs.recovery()
-	vs.vlm.BackgroundStart()
 	return vs
 }
 
@@ -399,7 +415,7 @@ func (vs *ValueStore) Close() {
 		<-vs.freeVMChan
 	}
 	<-vs.tocWriterDoneChan
-	vs.vlm.BackgroundStop()
+	vs.BackgroundStop()
 }
 
 // Lookup will return timestamp, length, err for keyA, keyB.
@@ -450,10 +466,10 @@ func (vs *ValueStore) Write(keyA uint64, keyB uint64, timestamp uint64, value []
 	vwr.value = value
 	vs.pendingVWRChans[i] <- vwr
 	err := <-vwr.errChan
-	oldTimestamp := vwr.timestamp
+	previousTimestamp := vwr.timestamp
 	vwr.value = nil
 	vs.freeVWRChans[i] <- vwr
-	return oldTimestamp, err
+	return previousTimestamp, err
 }
 
 // Delete stores timestamp | 1 for keyA, keyB or returns any error; a newer
@@ -469,16 +485,9 @@ func (vs *ValueStore) Delete(keyA uint64, keyB uint64, timestamp uint64) (uint64
 	vwr.value = nil
 	vs.pendingVWRChans[i] <- vwr
 	err := <-vwr.errChan
-	oldTimestamp := vwr.timestamp
+	previousTimestamp := vwr.timestamp
 	vs.freeVWRChans[i] <- vwr
-	return oldTimestamp, err
-}
-
-// BackgroundNow will trigger background tasks to run now instead of waiting
-// for the next interval; this function will not return until the background
-// tasks complete.
-func (vs *ValueStore) BackgroundNow(goroutines int) {
-	vs.vlm.BackgroundNow(goroutines)
+	return previousTimestamp, err
 }
 
 // GatherStats returns overall information about the state of the ValueStore.
@@ -560,8 +569,8 @@ func (vs *ValueStore) memClearer() {
 			timestamp := binary.BigEndian.Uint64(vm.toc[vmTOCOffset+16:])
 			vmMemOffset := binary.BigEndian.Uint32(vm.toc[vmTOCOffset+24:])
 			length := binary.BigEndian.Uint32(vm.toc[vmTOCOffset+28:])
-			oldTimestamp := vs.vlm.Set(keyA, keyB, timestamp, vm.vfID, vm.vfOffset+vmMemOffset, length, true)
-			if oldTimestamp != timestamp {
+			previousTimestamp := vs.vlm.Set(keyA, keyB, timestamp, vm.vfID, vm.vfOffset+vmMemOffset, length, true)
+			if previousTimestamp != timestamp {
 				continue
 			}
 			if tb != nil && tbOffset+32 > cap(tb) {
@@ -633,8 +642,8 @@ func (vs *ValueStore) memWriter(pendingVWRChan chan *valueWriteReq) {
 				vm.values[i] = 0
 			}
 		}
-		oldTimestamp := vs.vlm.Set(vwr.keyA, vwr.keyB, vwr.timestamp, vm.id, uint32(vmMemOffset), uint32(length), false)
-		if oldTimestamp < vwr.timestamp {
+		previousTimestamp := vs.vlm.Set(vwr.keyA, vwr.keyB, vwr.timestamp, vm.id, uint32(vmMemOffset), uint32(length), false)
+		if previousTimestamp < vwr.timestamp {
 			vm.toc = vm.toc[:vmTOCOffset+32]
 			binary.BigEndian.PutUint64(vm.toc[vmTOCOffset:], vwr.keyA)
 			binary.BigEndian.PutUint64(vm.toc[vmTOCOffset+8:], vwr.keyB)
@@ -648,7 +657,7 @@ func (vs *ValueStore) memWriter(pendingVWRChan chan *valueWriteReq) {
 			vm.values = vm.values[:vmMemOffset]
 			vm.discardLock.Unlock()
 		}
-		vwr.timestamp = oldTimestamp
+		vwr.timestamp = previousTimestamp
 		vwr.errChan <- nil
 	}
 }
@@ -988,6 +997,8 @@ func (stats *valuesStoreStats) String() string {
 			[]string{"valueFileSize", fmt.Sprintf("%d", stats.valueFileSize)},
 			[]string{"valueFileReaders", fmt.Sprintf("%d", stats.valueFileReaders)},
 			[]string{"checksumInterval", fmt.Sprintf("%d", stats.checksumInterval)},
+			[]string{"backgroundCores", fmt.Sprintf("%d", stats.backgroundCores)},
+			[]string{"backgroundInterval", fmt.Sprintf("%d", stats.backgroundInterval)},
 			[]string{"vlmCount", fmt.Sprintf("%d", stats.vlmCount)},
 			[]string{"vlmLength", fmt.Sprintf("%d", stats.vlmLength)},
 			[]string{"vlmDebugInfo", stats.vlmDebugInfo.String()},
@@ -998,4 +1009,85 @@ func (stats *valuesStoreStats) String() string {
 			[]string{"vlmLength", fmt.Sprintf("%d", stats.vlmLength)},
 		}, nil)
 	}
+}
+
+// BackgroundStart will start the execution of background jobs at configured
+// intervals. Multiple calls to BackgroundStart will cause no harm and jobs can
+// be temporarily suspended by calling BackgroundStop and BackgroundStart as
+// desired.
+func (vs *ValueStore) BackgroundStart() {
+	if vs.backgroundNotifyChan == nil {
+		vs.backgroundDoneChan = make(chan struct{}, 1)
+		vs.backgroundNotifyChan = make(chan *backgroundNotification, 1)
+		go vs.backgroundLauncher()
+	}
+}
+
+// BackgroundStop will stop the execution of background jobs; use
+// BackgroundStart to restart them if desired. This can be useful when
+// importing large amounts of data where temporarily stopping the background
+// jobs and just restarting them after the import can greatly increase the
+// import speed.
+func (vs *ValueStore) BackgroundStop() {
+	if vs.backgroundNotifyChan != nil {
+		vs.backgroundNotifyChan <- nil
+		<-vs.backgroundDoneChan
+		vs.backgroundDoneChan = nil
+		vs.backgroundNotifyChan = nil
+	}
+}
+
+// BackgroundNow will immediately (rather than waiting for the next job
+// interval) execute any background jobs using up to the number of goroutines
+// indicated (0 will use the configured OptBackgroundCores value). This
+// function will not return until all background jobs have completed at least
+// one pass.
+func (vs *ValueStore) BackgroundNow(goroutines int) {
+	if vs.backgroundNotifyChan == nil {
+		vs.background(goroutines)
+	} else {
+		c := make(chan struct{}, 1)
+		vs.backgroundNotifyChan <- &backgroundNotification{goroutines, c}
+		<-c
+	}
+}
+
+func (vs *ValueStore) backgroundLauncher() {
+	interval := float64(vs.backgroundInterval) * float64(time.Second)
+	nextRun := time.Now().Add(time.Duration(interval + interval*rand.NormFloat64()*0.1))
+WORK:
+	for {
+		var notification *backgroundNotification
+		sleep := nextRun.Sub(time.Now())
+		if sleep > 0 {
+			select {
+			case notification = <-vs.backgroundNotifyChan:
+				if notification == nil {
+					break WORK
+				}
+			case <-time.After(sleep):
+			}
+		} else {
+			select {
+			case notification = <-vs.backgroundNotifyChan:
+				if notification == nil {
+					break WORK
+				}
+			default:
+			}
+		}
+		nextRun = time.Now().Add(time.Duration(interval + interval*rand.NormFloat64()*0.1))
+		goroutines := vs.backgroundCores
+		if notification != nil && notification.goroutines > 0 {
+			goroutines = notification.goroutines
+		}
+		vs.background(goroutines)
+		if notification != nil && notification.doneChan != nil {
+			notification.doneChan <- struct{}{}
+		}
+	}
+	vs.backgroundDoneChan <- struct{}{}
+}
+
+func (vs *ValueStore) background(goroutines int) {
 }

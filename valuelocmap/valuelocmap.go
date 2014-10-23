@@ -12,15 +12,11 @@
 // structure grows. If a slice empties, it is merged with its pair in the tree
 // structure and the tree shrinks. The tree is balanced by high bits of the
 // key, and locations are distributed in the slices by the low bits.
-//
-// Additionally, background tasks will execute, removing old mappings marked
-// for deletion (timestamp & 1 == 1), and providing replication data.
 package valuelocmap
 
 import (
 	"fmt"
 	"math"
-	"math/rand"
 	"os"
 	"runtime"
 	"strconv"
@@ -29,17 +25,14 @@ import (
 	"time"
 	"unsafe"
 
-	"github.com/gholt/brimstore/ktbloomfilter"
 	"github.com/gholt/brimtext"
 )
 
 type config struct {
-	cores              int
-	backgroundCores    int
-	backgroundInterval int
-	pageSize           int
-	splitMultiplier    float64
-	tombstoneAge       int
+	cores           int
+	pageSize        int
+	splitMultiplier float64
+	tombstoneAge    int
 }
 
 func resolveConfig(opts ...func(*config)) *config {
@@ -55,22 +48,6 @@ func resolveConfig(opts ...func(*config)) *config {
 	}
 	if cfg.cores <= 0 {
 		cfg.cores = runtime.GOMAXPROCS(0)
-	}
-	if env := os.Getenv("BRIMSTORE_VALUELOCMAP_BACKGROUNDCORES"); env != "" {
-		if val, err := strconv.Atoi(env); err == nil {
-			cfg.backgroundCores = val
-		}
-	}
-	if cfg.backgroundCores <= 0 {
-		cfg.backgroundCores = 1
-	}
-	if env := os.Getenv("BRIMSTORE_VALUELOCMAP_BACKGROUNDINTERVAL"); env != "" {
-		if val, err := strconv.Atoi(env); err == nil {
-			cfg.backgroundInterval = val
-		}
-	}
-	if cfg.backgroundInterval <= 0 {
-		cfg.backgroundInterval = 60
 	}
 	if env := os.Getenv("BRIMSTORE_VALUELOCMAP_PAGESIZE"); env != "" {
 		if val, err := strconv.Atoi(env); err == nil {
@@ -102,12 +79,6 @@ func resolveConfig(opts ...func(*config)) *config {
 	if cfg.cores < 1 {
 		cfg.cores = 1
 	}
-	if cfg.backgroundCores < 1 {
-		cfg.backgroundCores = 1
-	}
-	if cfg.backgroundInterval < 1 {
-		cfg.backgroundInterval = 1
-	}
 	if cfg.pageSize < 1 {
 		cfg.pageSize = 1
 	}
@@ -133,29 +104,6 @@ func OptList(opts ...func(*config)) []func(*config) {
 func OptCores(cores int) func(*config) {
 	return func(cfg *config) {
 		cfg.cores = cores
-	}
-}
-
-// OptBackgroundCores indicates how many cores may be used for background jobs.
-// Defaults to env BRIMSTORE_VALUELOCMAP_BACKGROUNDCORES or 1.
-func OptBackgroundCores(cores int) func(*config) {
-	return func(cfg *config) {
-		cfg.backgroundCores = cores
-	}
-}
-
-// OptBackgroundInterval indicates the minimum number of seconds betweeen the
-// starts of background jobs. For example, if set to 60 seconds and the jobs
-// take 10 seconds to run, they will wait 50 seconds (with a bit of
-// randomization) between the stop of one run and the start of the next. This
-// is really just meant to keep nearly empty structures from using a lot of
-// resources doing nearly nothing. Normally, you'd want your jobs to be running
-// constantly so that replication and cleanup are as fast as possible and the
-// load constant. The default of 60 seconds is almost always fine. Defaults to
-// env BRIMSTORE_VALUELOCMAP_BACKGROUNDINTERVAL or 60.
-func OptBackgroundInterval(seconds int) func(*config) {
-	return func(cfg *config) {
-		cfg.backgroundInterval = seconds
 	}
 }
 
@@ -189,13 +137,8 @@ func OptTombstoneAge(seconds int) func(*config) {
 type ValueLocMap struct {
 	root                    *valueLocNode
 	cores                   int
-	backgroundCores         int
-	backgroundInterval      int
 	splitCount              int
 	tombstoneAge            uint64
-	backgroundNotifyChan    chan *backgroundNotification
-	backgroundDoneChan      chan struct{}
-	backgroundIteration     uint16
 	outOfPlaceKeyDetections int32
 	replicationChan         chan interface{}
 }
@@ -266,8 +209,6 @@ type valueLocMapStats struct {
 	debug                   bool
 	funcChan                chan func()
 	cores                   int
-	backgroundCores         int
-	backgroundInterval      int
 	depth                   uint64
 	depthCounts             []uint64
 	sections                uint64
@@ -286,19 +227,6 @@ type valueLocMapStats struct {
 	tombstones              uint64
 }
 
-type backgroundNotification struct {
-	goroutines int
-	doneChan   chan struct{}
-}
-
-type valueLocMapBackground struct {
-	vlm             *ValueLocMap
-	goroutines      int
-	funcChan        chan func()
-	iteration       uint16
-	tombstoneCutoff uint64
-}
-
 // NewValueLocMap creates a new ValueLocMap instance. You can provide Opt*
 // functions for optional configuration items, such as OptCores:
 //
@@ -307,9 +235,6 @@ type valueLocMapBackground struct {
 //      valuelocmap.OptCores(10),
 //      valuelocmap.OptPageSize(4194304),
 //  )
-//
-// Note that background jobs will not execute until you call BackgroundStart
-// (or specifically call BackgroundNow for a single execution).
 func NewValueLocMap(opts ...func(*config)) *ValueLocMap {
 	cfg := resolveConfig(opts...)
 	bucketCount := cfg.pageSize / int(unsafe.Sizeof(valueLoc{}))
@@ -330,11 +255,9 @@ func NewValueLocMap(opts ...func(*config)) *ValueLocMap {
 				locks:   make([]sync.RWMutex, lockCount),
 			},
 		},
-		cores:              cfg.cores,
-		backgroundCores:    cfg.backgroundCores,
-		backgroundInterval: cfg.backgroundInterval,
-		splitCount:         int(float64(bucketCount) * cfg.splitMultiplier),
-		tombstoneAge:       uint64(cfg.tombstoneAge) * uint64(time.Second),
+		cores:        cfg.cores,
+		splitCount:   int(float64(bucketCount) * cfg.splitMultiplier),
+		tombstoneAge: uint64(cfg.tombstoneAge) * uint64(time.Second),
 	}
 	return vlm
 }
@@ -783,12 +706,10 @@ func (vlm *ValueLocMap) GatherStats(goroutines int, debug bool) (uint64, uint64,
 		goroutines = vlm.cores
 	}
 	stats := &valueLocMapStats{
-		goroutines:         goroutines,
-		debug:              debug,
-		funcChan:           make(chan func(), goroutines),
-		cores:              vlm.cores,
-		backgroundCores:    vlm.backgroundCores,
-		backgroundInterval: vlm.backgroundInterval,
+		goroutines: goroutines,
+		debug:      debug,
+		funcChan:   make(chan func(), goroutines),
+		cores:      vlm.cores,
 	}
 	funcsDone := make(chan struct{}, 1)
 	go func() {
@@ -935,8 +856,6 @@ func (stats *valueLocMapStats) String() string {
 		return brimtext.Align([][]string{
 			[]string{"statsGoroutines", fmt.Sprintf("%d", stats.goroutines)},
 			[]string{"cores", fmt.Sprintf("%d", stats.cores)},
-			[]string{"backgroundCores", fmt.Sprintf("%d", stats.backgroundCores)},
-			[]string{"backgroundInterval", fmt.Sprintf("%d", stats.backgroundInterval)},
 			[]string{"pageSize", fmt.Sprintf("%d", stats.buckets*uint64(unsafe.Sizeof(valueLoc{})))},
 			[]string{"splitMultiplier", fmt.Sprintf("%f", float64(stats.splitCount)/float64(stats.buckets))},
 			[]string{"tombstoneAge", fmt.Sprintf("%d", stats.tombstoneAge)},
@@ -1218,96 +1137,7 @@ func (vln *valueLocNode) unsplit(cores int) {
 	vln.resizingLock.Unlock()
 }
 
-// BackgroundStart will start the execution of background jobs at configured
-// intervals. Multiple calls to BackgroundStart will cause no harm and jobs can
-// be temporarily suspended by calling BackgroundStop and BackgroundStart as
-// desired.
-func (vlm *ValueLocMap) BackgroundStart() {
-	if vlm.backgroundNotifyChan == nil {
-		vlm.backgroundDoneChan = make(chan struct{}, 1)
-		vlm.backgroundNotifyChan = make(chan *backgroundNotification, 1)
-		go vlm.backgroundLauncher()
-	}
-}
-
-// BackgroundStop will stop the execution of background jobs; use
-// BackgroundStart to restart them if desired. This can be useful when
-// importing large amounts of data where temporarily stopping the background
-// jobs and just restarting them after the import can greatly increase the
-// import speed.
-func (vlm *ValueLocMap) BackgroundStop() {
-	if vlm.backgroundNotifyChan != nil {
-		vlm.backgroundNotifyChan <- nil
-		<-vlm.backgroundDoneChan
-		vlm.backgroundDoneChan = nil
-		vlm.backgroundNotifyChan = nil
-	}
-}
-
-// BackgroundNow will immediately (rather than waiting for the next job
-// interval) execute any background jobs using up to the number of goroutines
-// indicated (0 will use the configured OptBackgroundCores value). This
-// function will not return until all background jobs have completed at least
-// one pass.
-//
-// If you don't wish to use the automatic background job launcher, you can call
-// BackgroundStop and then just call BackgroundNow when you wish the background
-// jobs to execute.
-func (vlm *ValueLocMap) BackgroundNow(goroutines int) {
-	if vlm.backgroundNotifyChan == nil {
-		vlm.background(goroutines)
-	} else {
-		c := make(chan struct{}, 1)
-		vlm.backgroundNotifyChan <- &backgroundNotification{goroutines, c}
-		<-c
-	}
-}
-
-// SetReplicationChan sets the channel to send replication data to as the
-// background jobs collect it. If set to nil, no replication data will be
-// gathered nor sent. TODO: Currently, KTBloomFilter instances will be sent to
-// the channel. But eventually other types of replication data will be sent.
-func (vlm *ValueLocMap) SetReplicationChan(c chan interface{}) {
-	vlm.replicationChan = c
-}
-
-func (vlm *ValueLocMap) backgroundLauncher() {
-	interval := float64(vlm.backgroundInterval) * float64(time.Second)
-	nextRun := time.Now().Add(time.Duration(interval + interval*rand.NormFloat64()*0.1))
-WORK:
-	for {
-		var notification *backgroundNotification
-		sleep := nextRun.Sub(time.Now())
-		if sleep > 0 {
-			select {
-			case notification = <-vlm.backgroundNotifyChan:
-				if notification == nil {
-					break WORK
-				}
-			case <-time.After(sleep):
-			}
-		} else {
-			select {
-			case notification = <-vlm.backgroundNotifyChan:
-				if notification == nil {
-					break WORK
-				}
-			default:
-			}
-		}
-		nextRun = time.Now().Add(time.Duration(interval + interval*rand.NormFloat64()*0.1))
-		goroutines := vlm.backgroundCores
-		if notification != nil && notification.goroutines > 0 {
-			goroutines = notification.goroutines
-		}
-		vlm.background(goroutines)
-		if notification != nil && notification.doneChan != nil {
-			notification.doneChan <- struct{}{}
-		}
-	}
-	vlm.backgroundDoneChan <- struct{}{}
-}
-
+/*
 func (vlm *ValueLocMap) background(goroutines int) {
 	if goroutines < 1 {
 		goroutines = vlm.backgroundCores
@@ -1640,3 +1470,4 @@ func (vln *valueLocNode) scanIntoBloomFilter(bg *valueLocMapBackground, p int, p
 		}
 	}
 }
+*/
