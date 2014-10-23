@@ -258,6 +258,9 @@ type valueLocMapStats struct {
 	goroutines              int
 	debug                   bool
 	funcChan                chan func()
+	cores                   int
+	backgroundCores         int
+	backgroundInterval      int
 	depth                   uint64
 	depthCounts             []uint64
 	sections                uint64
@@ -773,9 +776,12 @@ func (vlm *ValueLocMap) GatherStats(goroutines int, debug bool) (uint64, uint64,
 		goroutines = vlm.cores
 	}
 	stats := &valueLocMapStats{
-		goroutines: goroutines,
-		debug:      debug,
-		funcChan:   make(chan func(), goroutines),
+		goroutines:         goroutines,
+		debug:              debug,
+		funcChan:           make(chan func(), goroutines),
+		cores:              vlm.cores,
+		backgroundCores:    vlm.backgroundCores,
+		backgroundInterval: vlm.backgroundInterval,
 	}
 	funcsDone := make(chan struct{}, 1)
 	go func() {
@@ -928,15 +934,19 @@ func (stats *valueLocMapStats) String() string {
 			depthCounts += fmt.Sprintf(" %d", stats.depthCounts[i])
 		}
 		return brimtext.Align([][]string{
-			[]string{"goroutines", fmt.Sprintf("%d", stats.goroutines)},
+			[]string{"statsGoroutines", fmt.Sprintf("%d", stats.goroutines)},
+			[]string{"cores", fmt.Sprintf("%d", stats.cores)},
+			[]string{"backgroundCores", fmt.Sprintf("%d", stats.backgroundCores)},
+			[]string{"backgroundInterval", fmt.Sprintf("%d", stats.backgroundInterval)},
+			[]string{"pageSize", fmt.Sprintf("%d", stats.buckets*uint64(unsafe.Sizeof(valueLoc{})))},
+			[]string{"splitMultiplier", fmt.Sprintf("%f", float64(stats.splitCount)/float64(stats.buckets))},
+			[]string{"tombstoneAge", fmt.Sprintf("%d", stats.tombstoneAge)},
 			[]string{"depth", fmt.Sprintf("%d", stats.depth)},
 			[]string{"depthCounts", depthCounts},
 			[]string{"sections", fmt.Sprintf("%d", stats.sections)},
 			[]string{"storages", fmt.Sprintf("%d", stats.storages)},
-			[]string{"pageSize", fmt.Sprintf("%d", stats.buckets*uint64(unsafe.Sizeof(valueLoc{})))},
 			[]string{"bucketsPerPage", fmt.Sprintf("%d", stats.buckets)},
 			[]string{"splitCount", fmt.Sprintf("%d", stats.splitCount)},
-			[]string{"tombstoneAge", fmt.Sprintf("%d", stats.tombstoneAge)},
 			[]string{"outOfPlaceKeyDetections", fmt.Sprintf("%d", stats.outOfPlaceKeyDetections)},
 			[]string{"locs", fmt.Sprintf("%d", stats.locs)},
 			[]string{"pointerLocs", fmt.Sprintf("%d %.1f%%", stats.pointerLocs, float64(stats.pointerLocs)/float64(stats.locs)*100)},
