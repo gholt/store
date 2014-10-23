@@ -1,3 +1,20 @@
+// Package valuelocmap provides a concurrency-safe data structure that maps
+// keys to value locations. A key is 128 bits and is specified using two
+// uint64s (keyA, keyB). A value location is specified using a blockID, offset,
+// and length triplet. Each mapping is assigned a timestamp and the greatest
+// timestamp wins. The timestamp is also used to indicate a deletion marker; if
+// timestamp & 1 == 1 then the mapping is considered a mark for deletion at
+// that time. Deletion markers are used in case mappings come in out of order
+// and for replication to others that may have missed the deletion.
+//
+// This implementation uses a tree structure of slices of key to location
+// assignments. As the slices fill up, they are split into two and the tree
+// structure grows. If a slice empties, it is merged with its pair in the tree
+// structure and the tree shrinks. The tree is balanced by high bits of the
+// key, and locations are distributed in the slices by the low bits.
+//
+// Additionally, background tasks (TODO) will execute removing old mappings
+// marked for deletion (timestamp & 1 == 1), and providing replication data.
 package valuelocmap
 
 import (
@@ -65,8 +82,8 @@ func resolveConfig(opts ...func(*config)) *config {
 }
 
 // OptCores indicates how many cores may be in use (for calculating the number
-// of locks to create, for example) and how many cores may be used for
-// background jobs. Defaults to env BRIMSTORE_VALUELOCMAP_CORES,
+// of locks to create, for example) and how many cores may be used for resizes
+// and background jobs. Defaults to env BRIMSTORE_VALUELOCMAP_CORES,
 // BRIMSTORE_CORES, or GOMAXPROCS.
 func OptCores(n int) func(*config) {
 	return func(cfg *config) {
@@ -91,6 +108,7 @@ func OptSplitMultiplier(m float64) func(*config) {
 	}
 }
 
+// ValueLocMap instances are created with NewValueLocMap.
 type ValueLocMap struct {
 	root                    *valueLocNode
 	cores                   int
@@ -163,8 +181,9 @@ type valueLoc struct {
 }
 
 type valueLocMapStats struct {
-	extended                bool
-	wg                      sync.WaitGroup
+	goroutines              int
+	debug                   bool
+	funcChan                chan func()
 	depth                   uint64
 	depthCounts             []uint64
 	sections                uint64
@@ -189,6 +208,14 @@ type valueLocMapBackground struct {
 	tombstonesRetained  uint64
 }
 
+// NewValueLocMap creates a new ValueLocMap instance. You can provide Opt*
+// functions for optional configuration items, such as OptCores:
+//
+//  vlmWithDefaults := valuelocmap.NewValueLocMap()
+//  vlmWithOptions := valuelocmap.NewValueLocMap(
+//      valuelocmap.OptCores(10),
+//      valuelocmap.OptPageSize(4194304),
+//  )
 func NewValueLocMap(opts ...func(*config)) *ValueLocMap {
 	cfg := resolveConfig(opts...)
 	bucketCount := cfg.pageSize / int(unsafe.Sizeof(valueLoc{}))
@@ -198,10 +225,6 @@ func NewValueLocMap(opts ...func(*config)) *ValueLocMap {
 	lockCount := cfg.cores
 	if lockCount > bucketCount {
 		lockCount = bucketCount
-	}
-	splitMultiplier := cfg.splitMultiplier
-	if splitMultiplier <= 0 {
-		splitMultiplier = 0.1
 	}
 	return &ValueLocMap{
 		root: &valueLocNode{
@@ -218,6 +241,9 @@ func NewValueLocMap(opts ...func(*config)) *ValueLocMap {
 	}
 }
 
+// Get returns timestamp, blockID, offset, and length for keyA, keyB. The
+// blockID will be 0 if keyA, keyB was not found. The timestamp & 1 == 1 if
+// keyA, keyB is marked for deletion.
 func (vlm *ValueLocMap) Get(keyA uint64, keyB uint64) (uint64, uint16, uint32, uint32) {
 	var timestamp uint64
 	var blockID uint16
@@ -322,6 +348,27 @@ VLN_SELECTION:
 	return timestamp, blockID, offset, length
 }
 
+// Set returns the previous timestamp after updating keyA, keyB to have the
+// timestamp, blockID, offset, and length.
+//
+// If blockID is 0 then keyA, keyB will be removed from the map, though this
+// isn't usually done. Instead, setting the timestamp to a value where
+// timestamp & 1 == 1 will mark keyA, keyB for deletion and the deletion marker
+// will be automatically removed after some time (assuming it isn't overridden
+// with another set).
+//
+// Normally a set will only take affect if the given timestamp is greater than
+// any existing timestamp for keyA, keyB. You can set evenIfSameTimestamp to
+// true to update the location even if the existing timestamp is the same as
+// the timestamp passed in, which is useful to update where the value for keyA,
+// keyB is now located (moving from memory to a disk file, or from one disk
+// file to another, as examples).
+//
+// The previous timestamp returned can be used to determine if a set had any
+// effect. If the previous timestamp is greater than (or equal to, if
+// evenIfSameTimestamp is false) the timestamp passed in, the set had no
+// effect. This information can be used to decide whether to persist the
+// pointed to value, for example.
 func (vlm *ValueLocMap) Set(keyA uint64, keyB uint64, timestamp uint64, blockID uint16, offset uint32, length uint32, evenIfSameTimestamp bool) uint64 {
 	var oldTimestamp uint64
 	var originalOldTimestampCheck bool
@@ -625,24 +672,50 @@ func (vln *valueLocNode) isResizing() bool {
 	return false
 }
 
-func (vlm *ValueLocMap) gatherStats(extended bool) *valueLocMapStats {
-	stats := &valueLocMapStats{}
-	if extended {
-		stats.extended = true
+// GatherStats returns the active (non deletion markers)  mapping count and
+// total length referenced as well as a fmt.Stringer that contains debug
+// information if debug is true; note that when debug is true additional
+// resources are consumed to collect the additional information. Also note that
+// while data collection is ongoing, other operations with the location map
+// will be slower, especially if debug is true. You can use the goroutines
+// setting to limit the impact of data collection; 0 will use the number of
+// cores the ValueLocMap is configured for.
+func (vlm *ValueLocMap) GatherStats(goroutines int, debug bool) (uint64, uint64, fmt.Stringer) {
+	if goroutines < 1 {
+		goroutines = vlm.cores
+	}
+	stats := &valueLocMapStats{
+		goroutines: goroutines,
+		debug:      debug,
+		funcChan:   make(chan func(), goroutines),
+	}
+	funcsDone := make(chan struct{}, 1)
+	go func() {
+		for {
+			f := <-stats.funcChan
+			if f == nil {
+				break
+			}
+			f()
+		}
+		funcsDone <- struct{}{}
+	}()
+	if stats.debug {
 		stats.depthCounts = []uint64{0}
 		stats.splitCount = uint64(vlm.splitCount)
 		stats.outOfPlaceKeyDetections = vlm.outOfPlaceKeyDetections
 	}
 	vlm.root.gatherStatsHelper(stats)
-	stats.wg.Wait()
-	if extended {
+	stats.funcChan <- nil
+	<-funcsDone
+	if debug {
 		stats.depthCounts = stats.depthCounts[1:]
 	}
-	return stats
+	return stats.active, stats.length, stats
 }
 
 func (vln *valueLocNode) gatherStatsHelper(stats *valueLocMapStats) {
-	if stats.extended {
+	if stats.debug {
 		stats.sections++
 		stats.depth++
 		if stats.depth < uint64(len(stats.depthCounts)) {
@@ -654,7 +727,7 @@ func (vln *valueLocNode) gatherStatsHelper(stats *valueLocMapStats) {
 	c := (*valueLocNode)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vln.c))))
 	if c != nil {
 		d := (*valueLocNode)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vln.d))))
-		if stats.extended {
+		if stats.debug {
 			depthOrig := stats.depth
 			c.gatherStatsHelper(stats)
 			depthC := stats.depth
@@ -673,8 +746,7 @@ func (vln *valueLocNode) gatherStatsHelper(stats *valueLocMapStats) {
 		if stats.buckets == 0 {
 			stats.buckets = uint64(len(s.buckets))
 		}
-		stats.wg.Add(1)
-		go func() {
+		stats.funcChan <- func() {
 			var bucketCounts []uint64
 			var pointerLocs uint64
 			var locs uint64
@@ -683,13 +755,13 @@ func (vln *valueLocNode) gatherStatsHelper(stats *valueLocMapStats) {
 			var active uint64
 			var length uint64
 			var tombstones uint64
-			if stats.extended {
+			if stats.debug {
 				bucketCounts = make([]uint64, len(s.buckets))
 			}
 			for bix := len(s.buckets) - 1; bix >= 0; bix-- {
 				lix := bix % len(s.locks)
 				s.locks[lix].RLock()
-				if stats.extended {
+				if stats.debug {
 					for item := &s.buckets[bix]; item != nil; item = item.next {
 						bucketCounts[bix]++
 						if item.next != nil {
@@ -720,7 +792,7 @@ func (vln *valueLocNode) gatherStatsHelper(stats *valueLocMapStats) {
 				}
 				s.locks[lix].RUnlock()
 			}
-			if stats.extended {
+			if stats.debug {
 				atomic.AddUint64(&stats.storages, 1)
 				atomic.AddUint64(&stats.pointerLocs, pointerLocs)
 				atomic.AddUint64(&stats.locs, locs)
@@ -730,8 +802,7 @@ func (vln *valueLocNode) gatherStatsHelper(stats *valueLocMapStats) {
 			}
 			atomic.AddUint64(&stats.active, active)
 			atomic.AddUint64(&stats.length, length)
-			stats.wg.Done()
-		}()
+		}
 	}
 	a := (*valueLocStore)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vln.a))))
 	if a != nil {
@@ -747,13 +818,22 @@ func (vln *valueLocNode) gatherStatsHelper(stats *valueLocMapStats) {
 	}
 }
 
+func (stats *valueLocMapStats) Count() uint64 {
+	return stats.active
+}
+
+func (stats *valueLocMapStats) Length() uint64 {
+	return stats.length
+}
+
 func (stats *valueLocMapStats) String() string {
-	if stats.extended {
+	if stats.debug {
 		depthCounts := fmt.Sprintf("%d", stats.depthCounts[0])
 		for i := 1; i < len(stats.depthCounts); i++ {
 			depthCounts += fmt.Sprintf(" %d", stats.depthCounts[i])
 		}
 		return brimtext.Align([][]string{
+			[]string{"goroutines", fmt.Sprintf("%d", stats.goroutines)},
 			[]string{"depth", fmt.Sprintf("%d", stats.depth)},
 			[]string{"depthCounts", depthCounts},
 			[]string{"sections", fmt.Sprintf("%d", stats.sections)},

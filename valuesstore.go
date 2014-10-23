@@ -27,6 +27,7 @@ import (
 type ValueLocMap interface {
 	Get(keyA uint64, keyB uint64) (timestamp uint64, blockID uint16, offset uint32, length uint32)
 	Set(keyA uint64, keyB uint64, timestamp uint64, blockID uint16, offset uint32, length uint32, evenIfSameTimestamp bool) (previousTimestamp uint64)
+	GatherStats(goroutines int, debug bool) (count uint64, length uint64, debugInfo fmt.Stringer)
 	Background(iteration uint16)
 }
 
@@ -424,10 +425,10 @@ func (vs *ValuesStore) BackgroundNow() {
 // GatherStats returns overall information about the state of the ValuesStore.
 //
 // This may be called even after Close.
-func (vs *ValuesStore) GatherStats(extended bool) *ValuesStoreStats {
+func (vs *ValuesStore) GatherStats(debug bool) *ValuesStoreStats {
 	stats := &ValuesStoreStats{}
-	if extended {
-		stats.extended = extended
+	if debug {
+		stats.debug = debug
 		stats.freeableVMChanCap = cap(vs.freeableVMChan)
 		stats.freeableVMChanIn = len(vs.freeableVMChan)
 		stats.freeVMChanCap = cap(vs.freeVMChan)
@@ -458,9 +459,9 @@ func (vs *ValuesStore) GatherStats(extended bool) *ValuesStoreStats {
 		stats.valuesFileSize = vs.valuesFileSize
 		stats.valuesFileReaders = vs.valuesFileReaders
 		stats.checksumInterval = vs.checksumInterval
-		//stats.vlmStats = vs.vlm.gatherStats(true)
+		stats.vlmCount, stats.vlmLength, stats.vlmDebugInfo = vs.vlm.GatherStats(0, true)
 	} else {
-		//stats.vlmStats = vs.vlm.gatherStats(false)
+		stats.vlmCount, stats.vlmLength, stats.vlmDebugInfo = vs.vlm.GatherStats(0, false)
 	}
 	return stats
 }
@@ -946,7 +947,7 @@ type valuesLocBlock interface {
 }
 
 type ValuesStoreStats struct {
-	extended               bool
+	debug                  bool
 	freeableVMChanCap      int
 	freeableVMChanIn       int
 	freeVMChanCap          int
@@ -973,11 +974,13 @@ type ValuesStoreStats struct {
 	valuesFileSize         uint32
 	valuesFileReaders      int
 	checksumInterval       uint32
-	//vlmStats               *valuesLocMapStats
+	vlmCount               uint64
+	vlmLength              uint64
+	vlmDebugInfo           fmt.Stringer
 }
 
 func (stats *ValuesStoreStats) String() string {
-	if stats.extended {
+	if stats.debug {
 		return brimtext.Align([][]string{
 			[]string{"freeableVMChanCap", fmt.Sprintf("%d", stats.freeableVMChanCap)},
 			[]string{"freeableVMChanIn", fmt.Sprintf("%d", stats.freeableVMChanIn)},
@@ -1005,21 +1008,22 @@ func (stats *ValuesStoreStats) String() string {
 			[]string{"valuesFileSize", fmt.Sprintf("%d", stats.valuesFileSize)},
 			[]string{"valuesFileReaders", fmt.Sprintf("%d", stats.valuesFileReaders)},
 			[]string{"checksumInterval", fmt.Sprintf("%d", stats.checksumInterval)},
-			//[]string{"vlm", stats.vlmStats.String()},
+			[]string{"vlmCount", fmt.Sprintf("%d", stats.vlmCount)},
+			[]string{"vlmLength", fmt.Sprintf("%d", stats.vlmCount)},
+			[]string{"vlmDebugInfo", stats.vlmDebugInfo.String()},
 		}, nil)
 	} else {
 		return brimtext.Align([][]string{
-		//[]string{"vlm", stats.vlmStats.String()},
+			[]string{"vlmCount", fmt.Sprintf("%d", stats.vlmCount)},
+			[]string{"vlmLength", fmt.Sprintf("%d", stats.vlmCount)},
 		}, nil)
 	}
 }
 
 func (stats *ValuesStoreStats) ValueCount() uint64 {
-	//return stats.vlmStats.active
-	return 0
+	return stats.vlmCount
 }
 
 func (stats *ValuesStoreStats) ValuesLength() uint64 {
-	//return stats.vlmStats.length
-	return 0
+	return stats.vlmLength
 }
