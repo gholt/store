@@ -13,27 +13,33 @@
 // structure and the tree shrinks. The tree is balanced by high bits of the
 // key, and locations are distributed in the slices by the low bits.
 //
-// Additionally, background tasks (TODO) will execute removing old mappings
-// marked for deletion (timestamp & 1 == 1), and providing replication data.
+// Additionally, background tasks will execute, removing old mappings marked
+// for deletion (timestamp & 1 == 1), and providing replication data.
 package valuelocmap
 
 import (
 	"fmt"
 	"math"
+	"math/rand"
 	"os"
 	"runtime"
 	"strconv"
 	"sync"
 	"sync/atomic"
+	"time"
 	"unsafe"
 
+	"github.com/gholt/brimstore/ktbloomfilter"
 	"github.com/gholt/brimtext"
 )
 
 type config struct {
-	cores           int
-	pageSize        int
-	splitMultiplier float64
+	cores              int
+	backgroundCores    int
+	backgroundInterval int
+	pageSize           int
+	splitMultiplier    float64
+	tombstoneAge       int
 }
 
 func resolveConfig(opts ...func(*config)) *config {
@@ -49,6 +55,22 @@ func resolveConfig(opts ...func(*config)) *config {
 	}
 	if cfg.cores <= 0 {
 		cfg.cores = runtime.GOMAXPROCS(0)
+	}
+	if env := os.Getenv("BRIMSTORE_VALUELOCMAP_BACKGROUNDCORES"); env != "" {
+		if val, err := strconv.Atoi(env); err == nil {
+			cfg.backgroundCores = val
+		}
+	}
+	if cfg.backgroundCores <= 0 {
+		cfg.backgroundCores = 1
+	}
+	if env := os.Getenv("BRIMSTORE_VALUELOCMAP_BACKGROUNDINTERVAL"); env != "" {
+		if val, err := strconv.Atoi(env); err == nil {
+			cfg.backgroundInterval = val
+		}
+	}
+	if cfg.backgroundInterval <= 0 {
+		cfg.backgroundInterval = 60
 	}
 	if env := os.Getenv("BRIMSTORE_VALUELOCMAP_PAGESIZE"); env != "" {
 		if val, err := strconv.Atoi(env); err == nil {
@@ -66,11 +88,25 @@ func resolveConfig(opts ...func(*config)) *config {
 	if cfg.splitMultiplier <= 0 {
 		cfg.splitMultiplier = 3.0
 	}
+	if env := os.Getenv("BRIMSTORE_VALUELOCMAP_TOMBSTONEAGE"); env != "" {
+		if val, err := strconv.Atoi(env); err == nil {
+			cfg.tombstoneAge = val
+		}
+	}
+	if cfg.tombstoneAge <= 0 {
+		cfg.tombstoneAge = 4 * 60 * 60
+	}
 	for _, opt := range opts {
 		opt(cfg)
 	}
 	if cfg.cores < 1 {
 		cfg.cores = 1
+	}
+	if cfg.backgroundCores < 1 {
+		cfg.backgroundCores = 1
+	}
+	if cfg.backgroundInterval < 1 {
+		cfg.backgroundInterval = 1
 	}
 	if cfg.pageSize < 1 {
 		cfg.pageSize = 1
@@ -78,33 +114,67 @@ func resolveConfig(opts ...func(*config)) *config {
 	if cfg.splitMultiplier <= 0 {
 		cfg.splitMultiplier = 0.01
 	}
+	if cfg.tombstoneAge < 0 {
+		cfg.tombstoneAge = 0
+	}
 	return cfg
 }
 
 // OptCores indicates how many cores may be in use (for calculating the number
-// of locks to create, for example) and how many cores may be used for resizes
-// and background jobs. Defaults to env BRIMSTORE_VALUELOCMAP_CORES,
-// BRIMSTORE_CORES, or GOMAXPROCS.
-func OptCores(n int) func(*config) {
+// of locks to create, for example) and how many cores may be used for resizes.
+// Defaults to env BRIMSTORE_VALUELOCMAP_CORES, BRIMSTORE_CORES, or GOMAXPROCS.
+func OptCores(cores int) func(*config) {
 	return func(cfg *config) {
-		cfg.cores = n
+		cfg.cores = cores
+	}
+}
+
+// OptBackgroundCores indicates how many cores may be used for background jobs.
+// Defaults to env BRIMSTORE_VALUELOCMAP_BACKGROUNDCORES or 1.
+func OptBackgroundCores(cores int) func(*config) {
+	return func(cfg *config) {
+		cfg.backgroundCores = cores
+	}
+}
+
+// OptBackgroundInterval indicates the minimum number of seconds betweeen the
+// starts of background jobs. For example, if set to 60 seconds and the jobs
+// take 10 seconds to run, they will wait 50 seconds (with a bit of
+// randomization) between the stop of one run and the start of the next. This
+// is really just meant to keep nearly empty structures from using a lot of
+// resources doing nearly nothing. Normally, you'd want your jobs to be running
+// constantly so that replication and cleanup are as fast as possible and the
+// load constant. The default of 60 seconds is almost always fine. Defaults to
+// env BRIMSTORE_VALUELOCMAP_BACKGROUNDINTERVAL or 60.
+func OptBackgroundInterval(seconds int) func(*config) {
+	return func(cfg *config) {
+		cfg.backgroundInterval = seconds
 	}
 }
 
 // OptPageSize controls the size of each chunk of memory allocated. Defaults to
 // env BRIMSTORE_VALUELOCMAP_PAGESIZE or 524,288.
-func OptPageSize(b int) func(*config) {
+func OptPageSize(bytes int) func(*config) {
 	return func(cfg *config) {
-		cfg.pageSize = b
+		cfg.pageSize = bytes
 	}
 }
 
 // OptSplitMultiplier indicates how full a memory page can get before being
 // split into two pages. Defaults to env BRIMSTORE_VALUELOCMAP_SPLITMULTIPLIER
 // or 3.0.
-func OptSplitMultiplier(m float64) func(*config) {
+func OptSplitMultiplier(multiplier float64) func(*config) {
 	return func(cfg *config) {
-		cfg.splitMultiplier = m
+		cfg.splitMultiplier = multiplier
+	}
+}
+
+// OptTombstoneAge indicates how many seconds old a deletion marker may be
+// before it is permanently removed from the mapping. Defaults to env
+// BRIMSTORE_VALUELOCMAP_TOMBSTONEAGE or 14,400 (4 hours).
+func OptTombstoneAge(seconds int) func(*config) {
+	return func(cfg *config) {
+		cfg.tombstoneAge = seconds
 	}
 }
 
@@ -112,7 +182,13 @@ func OptSplitMultiplier(m float64) func(*config) {
 type ValueLocMap struct {
 	root                    *valueLocNode
 	cores                   int
+	backgroundCores         int
+	backgroundInterval      int
 	splitCount              int
+	tombstoneAge            uint64
+	backgroundNotifyChan    chan *backgroundNotification
+	backgroundDoneChan      chan struct{}
+	backgroundIteration     uint16
 	outOfPlaceKeyDetections int32
 }
 
@@ -149,19 +225,16 @@ type ValueLocMap struct {
 // If you would rather have perfect correctness at the cost of speed, you will
 // have to use an additional lock around all uses of a-e.
 type valueLocNode struct {
-	leftMask                uint64
-	rangeStart              uint64
-	rangeStop               uint64
-	a                       *valueLocStore
-	b                       *valueLocStore
-	c                       *valueLocNode
-	d                       *valueLocNode
-	e                       *valueLocStore
-	resizing                bool
-	resizingLock            sync.RWMutex
-	cores                   int
-	splitCount              int
-	outOfPlaceKeyDetections int32
+	leftMask     uint64
+	rangeStart   uint64
+	rangeStop    uint64
+	a            *valueLocStore
+	b            *valueLocStore
+	c            *valueLocNode
+	d            *valueLocNode
+	e            *valueLocStore
+	resizing     bool
+	resizingLock sync.RWMutex
 }
 
 type valueLocStore struct {
@@ -190,7 +263,8 @@ type valueLocMapStats struct {
 	storages                uint64
 	buckets                 uint64
 	bucketCounts            []uint64
-	splitCount              uint64
+	splitCount              int
+	tombstoneAge            int
 	outOfPlaceKeyDetections int32
 	locs                    uint64
 	pointerLocs             uint64
@@ -201,11 +275,16 @@ type valueLocMapStats struct {
 	tombstones              uint64
 }
 
+type backgroundNotification struct {
+	goroutines int
+	doneChan   chan struct{}
+}
+
 type valueLocMapBackground struct {
-	wg                  sync.WaitGroup
-	tombstoneCutoff     uint64
-	tombstonesDiscarded uint64
-	tombstonesRetained  uint64
+	goroutines      int
+	funcChan        chan func()
+	iteration       uint16
+	tombstoneCutoff uint64
 }
 
 // NewValueLocMap creates a new ValueLocMap instance. You can provide Opt*
@@ -216,6 +295,9 @@ type valueLocMapBackground struct {
 //      valuelocmap.OptCores(10),
 //      valuelocmap.OptPageSize(4194304),
 //  )
+//
+// Note that background jobs will not execute until you call BackgroundStart
+// (or specifically call BackgroundNow for a single execution).
 func NewValueLocMap(opts ...func(*config)) *ValueLocMap {
 	cfg := resolveConfig(opts...)
 	bucketCount := cfg.pageSize / int(unsafe.Sizeof(valueLoc{}))
@@ -226,7 +308,7 @@ func NewValueLocMap(opts ...func(*config)) *ValueLocMap {
 	if lockCount > bucketCount {
 		lockCount = bucketCount
 	}
-	return &ValueLocMap{
+	vlm := &ValueLocMap{
 		root: &valueLocNode{
 			leftMask:   uint64(1) << 63,
 			rangeStart: 0,
@@ -236,9 +318,13 @@ func NewValueLocMap(opts ...func(*config)) *ValueLocMap {
 				locks:   make([]sync.RWMutex, lockCount),
 			},
 		},
-		cores:      cfg.cores,
-		splitCount: int(float64(bucketCount) * cfg.splitMultiplier),
+		cores:              cfg.cores,
+		backgroundCores:    cfg.backgroundCores,
+		backgroundInterval: cfg.backgroundInterval,
+		splitCount:         int(float64(bucketCount) * cfg.splitMultiplier),
+		tombstoneAge:       uint64(cfg.tombstoneAge) * uint64(time.Second),
 	}
+	return vlm
 }
 
 // Get returns timestamp, blockID, offset, and length for keyA, keyB. The
@@ -535,7 +621,7 @@ VLN_SELECTION:
 				if e == nil {
 					used := atomic.LoadInt32(&a.used)
 					if int(used) > vlm.splitCount {
-						go vln.split(vlm.cores)
+						go vln.split(vlm.splitCount, vlm.cores)
 					} else if used == 0 && vlmPrev != nil {
 						go vlmPrev.unsplit(vlm.cores)
 					}
@@ -632,7 +718,7 @@ VLN_SELECTION:
 						if e == nil {
 							used := atomic.LoadInt32(&a.used)
 							if int(used) > vlm.splitCount {
-								go vln.split(vlm.cores)
+								go vln.split(vlm.splitCount, vlm.cores)
 							} else if used == 0 && vlmPrev != nil {
 								go vlmPrev.unsplit(vlm.cores)
 							}
@@ -691,18 +777,25 @@ func (vlm *ValueLocMap) GatherStats(goroutines int, debug bool) (uint64, uint64,
 	}
 	funcsDone := make(chan struct{}, 1)
 	go func() {
+		wg := &sync.WaitGroup{}
 		for {
 			f := <-stats.funcChan
 			if f == nil {
 				break
 			}
-			f()
+			wg.Add(1)
+			go func() {
+				f()
+				wg.Done()
+			}()
 		}
+		wg.Wait()
 		funcsDone <- struct{}{}
 	}()
 	if stats.debug {
 		stats.depthCounts = []uint64{0}
-		stats.splitCount = uint64(vlm.splitCount)
+		stats.splitCount = vlm.splitCount
+		stats.tombstoneAge = int(vlm.tombstoneAge / uint64(time.Second))
 		stats.outOfPlaceKeyDetections = vlm.outOfPlaceKeyDetections
 	}
 	vlm.root.gatherStatsHelper(stats)
@@ -841,6 +934,7 @@ func (stats *valueLocMapStats) String() string {
 			[]string{"pageSize", fmt.Sprintf("%d", stats.buckets*uint64(unsafe.Sizeof(valueLoc{})))},
 			[]string{"bucketsPerPage", fmt.Sprintf("%d", stats.buckets)},
 			[]string{"splitCount", fmt.Sprintf("%d", stats.splitCount)},
+			[]string{"tombstoneAge", fmt.Sprintf("%d", stats.tombstoneAge)},
 			[]string{"outOfPlaceKeyDetections", fmt.Sprintf("%d", stats.outOfPlaceKeyDetections)},
 			[]string{"locs", fmt.Sprintf("%d", stats.locs)},
 			[]string{"pointerLocs", fmt.Sprintf("%d %.1f%%", stats.pointerLocs, float64(stats.pointerLocs)/float64(stats.locs)*100)},
@@ -858,11 +952,11 @@ func (stats *valueLocMapStats) String() string {
 	}
 }
 
-func (vln *valueLocNode) split(cores int) {
+func (vln *valueLocNode) split(splitCount int, cores int) {
 	vln.resizingLock.Lock()
 	a := (*valueLocStore)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vln.a))))
 	c := (*valueLocNode)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vln.c))))
-	if vln.resizing || c != nil || int(atomic.LoadInt32(&a.used)) < vln.splitCount {
+	if vln.resizing || c != nil || int(atomic.LoadInt32(&a.used)) < splitCount {
 		vln.resizingLock.Unlock()
 		return
 	}
@@ -1113,74 +1207,177 @@ func (vln *valueLocNode) unsplit(cores int) {
 	vln.resizingLock.Unlock()
 }
 
-func (vlm *ValueLocMap) Background(iteration uint16) {
-	// This is what I had as the background job before. Need to reimplement
-	// this tombstone expiration as part of scanCount most likely.
-	// bg := &valueLocMapBackground{tombstoneCutoff: uint64(time.Now().UnixNano()) - vs.tombstoneAge}
-	// vlm.backgroundHelper(bg, nil)
-	// bg.wg.Wait()
-
-	// GLH: Just for now...
-	if iteration >= 0 {
-		return
+// BackgroundStart will start the execution of background jobs at configured
+// intervals. Multiple calls to BackgroundStart will cause no harm and jobs can
+// be temporarily suspended by calling BackgroundStop and BackgroundStart as
+// desired.
+func (vlm *ValueLocMap) BackgroundStart() {
+	if vlm.backgroundNotifyChan == nil {
+		vlm.backgroundDoneChan = make(chan struct{}, 1)
+		vlm.backgroundNotifyChan = make(chan *backgroundNotification, 1)
+		go vlm.backgroundLauncher()
 	}
 }
 
-/*
+// BackgroundStop will stop the execution of background jobs; use
+// BackgroundStart to restart them if desired. This can be useful when
+// importing large amounts of data where temporarily stopping the background
+// jobs and just restarting them after the import can greatly increase the
+// import speed.
+func (vlm *ValueLocMap) BackgroundStop() {
+	if vlm.backgroundNotifyChan != nil {
+		vlm.backgroundNotifyChan <- nil
+		<-vlm.backgroundDoneChan
+		vlm.backgroundDoneChan = nil
+		vlm.backgroundNotifyChan = nil
+	}
+}
+
+// BackgroundNow will immediately (rather than waiting for the next job
+// interval) execute any background jobs using up to the number of goroutines
+// indicated (0 will use the configured OptBackgroundCores value). This
+// function will not return until all background jobs have completed at least
+// one pass.
+//
+// If you don't wish to use the automatic background job launcher, you can call
+// BackgroundStop and then just call BackgroundNow when you wish the background
+// jobs to execute.
+func (vlm *ValueLocMap) BackgroundNow(goroutines int) {
+	if vlm.backgroundNotifyChan == nil {
+		vlm.background(goroutines)
+	} else {
+		c := make(chan struct{}, 1)
+		vlm.backgroundNotifyChan <- &backgroundNotification{goroutines, c}
+		<-c
+	}
+}
+
+func (vlm *ValueLocMap) backgroundLauncher() {
+	interval := float64(vlm.backgroundInterval) * float64(time.Second)
+	nextRun := time.Now().Add(time.Duration(interval + interval*rand.NormFloat64()*0.1))
+WORK:
+	for {
+		var notification *backgroundNotification
+		sleep := nextRun.Sub(time.Now())
+		if sleep > 0 {
+			select {
+			case notification = <-vlm.backgroundNotifyChan:
+				if notification == nil {
+					break WORK
+				}
+			case <-time.After(sleep):
+			}
+		} else {
+			select {
+			case notification = <-vlm.backgroundNotifyChan:
+				if notification == nil {
+					break WORK
+				}
+			default:
+			}
+		}
+		nextRun = time.Now().Add(time.Duration(interval + interval*rand.NormFloat64()*0.1))
+		goroutines := vlm.backgroundCores
+		if notification != nil && notification.goroutines > 0 {
+			goroutines = notification.goroutines
+		}
+		vlm.background(goroutines)
+		if notification != nil && notification.doneChan != nil {
+			notification.doneChan <- struct{}{}
+		}
+	}
+	vlm.backgroundDoneChan <- struct{}{}
+}
+
+func (vlm *ValueLocMap) background(goroutines int) {
+	if goroutines < 1 {
+		goroutines = vlm.backgroundCores
+	}
+	if vlm.backgroundIteration == math.MaxUint16 {
+		vlm.backgroundIteration = 0
+	} else {
+		vlm.backgroundIteration++
+	}
+	bg := &valueLocMapBackground{
+		goroutines:      goroutines,
+		funcChan:        make(chan func(), goroutines),
+		iteration:       vlm.backgroundIteration,
+		tombstoneCutoff: uint64(time.Now().UnixNano()) - vlm.tombstoneAge,
+	}
+	funcsDone := make(chan struct{}, 1)
+	go func() {
+		wg := &sync.WaitGroup{}
+		for {
+			f := <-bg.funcChan
+			if f == nil {
+				break
+			}
+			wg.Add(1)
+			go func() {
+				f()
+				wg.Done()
+			}()
+		}
+		wg.Wait()
+		funcsDone <- struct{}{}
+	}()
 	p := 0
 	ppower := 10
 	pincrement := uint64(1) << uint64(64-ppower)
 	pstart := uint64(0)
 	pstop := pstart + (pincrement - 1)
-	wg := &sync.WaitGroup{}
-	// Here I'm doing bloom filter scans for every partition when eventually it
-	// should just do filters for partitions we're in the ring for. Partitions
-	// we're not in the ring for (handoffs, old data from ring changes, etc.)
-	// we should just send out what data we have and the remove it locally.
 	for {
-		for i := 0; i < vlm.cores; i++ {
-			wg.Add(1)
-			go vlm.scan(iteration, p, pstart, pstop, wg)
-			if pstop == math.MaxUint64 {
-				break
+		// Here I'm doing bloom filter scans for every partition when
+		// eventually it should just do filters for partitions we're in the
+		// ring for. Partitions we're not in the ring for (handoffs, old
+		// data from ring changes, etc.) we should just send out what data
+		// we have and the remove it locally.
+		bg.funcChan <- func(p int, pstart uint64, pstop uint64) func() {
+			return func() {
+				vlm.scan(bg, p, pstart, pstop)
 			}
-			p++
-			pstart += pincrement
-			pstop += pincrement
+		}(p, pstart, pstop)
+		if pstop == math.MaxUint64 {
+			break
 		}
-		wg.Wait()
+		p++
+		pstart += pincrement
+		pstop += pincrement
 		if pstop == math.MaxUint64 {
 			break
 		}
 	}
-	wg.Wait()
+	bg.funcChan <- nil
+	<-funcsDone
 }
 
 const _GLH_BLOOM_FILTER_N = 1000000
 const _GLH_BLOOM_FILTER_P = 0.001
 
-func (vlm *ValueLocMap) scan(iteration uint16, p int, pstart uint64, pstop uint64, wg *sync.WaitGroup) {
+func (vlm *ValueLocMap) scan(bg *valueLocMapBackground, p int, pstart uint64, pstop uint64) {
 	count := vlm.root.scanCount(vlm, pstart, pstop, 0)
 	for count > _GLH_BLOOM_FILTER_N {
 		pstartNew := pstart + (pstop-pstart+1)/2
-		wg.Add(1)
-		go vlm.root.scan(iteration, p, pstart, pstartNew-1, wg)
+		go func(pstop uint64) {
+			bg.funcChan <- func() {
+				vlm.scan(bg, p, pstart, pstop)
+			}
+		}(pstartNew - 1)
 		pstart = pstartNew
 		count = vlm.root.scanCount(vlm, pstart, pstop, 0)
 	}
 	if count > 0 {
-		ktbf := newKTBloomFilter(_GLH_BLOOM_FILTER_N, _GLH_BLOOM_FILTER_P, iteration)
+		ktbf := ktbloomfilter.NewKTBloomFilter(_GLH_BLOOM_FILTER_N, _GLH_BLOOM_FILTER_P, bg.iteration)
 		vlm.root.scanIntoBloomFilter(pstart, pstop, ktbf)
-		if ktbf.hasData {
+		if ktbf.HasData {
 			// Here we'll send the bloom filter to the other replicas and ask
 			// them to send us back all their data that isn't in the filter.
 			// fmt.Printf("%016x %016x-%016x %s\n", p, pstart, pstop, ktbf)
 		}
 	}
-	wg.Done()
 }
 
-func (vln *valueLocNode) scanCount(root *ValueLocMap, pstart uint64, pstop uint64, count uint64) uint64 {
+func (vln *valueLocNode) scanCount(vlm *ValueLocMap, pstart uint64, pstop uint64, count uint64) uint64 {
 	if vln.rangeStart > pstop {
 		return count
 	}
@@ -1190,11 +1387,11 @@ func (vln *valueLocNode) scanCount(root *ValueLocMap, pstart uint64, pstop uint6
 	c := (*valueLocNode)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vln.c))))
 	if c != nil {
 		d := (*valueLocNode)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vln.d))))
-		count = c.scanCount(root, pstart, pstop, count)
+		count = c.scanCount(vlm, pstart, pstop, count)
 		if count > _GLH_BLOOM_FILTER_N {
 			return count
 		}
-		return d.scanCount(root, pstart, pstop, count)
+		return d.scanCount(vlm, pstart, pstop, count)
 	}
 	a := (*valueLocStore)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vln.a))))
 	b := (*valueLocStore)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vln.b))))
@@ -1212,7 +1409,7 @@ func (vln *valueLocNode) scanCount(root *ValueLocMap, pstart uint64, pstop uint6
 				if itemA.keyA < vln.rangeStart || itemA.keyA > vln.rangeStop {
 					// Out of place key, extract and reinsert.
 					atomic.AddInt32(&vlm.outOfPlaceKeyDetections, 1)
-					go root.set(itemA.keyA, itemA.keyB, itemA.timestamp, itemA.blockID, itemA.offset, itemA.length, false)
+					go vlm.Set(itemA.keyA, itemA.keyB, itemA.timestamp, itemA.blockID, itemA.offset, itemA.length, false)
 					itemA.blockID = 0
 					continue
 				}
@@ -1286,7 +1483,7 @@ func (vln *valueLocNode) scanCount(root *ValueLocMap, pstart uint64, pstop uint6
 	return count
 }
 
-func (vln *valueLocNode) scanIntoBloomFilter(pstart uint64, pstop uint64, ktbf *ktBloomFilter) {
+func (vln *valueLocNode) scanIntoBloomFilter(pstart uint64, pstop uint64, ktbf *ktbloomfilter.KTBloomFilter) {
 	if vln.rangeStart > pstop {
 		return
 	}
@@ -1313,7 +1510,7 @@ func (vln *valueLocNode) scanIntoBloomFilter(pstart uint64, pstop uint64, ktbf *
 				if itemA.blockID == 0 || itemA.keyA < pstart || itemA.keyA > pstop {
 					continue
 				}
-				ktbf.add(itemA.keyA, itemA.keyB, itemA.timestamp)
+				ktbf.Add(itemA.keyA, itemA.keyB, itemA.timestamp)
 			}
 			a.locks[lix].RUnlock()
 		}
@@ -1328,7 +1525,7 @@ func (vln *valueLocNode) scanIntoBloomFilter(pstart uint64, pstop uint64, ktbf *
 				if itemB.blockID == 0 || itemB.keyA < pstart || itemB.keyA > pstop {
 					continue
 				}
-				ktbf.add(itemB.keyA, itemB.keyB, itemB.timestamp)
+				ktbf.Add(itemB.keyA, itemB.keyB, itemB.timestamp)
 			}
 			b.locks[lix].RUnlock()
 		}
@@ -1347,72 +1544,16 @@ func (vln *valueLocNode) scanIntoBloomFilter(pstart uint64, pstop uint64, ktbf *
 					}
 					if itemB.keyA == itemA.keyA && itemB.keyB == itemA.keyB {
 						if itemB.timestamp >= itemA.timestamp {
-							ktbf.add(itemB.keyA, itemB.keyB, itemB.timestamp)
+							ktbf.Add(itemB.keyA, itemB.keyB, itemB.timestamp)
 							continue NEXT_ITEM_A
 						}
 						break
 					}
 				}
-				ktbf.add(itemA.keyA, itemA.keyB, itemA.timestamp)
+				ktbf.Add(itemA.keyA, itemA.keyB, itemA.timestamp)
 			}
 			a.locks[lix].RUnlock()
 			b.locks[lix].RUnlock()
 		}
 	}
 }
-
-func (vln *valueLocNode) backgroundHelper(bg *valueLocMapBackground, vlmPrev *valueLocNode) {
-	c := (*valueLocNode)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vln.c))))
-	if c != nil {
-		d := (*valueLocNode)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vln.d))))
-		c.backgroundHelper(bg, vln)
-		d.backgroundHelper(bg, vln)
-		return
-	}
-	f := func(s *valueLocStore) {
-		var tombstonesDiscarded uint64
-		var tombstonesRetained uint64
-		for bix := len(s.buckets) - 1; bix >= 0; bix-- {
-			lix := bix % len(s.locks)
-			s.locks[lix].RLock()
-			for item := &s.buckets[bix]; item != nil; item = item.next {
-				if item.blockID > 0 && item.timestamp&1 == 1 {
-					if item.timestamp < bg.tombstoneCutoff {
-						atomic.AddInt32(&s.used, -1)
-						item.blockID = 0
-						tombstonesDiscarded++
-					} else {
-						tombstonesRetained++
-					}
-				}
-			}
-			s.locks[lix].RUnlock()
-		}
-		if tombstonesDiscarded > 0 {
-			atomic.AddUint64(&bg.tombstonesDiscarded, tombstonesDiscarded)
-		}
-		if tombstonesRetained > 0 {
-			atomic.AddUint64(&bg.tombstonesRetained, tombstonesRetained)
-		}
-		if atomic.LoadInt32(&s.used) == 0 && vlmPrev != nil {
-			vlmPrev.unsplit()
-		}
-		bg.wg.Done()
-	}
-	a := (*valueLocStore)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vln.a))))
-	if a != nil {
-		bg.wg.Add(1)
-		go f(a)
-	}
-	b := (*valueLocStore)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vln.b))))
-	if b != nil {
-		bg.wg.Add(1)
-		go f(b)
-	}
-	e := (*valueLocStore)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vln.e))))
-	if e != nil {
-		bg.wg.Add(1)
-		go f(e)
-	}
-}
-*/

@@ -1,4 +1,4 @@
-package brimstore
+package ktbloomfilter
 
 import (
 	"encoding/binary"
@@ -8,8 +8,8 @@ import (
 	"github.com/spaolacci/murmur3"
 )
 
-type ktBloomFilter struct {
-	hasData bool
+type KTBloomFilter struct {
+	HasData bool
 	n       uint64
 	p       float64
 	salt    uint32
@@ -19,9 +19,9 @@ type ktBloomFilter struct {
 	scratch []byte
 }
 
-func newKTBloomFilter(n uint64, p float64, salt uint16) *ktBloomFilter {
+func NewKTBloomFilter(n uint64, p float64, salt uint16) *KTBloomFilter {
 	m := -((float64(n) * math.Log(p)) / math.Pow(math.Log(2), 2))
-	return &ktBloomFilter{
+	return &KTBloomFilter{
 		n:       n,
 		p:       p,
 		salt:    uint32(salt) << 16,
@@ -32,13 +32,13 @@ func newKTBloomFilter(n uint64, p float64, salt uint16) *ktBloomFilter {
 	}
 }
 
-func (ktbf *ktBloomFilter) String() string {
-	return fmt.Sprintf("ktBloomFilter %p n=%d p=%f salt=%d m=%d k=%d bytes=%d", ktbf, ktbf.n, ktbf.p, ktbf.salt>>16, ktbf.m, ktbf.kDiv4*4, len(ktbf.bits))
+func (ktbf *KTBloomFilter) String() string {
+	return fmt.Sprintf("KTBloomFilter %p n=%d p=%f salt=%d m=%d k=%d bytes=%d", ktbf, ktbf.n, ktbf.p, ktbf.salt>>16, ktbf.m, ktbf.kDiv4*4, len(ktbf.bits))
 }
 
-func (ktbf *ktBloomFilter) add(keyA uint64, keyB uint64, timestamp uint64) {
-	if !ktbf.hasData {
-		ktbf.hasData = true
+func (ktbf *KTBloomFilter) Add(keyA uint64, keyB uint64, timestamp uint64) {
+	if !ktbf.HasData {
+		ktbf.HasData = true
 	}
 	scratch := ktbf.scratch
 	binary.BigEndian.PutUint64(scratch[4:], keyA)
@@ -58,7 +58,7 @@ func (ktbf *ktBloomFilter) add(keyA uint64, keyB uint64, timestamp uint64) {
 	}
 }
 
-func (ktbf *ktBloomFilter) mayHave(keyA uint64, keyB uint64, timestamp uint64) bool {
+func (ktbf *KTBloomFilter) MayHave(keyA uint64, keyB uint64, timestamp uint64) bool {
 	scratch := ktbf.scratch
 	binary.BigEndian.PutUint64(scratch[4:], keyA)
 	binary.BigEndian.PutUint64(scratch[12:], keyB)

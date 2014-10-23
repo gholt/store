@@ -8,7 +8,6 @@ import (
 	"io"
 	"log"
 	"math"
-	"math/rand"
 	"os"
 	"runtime"
 	"sort"
@@ -28,7 +27,9 @@ type ValueLocMap interface {
 	Get(keyA uint64, keyB uint64) (timestamp uint64, blockID uint16, offset uint32, length uint32)
 	Set(keyA uint64, keyB uint64, timestamp uint64, blockID uint16, offset uint32, length uint32, evenIfSameTimestamp bool) (previousTimestamp uint64)
 	GatherStats(goroutines int, debug bool) (count uint64, length uint64, debugInfo fmt.Stringer)
-	Background(iteration uint16)
+	BackgroundStart()
+	BackgroundStop()
+	BackgroundNow(goroutines int)
 }
 
 var ErrValueNotFound error = errors.New("value not found")
@@ -50,9 +51,6 @@ type ValuesStoreOpts struct {
 	// MaxValueSize indicates the maximum length for values stored. Attempting
 	// to store a value beyond this cap will result in an error returned.
 	MaxValueSize int
-	// TombstoneAge is the number of seconds to keep tombstones (deletion
-	// markers).
-	TombstoneAge int
 	// MemTOCPageSize controls TOC buffer memory allocation. A TOC is a Table
 	// Of Contents which has metadata about values stored. A TOC Page is a
 	// block of memory where this metadata is buffered before being written to
@@ -108,14 +106,6 @@ func NewValuesStoreOpts(envPrefix string) *ValuesStoreOpts {
 	}
 	if opts.MaxValueSize <= 0 {
 		opts.MaxValueSize = 4 * 1024 * 1024
-	}
-	if env := os.Getenv(envPrefix + "TOMBSTONE_AGE"); env != "" {
-		if val, err := strconv.Atoi(env); err == nil {
-			opts.TombstoneAge = val
-		}
-	}
-	if opts.TombstoneAge <= 0 {
-		opts.TombstoneAge = 4 * 60 * 60
 	}
 	if env := os.Getenv(envPrefix + "MEM_TOC_PAGE_SIZE"); env != "" {
 		if val, err := strconv.Atoi(env); err == nil {
@@ -181,14 +171,11 @@ type ValuesStore struct {
 	freeTOCBlockChan      chan []byte
 	pendingTOCBlockChan   chan []byte
 	tocWriterDoneChan     chan struct{}
-	backgroundNotifyChan  chan chan struct{}
-	backgroundDoneChan    chan struct{}
 	valuesLocBlocks       []valuesLocBlock
 	atValuesLocBlocksIDer uint32
 	vlm                   ValueLocMap
 	cores                 int
 	maxValueSize          uint32
-	tombstoneAge          uint64
 	memTOCPageSize        uint32
 	memValuesPageSize     uint32
 	memWriteMultiplier    int
@@ -218,11 +205,6 @@ func NewValuesStore(opts *ValuesStoreOpts) *ValuesStore {
 	if maxValueSize > math.MaxUint32 {
 		maxValueSize = math.MaxUint32
 	}
-	tombstoneAge := uint64(opts.TombstoneAge)
-	if tombstoneAge < 1 {
-		tombstoneAge = 1
-	}
-	tombstoneAge *= uint64(time.Second)
 	memTOCPageSize := opts.MemTOCPageSize
 	if memTOCPageSize < 32 {
 		memTOCPageSize = 32
@@ -266,7 +248,6 @@ func NewValuesStore(opts *ValuesStoreOpts) *ValuesStore {
 		vlm:                valuelocmap.NewValueLocMap(),
 		cores:              cores,
 		maxValueSize:       uint32(maxValueSize),
-		tombstoneAge:       tombstoneAge,
 		memTOCPageSize:     uint32(memTOCPageSize),
 		memValuesPageSize:  uint32(memValuesPageSize),
 		memWriteMultiplier: memWriteMultiplier,
@@ -282,8 +263,6 @@ func NewValuesStore(opts *ValuesStoreOpts) *ValuesStore {
 	vs.freeTOCBlockChan = make(chan []byte, vs.cores*2)
 	vs.pendingTOCBlockChan = make(chan []byte, vs.cores)
 	vs.tocWriterDoneChan = make(chan struct{}, 1)
-	vs.backgroundNotifyChan = make(chan chan struct{}, 1)
-	vs.backgroundDoneChan = make(chan struct{}, 1)
 	for i := 0; i < cap(vs.freeableVMChan); i++ {
 		vm := &valuesMem{
 			vs:     vs,
@@ -314,7 +293,7 @@ func NewValuesStore(opts *ValuesStoreOpts) *ValuesStore {
 		go vs.memWriter(vs.pendingVWRChans[i])
 	}
 	vs.recovery()
-	go vs.background()
+	vs.vlm.BackgroundStart()
 	return vs
 }
 
@@ -337,8 +316,7 @@ func (vs *ValuesStore) Close() {
 		<-vs.freeVMChan
 	}
 	<-vs.tocWriterDoneChan
-	vs.backgroundNotifyChan <- nil
-	<-vs.backgroundDoneChan
+	vs.vlm.BackgroundStop()
 }
 
 // Lookup will return timestamp, length, err for keyA, keyB.
@@ -416,10 +394,8 @@ func (vs *ValuesStore) Delete(keyA uint64, keyB uint64, timestamp uint64) (uint6
 // BackgroundNow will trigger background tasks to run now instead of waiting
 // for the next interval; this function will not return until the background
 // tasks complete.
-func (vs *ValuesStore) BackgroundNow() {
-	c := make(chan struct{}, 1)
-	vs.backgroundNotifyChan <- c
-	<-c
+func (vs *ValuesStore) BackgroundNow(goroutines int) {
+	vs.vlm.BackgroundNow(goroutines)
 }
 
 // GatherStats returns overall information about the state of the ValuesStore.
@@ -452,7 +428,6 @@ func (vs *ValuesStore) GatherStats(debug bool) *ValuesStoreStats {
 		stats.maxValuesLocBlockID = atomic.LoadUint32(&vs.atValuesLocBlocksIDer)
 		stats.cores = vs.cores
 		stats.maxValueSize = vs.maxValueSize
-		stats.tombstoneAge = vs.tombstoneAge
 		stats.memTOCPageSize = vs.memTOCPageSize
 		stats.memValuesPageSize = vs.memValuesPageSize
 		stats.memWriteMultiplier = vs.memWriteMultiplier
@@ -894,45 +869,6 @@ func (vs *ValuesStore) recovery() {
 	}
 }
 
-func (vs *ValuesStore) background() {
-	iteration := uint16(0)
-	interval := float64(60 * time.Second)
-	nextRun := time.Now().Add(time.Duration(interval + interval*rand.NormFloat64()*0.1))
-WORK:
-	for {
-		var c chan struct{} = nil
-		sleep := nextRun.Sub(time.Now())
-		if sleep > 0 {
-			select {
-			case c = <-vs.backgroundNotifyChan:
-				if c == nil {
-					break WORK
-				}
-			case <-time.After(sleep):
-			}
-		} else {
-			select {
-			case c = <-vs.backgroundNotifyChan:
-				if c == nil {
-					break WORK
-				}
-			default:
-			}
-		}
-		nextRun = time.Now().Add(time.Duration(interval + interval*rand.NormFloat64()*0.1))
-		vs.vlm.Background(iteration)
-		if c != nil {
-			c <- struct{}{}
-		}
-		if iteration == math.MaxUint16 {
-			iteration = 0
-		} else {
-			iteration++
-		}
-	}
-	vs.backgroundDoneChan <- struct{}{}
-}
-
 type valueWriteReq struct {
 	keyA      uint64
 	keyB      uint64
@@ -967,7 +903,6 @@ type ValuesStoreStats struct {
 	maxValuesLocBlockID    uint32
 	cores                  int
 	maxValueSize           uint32
-	tombstoneAge           uint64
 	memTOCPageSize         uint32
 	memValuesPageSize      uint32
 	memWriteMultiplier     int
@@ -1001,7 +936,6 @@ func (stats *ValuesStoreStats) String() string {
 			[]string{"maxValuesLocBlockID", fmt.Sprintf("%d", stats.maxValuesLocBlockID)},
 			[]string{"cores", fmt.Sprintf("%d", stats.cores)},
 			[]string{"maxValueSize", fmt.Sprintf("%d", stats.maxValueSize)},
-			[]string{"tombstoneAge", fmt.Sprintf("%d", stats.tombstoneAge)},
 			[]string{"memTOCPageSize", fmt.Sprintf("%d", stats.memTOCPageSize)},
 			[]string{"memValuesPageSize", fmt.Sprintf("%d", stats.memValuesPageSize)},
 			[]string{"memWriteMultiplier", fmt.Sprintf("%d", stats.memWriteMultiplier)},

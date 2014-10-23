@@ -83,7 +83,7 @@ func main() {
 	begin := time.Now()
 	vsOpts := brimstore.NewValuesStoreOpts("")
 	if opts.TombstoneAge > 0 {
-		vsOpts.TombstoneAge = opts.TombstoneAge
+		// TODO: vsOpts.TombstoneAge = opts.TombstoneAge
 	}
 	opts.vs = brimstore.NewValuesStore(vsOpts)
 	dur := time.Now().Sub(begin)
@@ -134,7 +134,7 @@ func memstat() {
 
 func background() {
 	begin := time.Now()
-	opts.vs.BackgroundNow()
+	opts.vs.BackgroundNow(0)
 	dur := time.Now().Sub(begin)
 	fmt.Printf("%s to run background tasks\n", dur)
 }
