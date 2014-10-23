@@ -30,6 +30,7 @@ type ValueLocMap interface {
 	BackgroundStart()
 	BackgroundStop()
 	BackgroundNow(goroutines int)
+	SetReplicationChan(chan interface{})
 }
 
 var ErrValueNotFound error = errors.New("value not found")
