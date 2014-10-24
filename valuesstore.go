@@ -18,6 +18,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/gholt/brimstore/ktbloomfilter"
 	"github.com/gholt/brimstore/valuelocmap"
 	"github.com/gholt/brimtext"
 	"github.com/gholt/brimutil"
@@ -34,8 +35,8 @@ type config struct {
 	minValueAlloc      int
 	writePagesPerCore  int
 	tombstoneAge       int
-	valueFileSize      int
-	valueFileReaders   int
+	valuesFileSize     int
+	valuesFileReaders  int
 }
 
 func resolveConfig(opts ...func(*config)) *config {
@@ -88,16 +89,16 @@ func resolveConfig(opts ...func(*config)) *config {
 			cfg.tombstoneAge = val
 		}
 	}
-	cfg.valueFileSize = math.MaxUint32
-	if env := os.Getenv("BRIMSTORE_VALUEFILESIZE"); env != "" {
+	cfg.valuesFileSize = math.MaxUint32
+	if env := os.Getenv("BRIMSTORE_VALUESFILESIZE"); env != "" {
 		if val, err := strconv.Atoi(env); err == nil {
-			cfg.valueFileSize = val
+			cfg.valuesFileSize = val
 		}
 	}
-	cfg.valueFileReaders = cfg.cores
-	if env := os.Getenv("BRIMSTORE_VALUEFILEREADERS"); env != "" {
+	cfg.valuesFileReaders = cfg.cores
+	if env := os.Getenv("BRIMSTORE_VALUESFILEREADERS"); env != "" {
 		if val, err := strconv.Atoi(env); err == nil {
-			cfg.valueFileReaders = val
+			cfg.valuesFileReaders = val
 		}
 	}
 	for _, opt := range opts {
@@ -143,14 +144,14 @@ func resolveConfig(opts ...func(*config)) *config {
 	if cfg.tombstoneAge < 0 {
 		cfg.tombstoneAge = 0
 	}
-	if cfg.valueFileSize < 48+cfg.maxValueSize { // header value trailer
-		cfg.valueFileSize = 48 + cfg.maxValueSize
+	if cfg.valuesFileSize < 48+cfg.maxValueSize { // header value trailer
+		cfg.valuesFileSize = 48 + cfg.maxValueSize
 	}
-	if cfg.valueFileSize > math.MaxUint32 {
-		cfg.valueFileSize = math.MaxUint32
+	if cfg.valuesFileSize > math.MaxUint32 {
+		cfg.valuesFileSize = math.MaxUint32
 	}
-	if cfg.valueFileReaders < 1 {
-		cfg.valueFileReaders = 1
+	if cfg.valuesFileReaders < 1 {
+		cfg.valuesFileReaders = 1
 	}
 	return cfg
 }
@@ -170,8 +171,8 @@ func OptCores(cores int) func(*config) {
 	}
 }
 
-// OptBackgroundCores indicates how many cores may be used for background jobs.
-// Defaults to env BRIMSTORE_BACKGROUNDCORES or 1.
+// OptBackgroundCores indicates how many cores may be used for background
+// tasks. Defaults to env BRIMSTORE_BACKGROUNDCORES or 1.
 func OptBackgroundCores(cores int) func(*config) {
 	return func(cfg *config) {
 		cfg.backgroundCores = cores
@@ -179,14 +180,14 @@ func OptBackgroundCores(cores int) func(*config) {
 }
 
 // OptBackgroundInterval indicates the minimum number of seconds betweeen the
-// starts of background jobs. For example, if set to 60 seconds and the jobs
+// starts of background tasks. For example, if set to 60 seconds and the tasks
 // take 10 seconds to run, they will wait 50 seconds (with a small amount of
 // randomization) between the stop of one run and the start of the next. This
 // is really just meant to keep nearly empty structures from using a lot of
-// resources doing nearly nothing. Normally, you'd want your jobs to be running
-// constantly so that replication and cleanup are as fast as possible and the
-// load constant. The default of 60 seconds is almost always fine. Defaults to
-// env BRIMSTORE_BACKGROUNDINTERVAL or 60.
+// resources doing nearly nothing. Normally, you'd want your tasks to be
+// running constantly so that replication and cleanup are as fast as possible
+// and the load constant. The default of 60 seconds is almost always fine.
+// Defaults to env BRIMSTORE_BACKGROUNDINTERVAL or 60.
 func OptBackgroundInterval(seconds int) func(*config) {
 	return func(cfg *config) {
 		cfg.backgroundInterval = seconds
@@ -227,21 +228,21 @@ func OptTombstoneAge(seconds int) func(*config) {
 	}
 }
 
-// OptValueFileSize indicates how large a value size can be before closing it
-// and opening a new one. Defaults to env BRIMSTORE_VALUEFILESIZE or
+// OptValuesFileSize indicates how large a value size can be before closing it
+// and opening a new one. Defaults to env BRIMSTORE_VALUESFILESIZE or
 // 4,294,967,295.
-func OptValueFileSize(bytes int) func(*config) {
+func OptValuesFileSize(bytes int) func(*config) {
 	return func(cfg *config) {
-		cfg.valueFileSize = bytes
+		cfg.valuesFileSize = bytes
 	}
 }
 
-// OptValueFileReaders indicates how many open file descriptors are allowed per
-// value file for reading. Defaults to env BRIMSTORE_VALUEFILEREADERS or the
+// OptValuesFileReaders indicates how many open file descriptors are allowed per
+// value file for reading. Defaults to env BRIMSTORE_VALUESFILEREADERS or the
 // configured number of cores.
-func OptValueFileReaders(bytes int) func(*config) {
+func OptValuesFileReaders(bytes int) func(*config) {
 	return func(cfg *config) {
-		cfg.valueFileReaders = bytes
+		cfg.valuesFileReaders = bytes
 	}
 }
 
@@ -251,33 +252,37 @@ type ValueLocMap interface {
 	Get(keyA uint64, keyB uint64) (timestamp uint64, blockID uint16, offset uint32, length uint32)
 	Set(keyA uint64, keyB uint64, timestamp uint64, blockID uint16, offset uint32, length uint32, evenIfSameTimestamp bool) (previousTimestamp uint64)
 	GatherStats(goroutines int, debug bool) (count uint64, length uint64, debugInfo fmt.Stringer)
+	Scan(tombstoneCutoff uint64, start uint64, stop uint64)
+	ScanCount(tombstoneCutoff uint64, start uint64, stop uint64, max uint64) uint64
+	ScanCallback(start uint64, stop uint64, callback func(keyA uint64, keyB uint64, timestamp uint64, blockID uint16, offset uint32, length uint32) bool)
 }
 
 type ValueStore struct {
-	freeableVMChan        chan *valuesMem
-	freeVMChan            chan *valuesMem
-	freeVWRChans          []chan *valueWriteReq
-	pendingVWRChans       []chan *valueWriteReq
-	vfVMChan              chan *valuesMem
-	freeTOCBlockChan      chan []byte
-	pendingTOCBlockChan   chan []byte
-	tocWriterDoneChan     chan struct{}
-	valuesLocBlocks       []valuesLocBlock
-	atValuesLocBlocksIDer uint32
-	vlm                   ValueLocMap
-	cores                 int
-	backgroundCores       int
-	backgroundInterval    int
-	maxValueSize          uint32
-	pageSize              uint32
-	minValueAlloc         int
-	writePagesPerCore     int
-	valueFileSize         uint32
-	valueFileReaders      int
-	checksumInterval      uint32
-	backgroundNotifyChan  chan *backgroundNotification
-	backgroundDoneChan    chan struct{}
-	backgroundIteration   uint16
+	freeableVMChan       chan *valuesMem
+	freeVMChan           chan *valuesMem
+	freeVWRChans         []chan *valueWriteReq
+	pendingVWRChans      []chan *valueWriteReq
+	vfVMChan             chan *valuesMem
+	freeTOCBlockChan     chan []byte
+	pendingTOCBlockChan  chan []byte
+	tocWriterDoneChan    chan struct{}
+	valueLocBlocks       []valueLocBlock
+	valueLocBlockIDer    uint32
+	vlm                  ValueLocMap
+	cores                int
+	backgroundCores      int
+	backgroundInterval   int
+	maxValueSize         uint32
+	pageSize             uint32
+	minValueAlloc        int
+	writePagesPerCore    int
+	tombstoneAge         uint64
+	valuesFileSize       uint32
+	valuesFileReaders    int
+	checksumInterval     uint32
+	backgroundNotifyChan chan *backgroundNotification
+	backgroundDoneChan   chan struct{}
+	backgroundIteration  uint16
 }
 
 type valueWriteReq struct {
@@ -288,12 +293,12 @@ type valueWriteReq struct {
 	errChan   chan error
 }
 
-type valuesLocBlock interface {
+type valueLocBlock interface {
 	timestamp() int64
 	read(keyA uint64, keyB uint64, timestamp uint64, offset uint32, length uint32, value []byte) (uint64, []byte, error)
 }
 
-type valuesStoreStats struct {
+type valueStoreStats struct {
 	debug                  bool
 	freeableVMChanCap      int
 	freeableVMChanIn       int
@@ -311,15 +316,17 @@ type valuesStoreStats struct {
 	freeTOCBlockChanIn     int
 	pendingTOCBlockChanCap int
 	pendingTOCBlockChanIn  int
-	maxValuesLocBlockID    uint32
+	maxValueLocBlockID     uint32
 	cores                  int
 	backgroundCores        int
 	backgroundInterval     int
 	maxValueSize           uint32
 	pageSize               uint32
+	minValueAlloc          int
 	writePagesPerCore      int
-	valueFileSize          uint32
-	valueFileReaders       int
+	tombstoneAge           int
+	valuesFileSize         uint32
+	valuesFileReaders      int
 	checksumInterval       uint32
 	vlmCount               uint64
 	vlmLength              uint64
@@ -331,7 +338,7 @@ type backgroundNotification struct {
 	doneChan   chan struct{}
 }
 
-type valueLocMapBackground struct {
+type backgroundRun struct {
 	vlm             *ValueLocMap
 	goroutines      int
 	funcChan        chan func()
@@ -348,15 +355,19 @@ type valueLocMapBackground struct {
 func NewValueStore(opts ...func(*config)) *ValueStore {
 	cfg := resolveConfig(opts...)
 	vs := &ValueStore{
-		valuesLocBlocks:   make([]valuesLocBlock, math.MaxUint16),
-		vlm:               valuelocmap.NewValueLocMap(),
-		cores:             cfg.cores,
-		maxValueSize:      uint32(cfg.maxValueSize),
-		checksumInterval:  uint32(cfg.checksumInterval),
-		pageSize:          uint32(cfg.pageSize),
-		writePagesPerCore: cfg.writePagesPerCore,
-		valueFileSize:     uint32(cfg.valueFileSize),
-		valueFileReaders:  cfg.valueFileReaders,
+		valueLocBlocks:     make([]valueLocBlock, math.MaxUint16),
+		vlm:                valuelocmap.NewValueLocMap(),
+		cores:              cfg.cores,
+		backgroundCores:    cfg.backgroundCores,
+		backgroundInterval: cfg.backgroundInterval,
+		maxValueSize:       uint32(cfg.maxValueSize),
+		checksumInterval:   uint32(cfg.checksumInterval),
+		pageSize:           uint32(cfg.pageSize),
+		minValueAlloc:      cfg.minValueAlloc,
+		writePagesPerCore:  cfg.writePagesPerCore,
+		tombstoneAge:       uint64(cfg.tombstoneAge) * uint64(time.Second),
+		valuesFileSize:     uint32(cfg.valuesFileSize),
+		valuesFileReaders:  cfg.valuesFileReaders,
 	}
 	vs.freeableVMChan = make(chan *valuesMem, vs.cores*vs.writePagesPerCore)
 	vs.freeVMChan = make(chan *valuesMem, vs.cores)
@@ -372,7 +383,7 @@ func NewValueStore(opts ...func(*config)) *ValueStore {
 			toc:    make([]byte, 0, vs.pageSize),
 			values: make([]byte, 0, vs.pageSize),
 		}
-		vm.id = vs.addValuesLocBock(vm)
+		vm.id = vs.addValueLocBlock(vm)
 		vs.freeableVMChan <- vm
 	}
 	for i := 0; i < len(vs.freeVWRChans); i++ {
@@ -449,7 +460,7 @@ func (vs *ValueStore) Read(keyA uint64, keyB uint64, value []byte) (uint64, []by
 	if id == 0 || timestamp&1 == 1 {
 		return timestamp, value, ErrValueNotFound
 	}
-	return vs.valuesLocBlock(id).read(keyA, keyB, timestamp, offset, length, value)
+	return vs.valueLocBlock(id).read(keyA, keyB, timestamp, offset, length, value)
 }
 
 // Write stores timestamp & 0xfffffffffffffffe (lowest bit zeroed), value for
@@ -494,7 +505,7 @@ func (vs *ValueStore) Delete(keyA uint64, keyB uint64, timestamp uint64) (uint64
 //
 // This may be called even after Close.
 func (vs *ValueStore) GatherStats(goroutines int, debug bool) (count uint64, length uint64, debugInfo fmt.Stringer) {
-	stats := &valuesStoreStats{}
+	stats := &valueStoreStats{}
 	if debug {
 		stats.debug = debug
 		stats.freeableVMChanCap = cap(vs.freeableVMChan)
@@ -517,13 +528,17 @@ func (vs *ValueStore) GatherStats(goroutines int, debug bool) (count uint64, len
 		stats.freeTOCBlockChanIn = len(vs.freeTOCBlockChan)
 		stats.pendingTOCBlockChanCap = cap(vs.pendingTOCBlockChan)
 		stats.pendingTOCBlockChanIn = len(vs.pendingTOCBlockChan)
-		stats.maxValuesLocBlockID = atomic.LoadUint32(&vs.atValuesLocBlocksIDer)
+		stats.maxValueLocBlockID = atomic.LoadUint32(&vs.valueLocBlockIDer)
 		stats.cores = vs.cores
+		stats.backgroundCores = vs.backgroundCores
+		stats.backgroundInterval = vs.backgroundInterval
 		stats.maxValueSize = vs.maxValueSize
 		stats.pageSize = vs.pageSize
+		stats.minValueAlloc = vs.minValueAlloc
 		stats.writePagesPerCore = vs.writePagesPerCore
-		stats.valueFileSize = vs.valueFileSize
-		stats.valueFileReaders = vs.valueFileReaders
+		stats.tombstoneAge = int(vs.tombstoneAge / uint64(time.Second))
+		stats.valuesFileSize = vs.valuesFileSize
+		stats.valuesFileReaders = vs.valuesFileReaders
 		stats.checksumInterval = vs.checksumInterval
 		stats.vlmCount, stats.vlmLength, stats.vlmDebugInfo = vs.vlm.GatherStats(goroutines, true)
 	} else {
@@ -532,16 +547,16 @@ func (vs *ValueStore) GatherStats(goroutines int, debug bool) (count uint64, len
 	return stats.vlmCount, stats.vlmLength, stats
 }
 
-func (vs *ValueStore) valuesLocBlock(valuesLocBlockID uint16) valuesLocBlock {
-	return vs.valuesLocBlocks[valuesLocBlockID]
+func (vs *ValueStore) valueLocBlock(valueLocBlockID uint16) valueLocBlock {
+	return vs.valueLocBlocks[valueLocBlockID]
 }
 
-func (vs *ValueStore) addValuesLocBock(block valuesLocBlock) uint16 {
-	id := atomic.AddUint32(&vs.atValuesLocBlocksIDer, 1)
+func (vs *ValueStore) addValueLocBlock(block valueLocBlock) uint16 {
+	id := atomic.AddUint32(&vs.valueLocBlockIDer, 1)
 	if id >= 65536 {
-		panic("too many valuesLocBlocks")
+		panic("too many valueLocBlocks")
 	}
-	vs.valuesLocBlocks[id] = block
+	vs.valueLocBlocks[id] = block
 	return uint16(id)
 }
 
@@ -558,7 +573,7 @@ func (vs *ValueStore) memClearer() {
 			vs.pendingTOCBlockChan <- nil
 			break
 		}
-		vf := vs.valuesLocBlock(vm.vfID)
+		vf := vs.valueLocBlock(vm.vfID)
 		if tb != nil && tbTS != vf.timestamp() {
 			vs.pendingTOCBlockChan <- tb
 			tb = nil
@@ -666,7 +681,7 @@ func (vs *ValueStore) vfWriter() {
 	var vf *valuesFile
 	memWritersLeft := vs.cores
 	var tocLen uint64
-	var valuesLen uint64
+	var valueLen uint64
 	for {
 		vm := <-vs.vfVMChan
 		if vm == nil {
@@ -682,18 +697,18 @@ func (vs *ValueStore) vfWriter() {
 			}
 			continue
 		}
-		if vf != nil && (tocLen+uint64(len(vm.toc)) >= uint64(vs.valueFileSize) || valuesLen+uint64(len(vm.values)) > uint64(vs.valueFileSize)) {
+		if vf != nil && (tocLen+uint64(len(vm.toc)) >= uint64(vs.valuesFileSize) || valueLen+uint64(len(vm.values)) > uint64(vs.valuesFileSize)) {
 			vf.close()
 			vf = nil
 		}
 		if vf == nil {
 			vf = createValuesFile(vs)
 			tocLen = 32
-			valuesLen = 32
+			valueLen = 32
 		}
 		vf.write(vm)
 		tocLen += uint64(len(vm.toc))
-		valuesLen += uint64(len(vm.values))
+		valueLen += uint64(len(vm.values))
 	}
 }
 
@@ -704,7 +719,7 @@ func (vs *ValueStore) tocWriter() {
 	var btsB uint64
 	var writerB io.WriteCloser
 	var offsetB uint64
-	head := []byte("BRIMSTORE VALUESTOC v0          ")
+	head := []byte("BRIMSTORE VALUETOC v0           ")
 	binary.BigEndian.PutUint32(head[28:], uint32(vs.checksumInterval))
 	term := make([]byte, 16)
 	copy(term[12:], "TERM")
@@ -874,7 +889,7 @@ func (vs *ValueStore) recovery() {
 			} else {
 				i := 0
 				if first {
-					if !bytes.Equal(buf[:28], []byte("BRIMSTORE VALUESTOC v0      ")) {
+					if !bytes.Equal(buf[:28], []byte("BRIMSTORE VALUETOC v0       ")) {
 						log.Printf("bad header: %s\n", names[i])
 						break
 					}
@@ -970,7 +985,7 @@ func (vs *ValueStore) recovery() {
 	}
 }
 
-func (stats *valuesStoreStats) String() string {
+func (stats *valueStoreStats) String() string {
 	if stats.debug {
 		return brimtext.Align([][]string{
 			[]string{"freeableVMChanCap", fmt.Sprintf("%d", stats.freeableVMChanCap)},
@@ -989,16 +1004,18 @@ func (stats *valuesStoreStats) String() string {
 			[]string{"freeTOCBlockChanIn", fmt.Sprintf("%d", stats.freeTOCBlockChanIn)},
 			[]string{"pendingTOCBlockChanCap", fmt.Sprintf("%d", stats.pendingTOCBlockChanCap)},
 			[]string{"pendingTOCBlockChanIn", fmt.Sprintf("%d", stats.pendingTOCBlockChanIn)},
-			[]string{"maxValuesLocBlockID", fmt.Sprintf("%d", stats.maxValuesLocBlockID)},
+			[]string{"maxValueLocBlockID", fmt.Sprintf("%d", stats.maxValueLocBlockID)},
 			[]string{"cores", fmt.Sprintf("%d", stats.cores)},
-			[]string{"maxValueSize", fmt.Sprintf("%d", stats.maxValueSize)},
-			[]string{"pageSize", fmt.Sprintf("%d", stats.pageSize)},
-			[]string{"writePagesPerCore", fmt.Sprintf("%d", stats.writePagesPerCore)},
-			[]string{"valueFileSize", fmt.Sprintf("%d", stats.valueFileSize)},
-			[]string{"valueFileReaders", fmt.Sprintf("%d", stats.valueFileReaders)},
-			[]string{"checksumInterval", fmt.Sprintf("%d", stats.checksumInterval)},
 			[]string{"backgroundCores", fmt.Sprintf("%d", stats.backgroundCores)},
 			[]string{"backgroundInterval", fmt.Sprintf("%d", stats.backgroundInterval)},
+			[]string{"maxValueSize", fmt.Sprintf("%d", stats.maxValueSize)},
+			[]string{"checksumInterval", fmt.Sprintf("%d", stats.checksumInterval)},
+			[]string{"pageSize", fmt.Sprintf("%d", stats.pageSize)},
+			[]string{"minValueAlloc", fmt.Sprintf("%d", stats.minValueAlloc)},
+			[]string{"writePagesPerCore", fmt.Sprintf("%d", stats.writePagesPerCore)},
+			[]string{"tombstoneAge", fmt.Sprintf("%d", stats.tombstoneAge)},
+			[]string{"valuesFileSize", fmt.Sprintf("%d", stats.valuesFileSize)},
+			[]string{"valuesFileReaders", fmt.Sprintf("%d", stats.valuesFileReaders)},
 			[]string{"vlmCount", fmt.Sprintf("%d", stats.vlmCount)},
 			[]string{"vlmLength", fmt.Sprintf("%d", stats.vlmLength)},
 			[]string{"vlmDebugInfo", stats.vlmDebugInfo.String()},
@@ -1011,10 +1028,10 @@ func (stats *valuesStoreStats) String() string {
 	}
 }
 
-// BackgroundStart will start the execution of background jobs at configured
-// intervals. Multiple calls to BackgroundStart will cause no harm and jobs can
-// be temporarily suspended by calling BackgroundStop and BackgroundStart as
-// desired.
+// BackgroundStart will start the execution of background tasks at configured
+// intervals. Multiple calls to BackgroundStart will cause no harm and tasks
+// can be temporarily suspended by calling BackgroundStop and BackgroundStart
+// as desired.
 func (vs *ValueStore) BackgroundStart() {
 	if vs.backgroundNotifyChan == nil {
 		vs.backgroundDoneChan = make(chan struct{}, 1)
@@ -1023,10 +1040,10 @@ func (vs *ValueStore) BackgroundStart() {
 	}
 }
 
-// BackgroundStop will stop the execution of background jobs; use
+// BackgroundStop will stop the execution of background tasks; use
 // BackgroundStart to restart them if desired. This can be useful when
 // importing large amounts of data where temporarily stopping the background
-// jobs and just restarting them after the import can greatly increase the
+// tasks and just restarting them after the import can greatly increase the
 // import speed.
 func (vs *ValueStore) BackgroundStop() {
 	if vs.backgroundNotifyChan != nil {
@@ -1037,10 +1054,10 @@ func (vs *ValueStore) BackgroundStop() {
 	}
 }
 
-// BackgroundNow will immediately (rather than waiting for the next job
-// interval) execute any background jobs using up to the number of goroutines
+// BackgroundNow will immediately (rather than waiting for the next background
+// interval) execute any background tasks using up to the number of goroutines
 // indicated (0 will use the configured OptBackgroundCores value). This
-// function will not return until all background jobs have completed at least
+// function will not return until all background tasks have completed at least
 // one pass.
 func (vs *ValueStore) BackgroundNow(goroutines int) {
 	if vs.backgroundNotifyChan == nil {
@@ -1090,4 +1107,100 @@ WORK:
 }
 
 func (vs *ValueStore) background(goroutines int) {
+	// TODO: Disabled for the moment
+	if goroutines == 0 || goroutines != 0 {
+		return
+	}
+	begin := time.Now()
+	if goroutines < 1 {
+		goroutines = vs.backgroundCores
+	}
+	if vs.backgroundIteration == math.MaxUint16 {
+		vs.backgroundIteration = 0
+	} else {
+		vs.backgroundIteration++
+	}
+	bg := &backgroundRun{
+		goroutines:      goroutines,
+		funcChan:        make(chan func(), goroutines),
+		iteration:       vs.backgroundIteration,
+		tombstoneCutoff: uint64(time.Now().UnixNano()) - vs.tombstoneAge,
+	}
+	funcsDone := make(chan struct{}, 1)
+	go func() {
+		wg := &sync.WaitGroup{}
+		for {
+			f := <-bg.funcChan
+			if f == nil {
+				break
+			}
+			wg.Add(1)
+			go func() {
+				f()
+				wg.Done()
+			}()
+		}
+		wg.Wait()
+		funcsDone <- struct{}{}
+	}()
+	p := 0
+	ppower := 10
+	pincrement := uint64(1) << uint64(64-ppower)
+	pstart := uint64(0)
+	pstop := pstart + (pincrement - 1)
+	for {
+		// Here I'm doing bloom filter scans for every partition when
+		// eventually it should just do filters for partitions we're in the
+		// ring for. Partitions we're not in the ring for (handoffs, old
+		// data from ring changes, etc.) we should just send out what data
+		// we have and the remove it locally.
+		bg.funcChan <- func(p int, pstart uint64, pstop uint64) func() {
+			return func() {
+				vs.bloom(bg, p, pstart, pstop)
+			}
+		}(p, pstart, pstop)
+		if pstop == math.MaxUint64 {
+			break
+		}
+		p++
+		pstart += pincrement
+		pstop += pincrement
+		if pstop == math.MaxUint64 {
+			break
+		}
+	}
+	bg.funcChan <- nil
+	<-funcsDone
+	fmt.Println(time.Now().Sub(begin), "to run background tasks, iteration", bg.iteration)
+}
+
+const _GLH_BLOOM_FILTER_N = 1000000
+const _GLH_BLOOM_FILTER_P = 0.001
+
+func (vs *ValueStore) bloom(bg *backgroundRun, p int, pstart uint64, pstop uint64) {
+	count := vs.vlm.ScanCount(bg.tombstoneCutoff, pstart, pstop, _GLH_BLOOM_FILTER_N)
+	for count > _GLH_BLOOM_FILTER_N {
+		pstopNew := pstart + (pstop-pstart+1)/2 - 1
+		go func(pstart uint64) {
+			bg.funcChan <- func() {
+				vs.bloom(bg, p, pstart, pstop)
+			}
+		}(pstopNew + 1)
+		pstop = pstopNew
+		count = vs.vlm.ScanCount(bg.tombstoneCutoff, pstart, pstop, _GLH_BLOOM_FILTER_N)
+	}
+	if count > 0 {
+		ktbf := ktbloomfilter.NewKTBloomFilter(_GLH_BLOOM_FILTER_N, _GLH_BLOOM_FILTER_P, bg.iteration)
+		vs.vlm.ScanCallback(
+			pstart,
+			pstop,
+			func(keyA uint64, keyB uint64, timestamp uint64, blockID uint16, offset uint32, length uint32) bool {
+				ktbf.Add(keyA, keyB, timestamp)
+				return true
+			},
+		)
+		if ktbf.HasData {
+			// TODO
+		}
+	}
 }

@@ -28,7 +28,7 @@ func (vm *valuesMem) read(keyA uint64, keyB uint64, timestamp uint64, offset uin
 	}
 	if id != vm.id {
 		vm.discardLock.RUnlock()
-		vm.vs.valuesLocBlock(id).read(keyA, keyB, timestamp, offset, length, value)
+		vm.vs.valueLocBlock(id).read(keyA, keyB, timestamp, offset, length, value)
 	}
 	value = append(value, vm.values[offset:offset+length]...)
 	vm.discardLock.RUnlock()

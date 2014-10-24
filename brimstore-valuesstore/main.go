@@ -86,6 +86,7 @@ func main() {
 		vsopts = append(vsopts, brimstore.OptTombstoneAge(opts.TombstoneAge))
 	}
 	opts.vs = brimstore.NewValueStore(vsopts...)
+	opts.vs.BackgroundStart()
 	dur := time.Now().Sub(begin)
 	fmt.Println(dur, "to start ValuesStore")
 	memstat()

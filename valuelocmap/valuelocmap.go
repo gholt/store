@@ -12,6 +12,9 @@
 // structure grows. If a slice empties, it is merged with its pair in the tree
 // structure and the tree shrinks. The tree is balanced by high bits of the
 // key, and locations are distributed in the slices by the low bits.
+//
+// There are also functions for scanning key ranges, both to clean out old
+// tombstones and to provide callbacks for replication or other tasks.
 package valuelocmap
 
 import (
@@ -22,7 +25,6 @@ import (
 	"strconv"
 	"sync"
 	"sync/atomic"
-	"time"
 	"unsafe"
 
 	"github.com/gholt/brimtext"
@@ -32,7 +34,6 @@ type config struct {
 	cores           int
 	pageSize        int
 	splitMultiplier float64
-	tombstoneAge    int
 }
 
 func resolveConfig(opts ...func(*config)) *config {
@@ -65,14 +66,6 @@ func resolveConfig(opts ...func(*config)) *config {
 	if cfg.splitMultiplier <= 0 {
 		cfg.splitMultiplier = 3.0
 	}
-	if env := os.Getenv("BRIMSTORE_VALUELOCMAP_TOMBSTONEAGE"); env != "" {
-		if val, err := strconv.Atoi(env); err == nil {
-			cfg.tombstoneAge = val
-		}
-	}
-	if cfg.tombstoneAge <= 0 {
-		cfg.tombstoneAge = 4 * 60 * 60
-	}
 	for _, opt := range opts {
 		opt(cfg)
 	}
@@ -84,9 +77,6 @@ func resolveConfig(opts ...func(*config)) *config {
 	}
 	if cfg.splitMultiplier <= 0 {
 		cfg.splitMultiplier = 0.01
-	}
-	if cfg.tombstoneAge < 0 {
-		cfg.tombstoneAge = 0
 	}
 	return cfg
 }
@@ -124,21 +114,11 @@ func OptSplitMultiplier(multiplier float64) func(*config) {
 	}
 }
 
-// OptTombstoneAge indicates how many seconds old a deletion marker may be
-// before it is permanently removed from the mapping. Defaults to env
-// BRIMSTORE_VALUELOCMAP_TOMBSTONEAGE or 14,400 (4 hours).
-func OptTombstoneAge(seconds int) func(*config) {
-	return func(cfg *config) {
-		cfg.tombstoneAge = seconds
-	}
-}
-
 // ValueLocMap instances are created with NewValueLocMap.
 type ValueLocMap struct {
 	root                    *valueLocNode
 	cores                   int
 	splitCount              int
-	tombstoneAge            uint64
 	outOfPlaceKeyDetections int32
 	replicationChan         chan interface{}
 }
@@ -216,7 +196,6 @@ type valueLocMapStats struct {
 	buckets                 uint64
 	bucketCounts            []uint64
 	splitCount              int
-	tombstoneAge            int
 	outOfPlaceKeyDetections int32
 	locs                    uint64
 	pointerLocs             uint64
@@ -235,6 +214,11 @@ type valueLocMapStats struct {
 //      valuelocmap.OptCores(10),
 //      valuelocmap.OptPageSize(4194304),
 //  )
+//  opts := valuelocmap.OptList()
+//  if commandLineOptionForCores {
+//      opts = append(opts, valuelocmap.OptCores(commandLineOptionValue)
+//  }
+//  vlmWithOptionsBuiltUp := valuelocmap.NewValueLocMap(opts...)
 func NewValueLocMap(opts ...func(*config)) *ValueLocMap {
 	cfg := resolveConfig(opts...)
 	bucketCount := cfg.pageSize / int(unsafe.Sizeof(valueLoc{}))
@@ -255,9 +239,8 @@ func NewValueLocMap(opts ...func(*config)) *ValueLocMap {
 				locks:   make([]sync.RWMutex, lockCount),
 			},
 		},
-		cores:        cfg.cores,
-		splitCount:   int(float64(bucketCount) * cfg.splitMultiplier),
-		tombstoneAge: uint64(cfg.tombstoneAge) * uint64(time.Second),
+		cores:      cfg.cores,
+		splitCount: int(float64(bucketCount) * cfg.splitMultiplier),
 	}
 	return vlm
 }
@@ -731,7 +714,6 @@ func (vlm *ValueLocMap) GatherStats(goroutines int, debug bool) (uint64, uint64,
 	if stats.debug {
 		stats.depthCounts = []uint64{0}
 		stats.splitCount = vlm.splitCount
-		stats.tombstoneAge = int(vlm.tombstoneAge / uint64(time.Second))
 		stats.outOfPlaceKeyDetections = vlm.outOfPlaceKeyDetections
 	}
 	vlm.root.gatherStatsHelper(stats)
@@ -858,7 +840,6 @@ func (stats *valueLocMapStats) String() string {
 			[]string{"cores", fmt.Sprintf("%d", stats.cores)},
 			[]string{"pageSize", fmt.Sprintf("%d", stats.buckets*uint64(unsafe.Sizeof(valueLoc{})))},
 			[]string{"splitMultiplier", fmt.Sprintf("%f", float64(stats.splitCount)/float64(stats.buckets))},
-			[]string{"tombstoneAge", fmt.Sprintf("%d", stats.tombstoneAge)},
 			[]string{"depth", fmt.Sprintf("%d", stats.depth)},
 			[]string{"depthCounts", depthCounts},
 			[]string{"sections", fmt.Sprintf("%d", stats.sections)},
@@ -1137,99 +1118,29 @@ func (vln *valueLocNode) unsplit(cores int) {
 	vln.resizingLock.Unlock()
 }
 
-/*
-func (vlm *ValueLocMap) background(goroutines int) {
-	if goroutines < 1 {
-		goroutines = vlm.backgroundCores
-	}
-	if vlm.backgroundIteration == math.MaxUint16 {
-		vlm.backgroundIteration = 0
-	} else {
-		vlm.backgroundIteration++
-	}
-	bg := &valueLocMapBackground{
-		vlm:             vlm,
-		goroutines:      goroutines,
-		funcChan:        make(chan func(), goroutines),
-		iteration:       vlm.backgroundIteration,
-		tombstoneCutoff: uint64(time.Now().UnixNano()) - vlm.tombstoneAge,
-	}
-	funcsDone := make(chan struct{}, 1)
-	go func() {
-		wg := &sync.WaitGroup{}
-		for {
-			f := <-bg.funcChan
-			if f == nil {
-				break
-			}
-			wg.Add(1)
-			go func() {
-				f()
-				wg.Done()
-			}()
-		}
-		wg.Wait()
-		funcsDone <- struct{}{}
-	}()
-	p := 0
-	ppower := 10
-	pincrement := uint64(1) << uint64(64-ppower)
-	pstart := uint64(0)
-	pstop := pstart + (pincrement - 1)
-	for {
-		// Here I'm doing bloom filter scans for every partition when
-		// eventually it should just do filters for partitions we're in the
-		// ring for. Partitions we're not in the ring for (handoffs, old
-		// data from ring changes, etc.) we should just send out what data
-		// we have and the remove it locally.
-		bg.funcChan <- func(p int, pstart uint64, pstop uint64) func() {
-			return func() {
-				vlm.scan(bg, p, pstart, pstop)
-			}
-		}(p, pstart, pstop)
-		if pstop == math.MaxUint64 {
-			break
-		}
-		p++
-		pstart += pincrement
-		pstop += pincrement
-		if pstop == math.MaxUint64 {
-			break
-		}
-	}
-	bg.funcChan <- nil
-	<-funcsDone
+// Scan will scan the key range (of keyA) from start to stop (inclusive) and
+// discard any tombstones older than the tombstoneCutoff.
+func (vlm *ValueLocMap) Scan(tombstoneCutoff uint64, start uint64, stop uint64) {
+	vlm.root.scan(vlm, tombstoneCutoff, start, stop)
 }
 
-const _GLH_BLOOM_FILTER_N = 1000000
-const _GLH_BLOOM_FILTER_P = 0.001
-
-func (vlm *ValueLocMap) scan(bg *valueLocMapBackground, p int, pstart uint64, pstop uint64) {
-	if vlm.replicationChan == nil {
-		vlm.root.scanNoReplication(bg, p, pstart, pstop)
-	} else {
-		count := vlm.root.scanCount(bg, p, pstart, pstop, 0)
-		for count > _GLH_BLOOM_FILTER_N {
-			pstartNew := pstart + (pstop-pstart+1)/2
-			go func(pstop uint64) {
-				bg.funcChan <- func() {
-					vlm.scan(bg, p, pstart, pstop)
-				}
-			}(pstartNew - 1)
-			pstart = pstartNew
-			count = vlm.root.scanCount(bg, p, pstart, pstop, 0)
-		}
-		if count > 0 {
-			ktbf := ktbloomfilter.NewKTBloomFilter(_GLH_BLOOM_FILTER_N, _GLH_BLOOM_FILTER_P, bg.iteration)
-			vlm.root.scanIntoBloomFilter(bg, p, pstart, pstop, ktbf)
-			if ktbf.HasData {
-				vlm.replicationChan <- ktbf
-			}
-		}
-	}
+// ScanCount will scan the key range (of keyA) from start to stop (inclusive),
+// discard any tombstones older than the tombstoneCutoff, and return the count
+// of mappings found (including deletion markers). If the count at any point
+// exceeds the max given, the scan will stop and the count thus far will be
+// returned.
+func (vlm *ValueLocMap) ScanCount(tombstoneCutoff uint64, start uint64, stop uint64, max uint64) uint64 {
+	return vlm.root.scanCount(vlm, tombstoneCutoff, start, stop, max, 0)
 }
 
-func (vln *valueLocNode) scanNoReplication(bg *valueLocMapBackground, p int, pstart uint64, pstop uint64) {
+// ScanCallback will scan the key range (of keyA) from start to stop
+// (inclusive) and call the callback with any mappings found (including
+// deletion markers). If the callback returns false, scanning will stop.
+func (vlm *ValueLocMap) ScanCallback(start uint64, stop uint64, callback func(keyA uint64, keyB uint64, timestamp uint64, blockID uint16, offset uint32, length uint32) bool) {
+	vlm.root.scanCallback(vlm, start, stop, callback)
+}
+
+func (vln *valueLocNode) scan(vlm *ValueLocMap, tombstoneCutoff uint64, pstart uint64, pstop uint64) {
 	if vln.rangeStart > pstop {
 		return
 	}
@@ -1239,14 +1150,15 @@ func (vln *valueLocNode) scanNoReplication(bg *valueLocMapBackground, p int, pst
 	c := (*valueLocNode)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vln.c))))
 	if c != nil {
 		d := (*valueLocNode)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vln.d))))
-		c.scanNoReplication(bg, p, pstart, pstop)
-		d.scanNoReplication(bg, p, pstart, pstop)
+		c.scan(vlm, tombstoneCutoff, pstart, pstop)
+		d.scan(vlm, tombstoneCutoff, pstart, pstop)
 		return
 	}
 	a := (*valueLocStore)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vln.a))))
 	b := (*valueLocStore)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vln.b))))
 	if b != nil {
-		// Just skip splits in progress for no-replication scans.
+		// Just skip splits in progress and assume future scans wil eventually
+		// hit these areas.
 		return
 	}
 	if atomic.LoadInt32(&a.used) <= 0 {
@@ -1261,15 +1173,15 @@ func (vln *valueLocNode) scanNoReplication(bg *valueLocMapBackground, p int, pst
 			}
 			if itemA.keyA < vln.rangeStart || itemA.keyA > vln.rangeStop {
 				// Out of place key, extract and reinsert.
-				atomic.AddInt32(&bg.vlm.outOfPlaceKeyDetections, 1)
-				go bg.vlm.Set(itemA.keyA, itemA.keyB, itemA.timestamp, itemA.blockID, itemA.offset, itemA.length, false)
+				atomic.AddInt32(&vlm.outOfPlaceKeyDetections, 1)
+				go vlm.Set(itemA.keyA, itemA.keyB, itemA.timestamp, itemA.blockID, itemA.offset, itemA.length, false)
 				itemA.blockID = 0
 				continue
 			}
 			if itemA.keyA < pstart || itemA.keyA > pstop {
 				continue
 			}
-			if itemA.timestamp&1 == 1 && itemA.timestamp < bg.tombstoneCutoff {
+			if itemA.timestamp&1 == 1 && itemA.timestamp < tombstoneCutoff {
 				atomic.AddInt32(&a.used, -1)
 				itemA.blockID = 0
 			}
@@ -1278,7 +1190,7 @@ func (vln *valueLocNode) scanNoReplication(bg *valueLocMapBackground, p int, pst
 	}
 }
 
-func (vln *valueLocNode) scanCount(bg *valueLocMapBackground, p int, pstart uint64, pstop uint64, count uint64) uint64 {
+func (vln *valueLocNode) scanCount(vlm *ValueLocMap, tombstoneCutoff uint64, pstart uint64, pstop uint64, max uint64, count uint64) uint64 {
 	if vln.rangeStart > pstop {
 		return count
 	}
@@ -1288,11 +1200,11 @@ func (vln *valueLocNode) scanCount(bg *valueLocMapBackground, p int, pstart uint
 	c := (*valueLocNode)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vln.c))))
 	if c != nil {
 		d := (*valueLocNode)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vln.d))))
-		count = c.scanCount(bg, p, pstart, pstop, count)
-		if count > _GLH_BLOOM_FILTER_N {
+		count = c.scanCount(vlm, tombstoneCutoff, pstart, pstop, max, count)
+		if count > max {
 			return count
 		}
-		return d.scanCount(bg, p, pstart, pstop, count)
+		return d.scanCount(vlm, tombstoneCutoff, pstart, pstop, max, count)
 	}
 	a := (*valueLocStore)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vln.a))))
 	b := (*valueLocStore)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vln.b))))
@@ -1309,20 +1221,20 @@ func (vln *valueLocNode) scanCount(bg *valueLocMapBackground, p int, pstart uint
 				}
 				if itemA.keyA < vln.rangeStart || itemA.keyA > vln.rangeStop {
 					// Out of place key, extract and reinsert.
-					atomic.AddInt32(&bg.vlm.outOfPlaceKeyDetections, 1)
-					go bg.vlm.Set(itemA.keyA, itemA.keyB, itemA.timestamp, itemA.blockID, itemA.offset, itemA.length, false)
+					atomic.AddInt32(&vlm.outOfPlaceKeyDetections, 1)
+					go vlm.Set(itemA.keyA, itemA.keyB, itemA.timestamp, itemA.blockID, itemA.offset, itemA.length, false)
 					itemA.blockID = 0
 					continue
 				}
 				if itemA.keyA < pstart || itemA.keyA > pstop {
 					continue
 				}
-				if itemA.timestamp&1 == 1 && itemA.timestamp < bg.tombstoneCutoff {
+				if itemA.timestamp&1 == 1 && itemA.timestamp < tombstoneCutoff {
 					atomic.AddInt32(&a.used, -1)
 					itemA.blockID = 0
 				}
 				count++
-				if count > _GLH_BLOOM_FILTER_N {
+				if count > max {
 					a.locks[lix].RUnlock()
 					return count
 				}
@@ -1354,7 +1266,7 @@ func (vln *valueLocNode) scanCount(bg *valueLocMapBackground, p int, pstart uint
 					}
 				}
 				count++
-				if count > _GLH_BLOOM_FILTER_N {
+				if count > max {
 					a.locks[lix].RUnlock()
 					b.locks[lix].RUnlock()
 					return count
@@ -1377,7 +1289,7 @@ func (vln *valueLocNode) scanCount(bg *valueLocMapBackground, p int, pstart uint
 					}
 				}
 				count++
-				if count > _GLH_BLOOM_FILTER_N {
+				if count > max {
 					a.locks[lix].RUnlock()
 					b.locks[lix].RUnlock()
 					return count
@@ -1390,7 +1302,7 @@ func (vln *valueLocNode) scanCount(bg *valueLocMapBackground, p int, pstart uint
 	return count
 }
 
-func (vln *valueLocNode) scanIntoBloomFilter(bg *valueLocMapBackground, p int, pstart uint64, pstop uint64, ktbf *ktbloomfilter.KTBloomFilter) {
+func (vln *valueLocNode) scanCallback(vlm *ValueLocMap, pstart uint64, pstop uint64, callback func(keyA uint64, keyB uint64, timestamp uint64, blockID uint16, offset uint32, length uint32) bool) {
 	if vln.rangeStart > pstop {
 		return
 	}
@@ -1400,8 +1312,8 @@ func (vln *valueLocNode) scanIntoBloomFilter(bg *valueLocMapBackground, p int, p
 	c := (*valueLocNode)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vln.c))))
 	if c != nil {
 		d := (*valueLocNode)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vln.d))))
-		c.scanIntoBloomFilter(bg, p, pstart, pstop, ktbf)
-		d.scanIntoBloomFilter(bg, p, pstart, pstop, ktbf)
+		c.scanCallback(vlm, pstart, pstop, callback)
+		d.scanCallback(vlm, pstart, pstop, callback)
 		return
 	}
 	a := (*valueLocStore)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vln.a))))
@@ -1417,7 +1329,10 @@ func (vln *valueLocNode) scanIntoBloomFilter(bg *valueLocMapBackground, p int, p
 				if itemA.blockID == 0 || itemA.keyA < pstart || itemA.keyA > pstop {
 					continue
 				}
-				ktbf.Add(itemA.keyA, itemA.keyB, itemA.timestamp)
+				if !callback(itemA.keyA, itemA.keyB, itemA.timestamp, itemA.blockID, itemA.offset, itemA.length) {
+					a.locks[lix].RUnlock()
+					return
+				}
 			}
 			a.locks[lix].RUnlock()
 		}
@@ -1445,7 +1360,11 @@ func (vln *valueLocNode) scanIntoBloomFilter(bg *valueLocMapBackground, p int, p
 						break
 					}
 				}
-				ktbf.Add(itemA.keyA, itemA.keyB, itemA.timestamp)
+				if !callback(itemA.keyA, itemA.keyB, itemA.timestamp, itemA.blockID, itemA.offset, itemA.length) {
+					a.locks[lix].RUnlock()
+					b.locks[lix].RUnlock()
+					return
+				}
 			}
 		NEXT_ITEM_B:
 			for itemB := &b.buckets[bix]; itemB != nil; itemB = itemB.next {
@@ -1463,11 +1382,14 @@ func (vln *valueLocNode) scanIntoBloomFilter(bg *valueLocMapBackground, p int, p
 						break
 					}
 				}
-				ktbf.Add(itemB.keyA, itemB.keyB, itemB.timestamp)
+				if !callback(itemB.keyA, itemB.keyB, itemB.timestamp, itemB.blockID, itemB.offset, itemB.length) {
+					a.locks[lix].RUnlock()
+					b.locks[lix].RUnlock()
+					return
+				}
 			}
 			a.locks[lix].RUnlock()
 			b.locks[lix].RUnlock()
 		}
 	}
 }
-*/

@@ -39,7 +39,7 @@ type valuesFileWriteBuf struct {
 func newValuesFile(vs *ValueStore, bts int64) *valuesFile {
 	vf := &valuesFile{vs: vs, bts: bts}
 	name := fmt.Sprintf("%d.values", vf.bts)
-	vf.readerFPs = make([]brimutil.ChecksummedReader, vs.valueFileReaders)
+	vf.readerFPs = make([]brimutil.ChecksummedReader, vs.valuesFileReaders)
 	vf.readerLocks = make([]sync.Mutex, len(vf.readerFPs))
 	vf.readerLens = make([][]byte, len(vf.readerFPs))
 	for i := 0; i < len(vf.readerFPs); i++ {
@@ -50,7 +50,7 @@ func newValuesFile(vs *ValueStore, bts int64) *valuesFile {
 		vf.readerFPs[i] = brimutil.NewChecksummedReader(fp, int(vs.checksumInterval), murmur3.New32)
 		vf.readerLens[i] = make([]byte, 4)
 	}
-	vf.id = vs.addValuesLocBock(vf)
+	vf.id = vs.addValueLocBlock(vf)
 	return vf
 }
 
@@ -70,7 +70,7 @@ func createValuesFile(vs *ValueStore) *valuesFile {
 	vf.writeChan = make(chan *valuesFileWriteBuf, vs.cores)
 	vf.doneChan = make(chan struct{})
 	vf.buf = <-vf.freeChan
-	head := []byte("BRIMSTORE VALUES v0             ")
+	head := []byte("BRIMSTORE VALUE v0              ")
 	binary.BigEndian.PutUint32(head[28:], vs.checksumInterval)
 	vf.buf.offset = uint32(copy(vf.buf.buf, head))
 	atomic.StoreUint32(&vf.atOffset, vf.buf.offset)
@@ -78,7 +78,7 @@ func createValuesFile(vs *ValueStore) *valuesFile {
 	for i := 0; i < vs.cores; i++ {
 		go vf.checksummer()
 	}
-	vf.readerFPs = make([]brimutil.ChecksummedReader, vs.valueFileReaders)
+	vf.readerFPs = make([]brimutil.ChecksummedReader, vs.valuesFileReaders)
 	vf.readerLocks = make([]sync.Mutex, len(vf.readerFPs))
 	vf.readerLens = make([][]byte, len(vf.readerFPs))
 	for i := 0; i < len(vf.readerFPs); i++ {
@@ -89,7 +89,7 @@ func createValuesFile(vs *ValueStore) *valuesFile {
 		vf.readerFPs[i] = brimutil.NewChecksummedReader(fp, int(vs.checksumInterval), murmur3.New32)
 		vf.readerLens[i] = make([]byte, 4)
 	}
-	vf.id = vs.addValuesLocBock(vf)
+	vf.id = vs.addValueLocBlock(vf)
 	return vf
 }
 
