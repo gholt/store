@@ -198,7 +198,7 @@ func lookup() {
 			var d uint64
 			for o := 0; o < len(keys); o += 16 {
 				timestamp, _, err := opts.vs.Lookup(binary.BigEndian.Uint64(keys[o:]), binary.BigEndian.Uint64(keys[o+8:]))
-				if err == brimstore.ErrValueNotFound {
+				if err == brimstore.ErrNotFound {
 					if timestamp == 0 {
 						m++
 					} else {
@@ -245,7 +245,7 @@ func read() {
 				var d uint64
 				for o := 0; o < len(keys); o += 16 {
 					timestamp, v, err := opts.vs.Read(binary.BigEndian.Uint64(keys[o:]), binary.BigEndian.Uint64(keys[o+8:]), opts.buffers[client][:0])
-					if err == brimstore.ErrValueNotFound {
+					if err == brimstore.ErrNotFound {
 						if timestamp == 0 {
 							m++
 						} else {

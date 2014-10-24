@@ -99,7 +99,7 @@ func (vf *valuesFile) timestamp() int64 {
 
 func (vf *valuesFile) read(keyA uint64, keyB uint64, timestamp uint64, offset uint32, length uint32, value []byte) (uint64, []byte, error) {
 	if timestamp&1 == 1 {
-		return timestamp, value, ErrValueNotFound
+		return timestamp, value, ErrNotFound
 	}
 	i := int(keyA>>1) % len(vf.readerFPs)
 	vf.readerLocks[i].Lock()

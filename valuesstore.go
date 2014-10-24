@@ -26,6 +26,7 @@ import (
 )
 
 type config struct {
+	vlm                ValueLocMap
 	cores              int
 	backgroundCores    int
 	backgroundInterval int
@@ -162,9 +163,20 @@ func OptList(opts ...func(*config)) []func(*config) {
 	return opts
 }
 
-// OptCores indicates how many cores may be in use (for calculating the number
-// of locks to create, for example) and how many cores may be used for resizes.
-// Defaults to env BRIMSTORE_CORES, or GOMAXPROCS.
+// OptValueLocMap allows overriding the default ValueLocMap, an interface used
+// by ValueStore for tracking the mappings from keys to the locations of their
+// values.
+func OptValueLocMap(vlm ValueLocMap) func(*config) {
+	return func(cfg *config) {
+		cfg.vlm = vlm
+	}
+}
+
+// OptCores indicates how many cores may be used for various tasks (processing
+// incoming writes and batching them to disk, background tasks, etc.). This
+// won't exactly limit the number of cores in use (not an easy thing to do in
+// Go except globally with GOMAXPROCS) but it is more of a relative resource
+// usage level. Defaults to env BRIMSTORE_CORES, or GOMAXPROCS.
 func OptCores(cores int) func(*config) {
 	return func(cfg *config) {
 		cfg.cores = cores
@@ -228,7 +240,7 @@ func OptTombstoneAge(seconds int) func(*config) {
 	}
 }
 
-// OptValuesFileSize indicates how large a value size can be before closing it
+// OptValuesFileSize indicates how large a values file can be before closing it
 // and opening a new one. Defaults to env BRIMSTORE_VALUESFILESIZE or
 // 4,294,967,295.
 func OptValuesFileSize(bytes int) func(*config) {
@@ -238,7 +250,7 @@ func OptValuesFileSize(bytes int) func(*config) {
 }
 
 // OptValuesFileReaders indicates how many open file descriptors are allowed per
-// value file for reading. Defaults to env BRIMSTORE_VALUESFILEREADERS or the
+// values file for reading. Defaults to env BRIMSTORE_VALUESFILEREADERS or the
 // configured number of cores.
 func OptValuesFileReaders(bytes int) func(*config) {
 	return func(cfg *config) {
@@ -246,17 +258,25 @@ func OptValuesFileReaders(bytes int) func(*config) {
 	}
 }
 
-var ErrValueNotFound error = errors.New("value not found")
+var ErrNotFound error = errors.New("not found")
 
+// ValueLocMap is an interface used by ValueStore for tracking the mappings
+// from keys to the locations of their values. You can use OptValueLocMap to
+// specify your own ValueLocMap implemention instead of the default.
+//
+// For documentation of each of these functions, see the default implementation
+// in valuelocmap.ValueLocMap.
 type ValueLocMap interface {
 	Get(keyA uint64, keyB uint64) (timestamp uint64, blockID uint16, offset uint32, length uint32)
 	Set(keyA uint64, keyB uint64, timestamp uint64, blockID uint16, offset uint32, length uint32, evenIfSameTimestamp bool) (previousTimestamp uint64)
 	GatherStats(goroutines int, debug bool) (count uint64, length uint64, debugInfo fmt.Stringer)
 	Scan(tombstoneCutoff uint64, start uint64, stop uint64)
 	ScanCount(tombstoneCutoff uint64, start uint64, stop uint64, max uint64) uint64
-	ScanCallback(start uint64, stop uint64, callback func(keyA uint64, keyB uint64, timestamp uint64, blockID uint16, offset uint32, length uint32) bool)
+	ScanCallback(start uint64, stop uint64, callback func(keyA uint64, keyB uint64, timestamp uint64))
+	ScanCallbackFull(start uint64, stop uint64, callback func(keyA uint64, keyB uint64, timestamp uint64, blockID uint16, offset uint32, length uint32))
 }
 
+// ValueStore instances are created with NewValueStore.
 type ValueStore struct {
 	freeableVMChan       chan *valuesMem
 	freeVMChan           chan *valuesMem
@@ -339,7 +359,7 @@ type backgroundNotification struct {
 }
 
 type backgroundRun struct {
-	vlm             *ValueLocMap
+	vlm             ValueLocMap
 	goroutines      int
 	funcChan        chan func()
 	iteration       uint16
@@ -352,11 +372,29 @@ type backgroundRun struct {
 // Note that a lot of buffering and multiple cores can be in use and therefore
 // Close should be called prior to the process exiting to ensure all processing
 // is done and the buffers are flushed.
+//
+// You can provide Opt* functions for optional configuration items, such as
+// OptCores:
+//
+//  vsWithDefaults := brimstore.NewValueStore()
+//  vsWithOptions := brimstore.NewValueStore(
+//      brimstore.OptCores(10),
+//      brimstore.OptPageSize(8388608),
+//  )
+//  opts := brimstore.OptList()
+//  if commandLineOptionForCores {
+//      opts = append(opts, brimstore.OptCores(commandLineOptionValue))
+//  }
+//  vsWithOptionsBuiltUp := brimstore.NewValueStore(opts...)
 func NewValueStore(opts ...func(*config)) *ValueStore {
 	cfg := resolveConfig(opts...)
+	vlm := cfg.vlm
+	if vlm == nil {
+		vlm = valuelocmap.NewValueLocMap()
+	}
 	vs := &ValueStore{
 		valueLocBlocks:     make([]valueLocBlock, math.MaxUint16),
-		vlm:                valuelocmap.NewValueLocMap(),
+		vlm:                vlm,
 		cores:              cfg.cores,
 		backgroundCores:    cfg.backgroundCores,
 		backgroundInterval: cfg.backgroundInterval,
@@ -431,16 +469,16 @@ func (vs *ValueStore) Close() {
 
 // Lookup will return timestamp, length, err for keyA, keyB.
 //
-// Note that err == ErrValueNotFound with timestamp == 0 indicates keyA, keyB
-// was not known at all whereas err == ErrValueNotFound with timestamp != 0
-// (also timestamp & 1 == 1) indicates keyA, keyB was known and had a deletion
-// marker (aka tombstone).
+// Note that err == ErrNotFound with timestamp == 0 indicates keyA, keyB was
+// not known at all whereas err == ErrNotFound with timestamp != 0 (also
+// timestamp & 1 == 1) indicates keyA, keyB was known and had a deletion marker
+// (aka tombstone).
 //
 // This may be called even after Close.
 func (vs *ValueStore) Lookup(keyA uint64, keyB uint64) (uint64, uint32, error) {
 	timestamp, id, _, length := vs.vlm.Get(keyA, keyB)
 	if id == 0 || timestamp&1 == 1 {
-		return timestamp, 0, ErrValueNotFound
+		return timestamp, 0, ErrNotFound
 	}
 	return timestamp, length, nil
 }
@@ -449,16 +487,16 @@ func (vs *ValueStore) Lookup(keyA uint64, keyB uint64) (uint64, uint32, error) {
 // is provided, the read value will be appended to it and the whole returned
 // (useful to reuse an existing []byte).
 //
-// Note that err == ErrValueNotFound with timestamp == 0 indicates keyA, keyB
-// was not known at all whereas err == ErrValueNotFound with timestamp != 0
-// (also timestamp & 1 == 1) indicates keyA, keyB was known and had a deletion
-// marker (aka tombstone).
+// Note that err == ErrNotFound with timestamp == 0 indicates keyA, keyB was
+// not known at all whereas err == ErrNotFound with timestamp != 0 (also
+// timestamp & 1 == 1) indicates keyA, keyB was known and had a deletion marker
+// (aka tombstone).
 //
 // This may be called even after Close.
 func (vs *ValueStore) Read(keyA uint64, keyB uint64, value []byte) (uint64, []byte, error) {
 	timestamp, id, offset, length := vs.vlm.Get(keyA, keyB)
 	if id == 0 || timestamp&1 == 1 {
-		return timestamp, value, ErrValueNotFound
+		return timestamp, value, ErrNotFound
 	}
 	return vs.valueLocBlock(id).read(keyA, keyB, timestamp, offset, length, value)
 }
@@ -1058,7 +1096,7 @@ func (vs *ValueStore) BackgroundStop() {
 // interval) execute any background tasks using up to the number of goroutines
 // indicated (0 will use the configured OptBackgroundCores value). This
 // function will not return until all background tasks have completed at least
-// one pass.
+// one full pass.
 func (vs *ValueStore) BackgroundNow(goroutines int) {
 	if vs.backgroundNotifyChan == nil {
 		vs.background(goroutines)
@@ -1107,8 +1145,8 @@ WORK:
 }
 
 func (vs *ValueStore) background(goroutines int) {
-	// TODO: Disabled for the moment
-	if goroutines == 0 || goroutines != 0 {
+	// TODO: Disabled by default for the moment as I work on performance.
+	if goroutines != -1 {
 		return
 	}
 	begin := time.Now()
@@ -1144,7 +1182,7 @@ func (vs *ValueStore) background(goroutines int) {
 		funcsDone <- struct{}{}
 	}()
 	p := 0
-	ppower := 10
+	ppower := 8
 	pincrement := uint64(1) << uint64(64-ppower)
 	pstart := uint64(0)
 	pstop := pstart + (pincrement - 1)
@@ -1181,7 +1219,7 @@ func (vs *ValueStore) bloom(bg *backgroundRun, p int, pstart uint64, pstop uint6
 	count := vs.vlm.ScanCount(bg.tombstoneCutoff, pstart, pstop, _GLH_BLOOM_FILTER_N)
 	for count > _GLH_BLOOM_FILTER_N {
 		pstopNew := pstart + (pstop-pstart+1)/2 - 1
-		go func(pstart uint64) {
+		func(pstart uint64) {
 			bg.funcChan <- func() {
 				vs.bloom(bg, p, pstart, pstop)
 			}
@@ -1191,14 +1229,7 @@ func (vs *ValueStore) bloom(bg *backgroundRun, p int, pstart uint64, pstop uint6
 	}
 	if count > 0 {
 		ktbf := ktbloomfilter.NewKTBloomFilter(_GLH_BLOOM_FILTER_N, _GLH_BLOOM_FILTER_P, bg.iteration)
-		vs.vlm.ScanCallback(
-			pstart,
-			pstop,
-			func(keyA uint64, keyB uint64, timestamp uint64, blockID uint16, offset uint32, length uint32) bool {
-				ktbf.Add(keyA, keyB, timestamp)
-				return true
-			},
-		)
+		vs.vlm.ScanCallback(pstart, pstop, ktbf.Add)
 		if ktbf.HasData {
 			// TODO
 		}

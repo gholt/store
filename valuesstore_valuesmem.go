@@ -24,7 +24,7 @@ func (vm *valuesMem) read(keyA uint64, keyB uint64, timestamp uint64, offset uin
 	timestamp, id, offset, length := vm.vs.vlm.Get(keyA, keyB)
 	if id == 0 || timestamp&1 == 1 {
 		vm.discardLock.RUnlock()
-		return timestamp, value, ErrValueNotFound
+		return timestamp, value, ErrNotFound
 	}
 	if id != vm.id {
 		vm.discardLock.RUnlock()

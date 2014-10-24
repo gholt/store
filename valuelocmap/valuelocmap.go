@@ -216,7 +216,7 @@ type valueLocMapStats struct {
 //  )
 //  opts := valuelocmap.OptList()
 //  if commandLineOptionForCores {
-//      opts = append(opts, valuelocmap.OptCores(commandLineOptionValue)
+//      opts = append(opts, valuelocmap.OptCores(commandLineOptionValue))
 //  }
 //  vlmWithOptionsBuiltUp := valuelocmap.NewValueLocMap(opts...)
 func NewValueLocMap(opts ...func(*config)) *ValueLocMap {
@@ -676,7 +676,7 @@ func (vln *valueLocNode) isResizing() bool {
 	return false
 }
 
-// GatherStats returns the active (non deletion markers)  mapping count and
+// GatherStats returns the active (non deletion markers) mapping count and
 // total length referenced as well as a fmt.Stringer that contains debug
 // information if debug is true; note that when debug is true additional
 // resources are consumed to collect the additional information. Also note that
@@ -1135,9 +1135,16 @@ func (vlm *ValueLocMap) ScanCount(tombstoneCutoff uint64, start uint64, stop uin
 
 // ScanCallback will scan the key range (of keyA) from start to stop
 // (inclusive) and call the callback with any mappings found (including
-// deletion markers). If the callback returns false, scanning will stop.
-func (vlm *ValueLocMap) ScanCallback(start uint64, stop uint64, callback func(keyA uint64, keyB uint64, timestamp uint64, blockID uint16, offset uint32, length uint32) bool) {
+// deletion markers).
+func (vlm *ValueLocMap) ScanCallback(start uint64, stop uint64, callback func(keyA uint64, keyB uint64, timestamp uint64)) {
 	vlm.root.scanCallback(vlm, start, stop, callback)
+}
+
+// ScanCallbackFull will scan the key range (of keyA) from start to stop
+// (inclusive) and call the callback with any mappings found (including
+// deletion markers).
+func (vlm *ValueLocMap) ScanCallbackFull(start uint64, stop uint64, callback func(keyA uint64, keyB uint64, timestamp uint64, blockID uint16, offset uint32, length uint32)) {
+	vlm.root.scanCallbackFull(vlm, start, stop, callback)
 }
 
 func (vln *valueLocNode) scan(vlm *ValueLocMap, tombstoneCutoff uint64, pstart uint64, pstop uint64) {
@@ -1157,7 +1164,7 @@ func (vln *valueLocNode) scan(vlm *ValueLocMap, tombstoneCutoff uint64, pstart u
 	a := (*valueLocStore)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vln.a))))
 	b := (*valueLocStore)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vln.b))))
 	if b != nil {
-		// Just skip splits in progress and assume future scans wil eventually
+		// Just skip splits in progress and assume future scans will eventually
 		// hit these areas.
 		return
 	}
@@ -1166,7 +1173,7 @@ func (vln *valueLocNode) scan(vlm *ValueLocMap, tombstoneCutoff uint64, pstart u
 	}
 	for bix := len(a.buckets) - 1; bix >= 0; bix-- {
 		lix := bix % len(a.locks)
-		a.locks[lix].RLock()
+		a.locks[lix].Lock()
 		for itemA := &a.buckets[bix]; itemA != nil; itemA = itemA.next {
 			if itemA.blockID == 0 {
 				continue
@@ -1186,7 +1193,7 @@ func (vln *valueLocNode) scan(vlm *ValueLocMap, tombstoneCutoff uint64, pstart u
 				itemA.blockID = 0
 			}
 		}
-		a.locks[lix].RUnlock()
+		a.locks[lix].Unlock()
 	}
 }
 
@@ -1214,7 +1221,7 @@ func (vln *valueLocNode) scanCount(vlm *ValueLocMap, tombstoneCutoff uint64, pst
 		}
 		for bix := len(a.buckets) - 1; bix >= 0; bix-- {
 			lix := bix % len(a.locks)
-			a.locks[lix].RLock()
+			a.locks[lix].Lock()
 			for itemA := &a.buckets[bix]; itemA != nil; itemA = itemA.next {
 				if itemA.blockID == 0 {
 					continue
@@ -1235,13 +1242,16 @@ func (vln *valueLocNode) scanCount(vlm *ValueLocMap, tombstoneCutoff uint64, pst
 				}
 				count++
 				if count > max {
-					a.locks[lix].RUnlock()
+					a.locks[lix].Unlock()
 					return count
 				}
 			}
-			a.locks[lix].RUnlock()
+			a.locks[lix].Unlock()
 		}
 	} else {
+		// For tombstone and out of place key detection, just skip splits in
+		// progress and assume future scans will eventually hit these areas.
+		// Means we can use read locks here instead of write locks.
 		if atomic.LoadInt32(&a.used) <= 0 && atomic.LoadInt32(&b.used) <= 0 {
 			return count
 		}
@@ -1302,7 +1312,7 @@ func (vln *valueLocNode) scanCount(vlm *ValueLocMap, tombstoneCutoff uint64, pst
 	return count
 }
 
-func (vln *valueLocNode) scanCallback(vlm *ValueLocMap, pstart uint64, pstop uint64, callback func(keyA uint64, keyB uint64, timestamp uint64, blockID uint16, offset uint32, length uint32) bool) {
+func (vln *valueLocNode) scanCallback(vlm *ValueLocMap, pstart uint64, pstop uint64, callback func(keyA uint64, keyB uint64, timestamp uint64)) {
 	if vln.rangeStart > pstop {
 		return
 	}
@@ -1329,10 +1339,7 @@ func (vln *valueLocNode) scanCallback(vlm *ValueLocMap, pstart uint64, pstop uin
 				if itemA.blockID == 0 || itemA.keyA < pstart || itemA.keyA > pstop {
 					continue
 				}
-				if !callback(itemA.keyA, itemA.keyB, itemA.timestamp, itemA.blockID, itemA.offset, itemA.length) {
-					a.locks[lix].RUnlock()
-					return
-				}
+				callback(itemA.keyA, itemA.keyB, itemA.timestamp)
 			}
 			a.locks[lix].RUnlock()
 		}
@@ -1360,11 +1367,7 @@ func (vln *valueLocNode) scanCallback(vlm *ValueLocMap, pstart uint64, pstop uin
 						break
 					}
 				}
-				if !callback(itemA.keyA, itemA.keyB, itemA.timestamp, itemA.blockID, itemA.offset, itemA.length) {
-					a.locks[lix].RUnlock()
-					b.locks[lix].RUnlock()
-					return
-				}
+				callback(itemA.keyA, itemA.keyB, itemA.timestamp)
 			}
 		NEXT_ITEM_B:
 			for itemB := &b.buckets[bix]; itemB != nil; itemB = itemB.next {
@@ -1382,11 +1385,88 @@ func (vln *valueLocNode) scanCallback(vlm *ValueLocMap, pstart uint64, pstop uin
 						break
 					}
 				}
-				if !callback(itemB.keyA, itemB.keyB, itemB.timestamp, itemB.blockID, itemB.offset, itemB.length) {
-					a.locks[lix].RUnlock()
-					b.locks[lix].RUnlock()
-					return
+				callback(itemB.keyA, itemB.keyB, itemB.timestamp)
+			}
+			a.locks[lix].RUnlock()
+			b.locks[lix].RUnlock()
+		}
+	}
+}
+
+func (vln *valueLocNode) scanCallbackFull(vlm *ValueLocMap, pstart uint64, pstop uint64, callback func(keyA uint64, keyB uint64, timestamp uint64, blockID uint16, offset uint32, length uint32)) {
+	if vln.rangeStart > pstop {
+		return
+	}
+	if vln.rangeStop < pstart {
+		return
+	}
+	c := (*valueLocNode)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vln.c))))
+	if c != nil {
+		d := (*valueLocNode)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vln.d))))
+		c.scanCallbackFull(vlm, pstart, pstop, callback)
+		d.scanCallbackFull(vlm, pstart, pstop, callback)
+		return
+	}
+	a := (*valueLocStore)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vln.a))))
+	b := (*valueLocStore)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&vln.b))))
+	if b == nil {
+		if atomic.LoadInt32(&a.used) <= 0 {
+			return
+		}
+		for bix := len(a.buckets) - 1; bix >= 0; bix-- {
+			lix := bix % len(a.locks)
+			a.locks[lix].RLock()
+			for itemA := &a.buckets[bix]; itemA != nil; itemA = itemA.next {
+				if itemA.blockID == 0 || itemA.keyA < pstart || itemA.keyA > pstop {
+					continue
 				}
+				callback(itemA.keyA, itemA.keyB, itemA.timestamp, itemA.blockID, itemA.offset, itemA.length)
+			}
+			a.locks[lix].RUnlock()
+		}
+	} else {
+		if atomic.LoadInt32(&a.used) <= 0 && atomic.LoadInt32(&b.used) <= 0 {
+			return
+		}
+		for bix := len(a.buckets) - 1; bix >= 0; bix-- {
+			lix := bix % len(a.locks)
+			b.locks[lix].RLock()
+			a.locks[lix].RLock()
+		NEXT_ITEM_A:
+			for itemA := &a.buckets[bix]; itemA != nil; itemA = itemA.next {
+				if itemA.blockID == 0 || itemA.keyA < pstart || itemA.keyA > pstop {
+					continue
+				}
+				for itemB := &b.buckets[bix]; itemB != nil; itemB = itemB.next {
+					if itemB.blockID == 0 {
+						continue
+					}
+					if itemB.keyA == itemA.keyA && itemB.keyB == itemA.keyB {
+						if itemB.timestamp >= itemA.timestamp {
+							continue NEXT_ITEM_A
+						}
+						break
+					}
+				}
+				callback(itemA.keyA, itemA.keyB, itemA.timestamp, itemA.blockID, itemA.offset, itemA.length)
+			}
+		NEXT_ITEM_B:
+			for itemB := &b.buckets[bix]; itemB != nil; itemB = itemB.next {
+				if itemB.blockID == 0 || itemB.keyA < pstart || itemB.keyA > pstop {
+					continue
+				}
+				for itemA := &a.buckets[bix]; itemA != nil; itemA = itemA.next {
+					if itemA.blockID == 0 {
+						continue
+					}
+					if itemA.keyA == itemB.keyA && itemA.keyB == itemB.keyB {
+						if itemA.timestamp >= itemB.timestamp {
+							continue NEXT_ITEM_B
+						}
+						break
+					}
+				}
+				callback(itemB.keyA, itemB.keyB, itemB.timestamp, itemB.blockID, itemB.offset, itemB.length)
 			}
 			a.locks[lix].RUnlock()
 			b.locks[lix].RUnlock()
