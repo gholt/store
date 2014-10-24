@@ -28,6 +28,7 @@ import (
 	"os"
 	"path"
 	"runtime"
+	"runtime/pprof"
 	"sort"
 	"strconv"
 	"strings"
@@ -1186,7 +1187,7 @@ WORK:
 		}
 		nextRun = time.Now().Add(time.Duration(interval + interval*rand.NormFloat64()*0.1))
 		goroutines := vs.backgroundCores
-		if notification != nil && notification.goroutines > 0 {
+		if notification != nil {
 			goroutines = notification.goroutines
 		}
 		vs.background(goroutines)
@@ -1202,6 +1203,13 @@ func (vs *ValueStore) background(goroutines int) {
 	if goroutines != -1 {
 		return
 	}
+	goroutines = 1
+
+	fp, err := os.Create("background.pprof")
+	if err != nil {
+		panic(err)
+	}
+	pprof.StartCPUProfile(fp)
 	begin := time.Now()
 	if goroutines < 1 {
 		goroutines = vs.backgroundCores
@@ -1263,6 +1271,8 @@ func (vs *ValueStore) background(goroutines int) {
 	bg.funcChan <- nil
 	<-funcsDone
 	fmt.Println(time.Now().Sub(begin), "to run background tasks, iteration", bg.iteration)
+	pprof.StopCPUProfile()
+	fp.Close()
 }
 
 const _GLH_BLOOM_FILTER_N = 1000000

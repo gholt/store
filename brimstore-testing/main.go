@@ -135,7 +135,7 @@ func memstat() {
 
 func background() {
 	begin := time.Now()
-	opts.vs.BackgroundNow(0)
+	opts.vs.BackgroundNow(-1)
 	dur := time.Now().Sub(begin)
 	fmt.Printf("%s to run background tasks\n", dur)
 }
