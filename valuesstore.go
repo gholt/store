@@ -18,7 +18,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/gholt/brimstore/ktbloomfilter"
 	"github.com/gholt/brimstore/valuelocmap"
 	"github.com/gholt/brimtext"
 	"github.com/gholt/brimutil"
@@ -1228,9 +1227,9 @@ func (vs *ValueStore) bloom(bg *backgroundRun, p int, pstart uint64, pstop uint6
 		count = vs.vlm.ScanCount(bg.tombstoneCutoff, pstart, pstop, _GLH_BLOOM_FILTER_N)
 	}
 	if count > 0 {
-		ktbf := ktbloomfilter.NewKTBloomFilter(_GLH_BLOOM_FILTER_N, _GLH_BLOOM_FILTER_P, bg.iteration)
-		vs.vlm.ScanCallback(pstart, pstop, ktbf.Add)
-		if ktbf.HasData {
+		ktbf := newKTBloomFilter(_GLH_BLOOM_FILTER_N, _GLH_BLOOM_FILTER_P, bg.iteration)
+		vs.vlm.ScanCallback(pstart, pstop, ktbf.add)
+		if ktbf.hasData {
 			// TODO
 		}
 	}
