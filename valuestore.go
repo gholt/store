@@ -507,6 +507,7 @@ func (vs *ValueStore) MaxValueSize() uint32 {
 // Close shuts down all background processing and the ValueStore will refuse
 // any additional writes; reads may still occur.
 func (vs *ValueStore) Close() {
+	fmt.Println("GLH Close")
 	for _, c := range vs.pendingVWRChans {
 		c <- nil
 	}
@@ -514,7 +515,9 @@ func (vs *ValueStore) Close() {
 		<-vs.freeVMChan
 	}
 	<-vs.tocWriterDoneChan
+	fmt.Println("GLH Close BackgroundStop")
 	vs.BackgroundStop()
+	fmt.Println("GLH Close done")
 }
 
 // Lookup will return timestamp, length, err for keyA, keyB.
@@ -1203,14 +1206,22 @@ func (vs *ValueStore) background(goroutines int) {
 	if goroutines != -1 {
 		return
 	}
-	goroutines = 1
-
+	log.Println("background")
 	fp, err := os.Create("background.pprof")
 	if err != nil {
 		panic(err)
 	}
 	pprof.StartCPUProfile(fp)
+	runtime.GC()
 	begin := time.Now()
+	if goroutines < 0 {
+		//time.Sleep(2 * time.Minute)
+		pprof.StopCPUProfile()
+		fp.Close()
+		return
+	}
+	goroutines = 0
+
 	if goroutines < 1 {
 		goroutines = vs.backgroundCores
 	}
@@ -1268,9 +1279,12 @@ func (vs *ValueStore) background(goroutines int) {
 			break
 		}
 	}
+	log.Println("background sending nil")
 	bg.funcChan <- nil
+	log.Println("background waiting for funcsDone")
 	<-funcsDone
-	fmt.Println(time.Now().Sub(begin), "to run background tasks, iteration", bg.iteration)
+
+	log.Println(time.Now().Sub(begin), "to run background tasks, iteration", bg.iteration)
 	pprof.StopCPUProfile()
 	fp.Close()
 }
