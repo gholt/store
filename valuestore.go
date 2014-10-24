@@ -26,6 +26,7 @@ import (
 	"math"
 	"math/rand"
 	"os"
+	"path"
 	"runtime"
 	"sort"
 	"strconv"
@@ -41,6 +42,8 @@ import (
 )
 
 type config struct {
+	path               string
+	pathtoc            string
 	vlm                ValueLocMap
 	cores              int
 	backgroundCores    int
@@ -57,6 +60,14 @@ type config struct {
 
 func resolveConfig(opts ...func(*config)) *config {
 	cfg := &config{}
+	cfg.path = os.Getenv("BRIMSTORE_PATH")
+	if cfg.path == "" {
+		cfg.path = "."
+	}
+	cfg.pathtoc = os.Getenv("BRIMSTORE_PATHTOC")
+	if cfg.pathtoc == "" {
+		cfg.pathtoc = cfg.path
+	}
 	cfg.cores = runtime.GOMAXPROCS(0)
 	if env := os.Getenv("BRIMSTORE_CORES"); env != "" {
 		if val, err := strconv.Atoi(env); err == nil {
@@ -176,6 +187,23 @@ func resolveConfig(opts ...func(*config)) *config {
 // append more options to the list before using it with NewValueStore(list...).
 func OptList(opts ...func(*config)) []func(*config) {
 	return opts
+}
+
+// OptPath sets the path where values files will be written; tocvalues files
+// will also be written here unless overridden with OptPathTOC. Defaults to env
+// BRIMSTORE_PATH or the current working directory.
+func OptPath(dirpath string) func(*config) {
+	return func(cfg *config) {
+		cfg.path = dirpath
+	}
+}
+
+// OptPathTOC sets the path where tocvalues files will be written. Defaults to
+// env BRIMSTORE_PATHTOC or the OptPath value.
+func OptPathTOC(dirpath string) func(*config) {
+	return func(cfg *config) {
+		cfg.pathtoc = dirpath
+	}
 }
 
 // OptValueLocMap allows overriding the default ValueLocMap, an interface used
@@ -303,6 +331,8 @@ type ValueStore struct {
 	tocWriterDoneChan    chan struct{}
 	valueLocBlocks       []valueLocBlock
 	valueLocBlockIDer    uint32
+	path                 string
+	pathtoc              string
 	vlm                  ValueLocMap
 	cores                int
 	backgroundCores      int
@@ -352,6 +382,8 @@ type valueStoreStats struct {
 	pendingTOCBlockChanCap int
 	pendingTOCBlockChanIn  int
 	maxValueLocBlockID     uint32
+	path                   string
+	pathtoc                string
 	cores                  int
 	backgroundCores        int
 	backgroundInterval     int
@@ -409,6 +441,8 @@ func NewValueStore(opts ...func(*config)) *ValueStore {
 	}
 	vs := &ValueStore{
 		valueLocBlocks:     make([]valueLocBlock, math.MaxUint16),
+		path:               cfg.path,
+		pathtoc:            cfg.pathtoc,
 		vlm:                vlm,
 		cores:              cfg.cores,
 		backgroundCores:    cfg.backgroundCores,
@@ -582,6 +616,8 @@ func (vs *ValueStore) GatherStats(goroutines int, debug bool) (count uint64, len
 		stats.pendingTOCBlockChanCap = cap(vs.pendingTOCBlockChan)
 		stats.pendingTOCBlockChanIn = len(vs.pendingTOCBlockChan)
 		stats.maxValueLocBlockID = atomic.LoadUint32(&vs.valueLocBlockIDer)
+		stats.path = vs.path
+		stats.pathtoc = vs.pathtoc
 		stats.cores = vs.cores
 		stats.backgroundCores = vs.backgroundCores
 		stats.backgroundInterval = vs.backgroundInterval
@@ -835,7 +871,7 @@ func (vs *ValueStore) tocWriter() {
 				writerB = writerA
 				offsetB = offsetA
 				btsA = bts
-				fp, err := os.Create(fmt.Sprintf("%d.valuestoc", bts))
+				fp, err := os.Create(path.Join(vs.pathtoc, fmt.Sprintf("%d.valuestoc", bts)))
 				if err != nil {
 					panic(err)
 				}
@@ -856,7 +892,7 @@ func (vs *ValueStore) tocWriter() {
 
 func (vs *ValueStore) recovery() {
 	start := time.Now()
-	dfp, err := os.Open(".")
+	dfp, err := os.Open(vs.pathtoc)
 	if err != nil {
 		panic(err)
 	}
@@ -918,7 +954,7 @@ func (vs *ValueStore) recovery() {
 			continue
 		}
 		vf := newValuesFile(vs, bts)
-		fp, err := os.Open(names[i])
+		fp, err := os.Open(path.Join(vs.pathtoc, names[i]))
 		if err != nil {
 			log.Printf("error opening %s: %s\n", names[i], err)
 			continue
@@ -1058,6 +1094,8 @@ func (stats *valueStoreStats) String() string {
 			[]string{"pendingTOCBlockChanCap", fmt.Sprintf("%d", stats.pendingTOCBlockChanCap)},
 			[]string{"pendingTOCBlockChanIn", fmt.Sprintf("%d", stats.pendingTOCBlockChanIn)},
 			[]string{"maxValueLocBlockID", fmt.Sprintf("%d", stats.maxValueLocBlockID)},
+			[]string{"path", stats.path},
+			[]string{"pathtoc", stats.pathtoc},
 			[]string{"cores", fmt.Sprintf("%d", stats.cores)},
 			[]string{"backgroundCores", fmt.Sprintf("%d", stats.backgroundCores)},
 			[]string{"backgroundInterval", fmt.Sprintf("%d", stats.backgroundInterval)},

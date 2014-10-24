@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -38,7 +39,7 @@ type valuesFileWriteBuf struct {
 
 func newValuesFile(vs *ValueStore, bts int64) *valuesFile {
 	vf := &valuesFile{vs: vs, bts: bts}
-	name := fmt.Sprintf("%d.values", vf.bts)
+	name := path.Join(vs.path, fmt.Sprintf("%d.values", vf.bts))
 	vf.readerFPs = make([]brimutil.ChecksummedReader, vs.valuesFileReaders)
 	vf.readerLocks = make([]sync.Mutex, len(vf.readerFPs))
 	vf.readerLens = make([][]byte, len(vf.readerFPs))
@@ -56,7 +57,7 @@ func newValuesFile(vs *ValueStore, bts int64) *valuesFile {
 
 func createValuesFile(vs *ValueStore) *valuesFile {
 	vf := &valuesFile{vs: vs, bts: time.Now().UnixNano()}
-	name := fmt.Sprintf("%d.values", vf.bts)
+	name := path.Join(vs.path, fmt.Sprintf("%d.values", vf.bts))
 	fp, err := os.Create(name)
 	if err != nil {
 		panic(err)
