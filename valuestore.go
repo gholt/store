@@ -1,3 +1,19 @@
+// Package brimstore provides a disk-backed data structure for use in storing
+// []byte values referenced by 128 bit keys with options for replication.
+//
+// It can handle billions of keys (as memory allows) and full concurrent access
+// across many cores. All location information about each key is stored in
+// memory for speed, but values are stored on disk with the exception of
+// recently written data being buffered first and batched to disk later.
+//
+// This has been written with SSDs in mind, but spinning drives should work as
+// well, though storing valuestoc files (Table Of Contents, key location
+// information) on a separate disk from values files is recommended in that
+// case.
+//
+// TODO: List probably not comprehensive:
+//  Replication
+//  Compaction
 package brimstore
 
 import (
