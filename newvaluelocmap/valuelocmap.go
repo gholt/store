@@ -20,7 +20,6 @@ package newvaluelocmap
 
 import (
 	"fmt"
-	"math"
 	"os"
 	"runtime"
 	"strconv"
@@ -121,7 +120,8 @@ type ValueLocMap struct {
 	cores           uint32
 	splitCount      uint32
 	mergeCount      uint32
-	root            *node
+	rootsShift      uint64
+	roots           []node
 }
 
 type entry struct {
@@ -166,19 +166,23 @@ func NewValueLocMap(opts ...func(*config)) *ValueLocMap {
 		c <<= 1
 	}
 	vlm.lowMask = c - 1
+	vlm.rootsShift = 63
 	c = 2
 	for c < vlm.cores {
+		vlm.rootsShift--
 		c <<= 1
 	}
 	vlm.entriesLockMask = c - 1
 	vlm.splitCount = uint32(float64(uint32(1<<vlm.bits)) * cfg.splitMultiplier)
 	vlm.mergeCount = 0
-	vlm.root = &node{
-		highMask:     uint64(1) << 63,
-		rangeStart:   0,
-		rangeStop:    math.MaxUint64,
-		entries:      make([]entry, 1<<vlm.bits),
-		entriesLocks: make([]sync.RWMutex, vlm.entriesLockMask+1),
+	vlm.roots = make([]node, c)
+	j := uint64(1<<(64-vlm.rootsShift)) - 1
+	for i := 0; i < len(vlm.roots); i++ {
+		vlm.roots[i].highMask = 1 << (vlm.rootsShift - 1)
+		vlm.roots[i].rangeStart = uint64(i) << vlm.rootsShift
+		vlm.roots[i].rangeStop = vlm.roots[i].rangeStart + j
+		vlm.roots[i].entries = make([]entry, 1<<vlm.bits)
+		vlm.roots[i].entriesLocks = make([]sync.RWMutex, c)
 	}
 	return vlm
 }
@@ -591,7 +595,7 @@ func (vlm *ValueLocMap) merge(n *node) {
 
 // TODO: Change blockID returned to uint32
 func (vlm *ValueLocMap) Get(keyA uint64, keyB uint64) (uint64, uint16, uint32, uint32) {
-	n := vlm.root
+	n := &vlm.roots[keyA>>vlm.rootsShift]
 	n.lock.RLock()
 	for {
 		if n.a == nil {
@@ -639,7 +643,7 @@ func (vlm *ValueLocMap) Get(keyA uint64, keyB uint64) (uint64, uint16, uint32, u
 // TODO: Change blockID to be uint32
 func (vlm *ValueLocMap) Set(keyA uint64, keyB uint64, timestamp uint64, blockID uint16, offset uint32, length uint32, evenIfSameTimestamp bool) uint64 {
 	bblockID := uint32(blockID)
-	n := vlm.root
+	n := &vlm.roots[keyA>>vlm.rootsShift]
 	n.lock.RLock()
 	for {
 		if n.a == nil {
@@ -707,7 +711,7 @@ func (vlm *ValueLocMap) Set(keyA uint64, keyB uint64, timestamp uint64, blockID 
 					l.Unlock()
 					n.lock.RUnlock()
 					if u <= vlm.mergeCount {
-						vlm.merge(n)
+						vlm.merge(n) // TODO: Should be called on parent
 					}
 					return t
 				}
@@ -748,7 +752,7 @@ func (vlm *ValueLocMap) Set(keyA uint64, keyB uint64, timestamp uint64, blockID 
 					l.Unlock()
 					n.lock.RUnlock()
 					if u <= vlm.mergeCount {
-						vlm.merge(n)
+						vlm.merge(n) // TODO: Should be called on parent
 					}
 					return timestamp
 				}
