@@ -1,4 +1,4 @@
-package main
+package newvaluemap
 
 import (
 	"fmt"
