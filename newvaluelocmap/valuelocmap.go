@@ -149,6 +149,9 @@ type node struct {
 	used               uint32
 }
 
+type stats struct {
+}
+
 func NewValueLocMap(opts ...func(*config)) *ValueLocMap {
 	cfg := resolveConfig(opts...)
 	vlm := &ValueLocMap{cores: uint32(cfg.cores)}
@@ -182,6 +185,10 @@ func NewValueLocMap(opts ...func(*config)) *ValueLocMap {
 
 func (vlm *ValueLocMap) split(n *node) {
 	n.lock.Lock()
+	if n.a != nil {
+		n.lock.Unlock()
+		return
+	}
 	hm := n.highMask
 	an := &node{
 		highMask:           hm >> 1,
@@ -376,14 +383,29 @@ func (vlm *ValueLocMap) split(n *node) {
 }
 
 func (vlm *ValueLocMap) merge(n *node) {
+	// TODO: merge needs to sublock
+	if vlm != nil { // TODO: remove
+		return
+	}
 	n.lock.Lock()
+	if n.a == nil {
+		n.lock.Unlock()
+		return
+	}
+	an := n.a
+	bn := n.b
+	n.a = nil
+	n.b = nil
+	n.entries = an.entries
+	n.entriesLocks = an.entriesLocks
+	n.overflow = an.overflow
+	n.overflowLowestFree = an.overflowLowestFree
+	n.used = an.used
 	b := vlm.bits
 	lm := vlm.lowMask
-	an := n.a
 	aes := an.entries
 	ao := an.overflow
 	aoc := uint32(len(ao))
-	bn := n.b
 	bo := bn.overflow
 	// Move over all overflow entries that have an overflow entry pointing to
 	// them.
@@ -575,7 +597,7 @@ func (vlm *ValueLocMap) Get(keyA uint64, keyB uint64) (uint64, uint16, uint32, u
 		if n.a == nil {
 			break
 		}
-		l := n.lock
+		l := &n.lock
 		if keyA&n.highMask == 0 {
 			n = n.a
 		} else {
@@ -623,7 +645,7 @@ func (vlm *ValueLocMap) Set(keyA uint64, keyB uint64, timestamp uint64, blockID 
 		if n.a == nil {
 			break
 		}
-		l := n.lock
+		l := &n.lock
 		if keyA&n.highMask == 0 {
 			n = n.a
 		} else {
@@ -809,7 +831,7 @@ func (vlm *ValueLocMap) Set(keyA uint64, keyB uint64, timestamp uint64, blockID 
 }
 
 func (vlm *ValueLocMap) GatherStats(goroutines int, debug bool) (uint64, uint64, fmt.Stringer) {
-	return 0, 0, nil
+	return 0, 0, &stats{}
 }
 
 func (vlm *ValueLocMap) ScanCount(tombstoneCutoff uint64, start uint64, stop uint64, max uint64) uint64 {
@@ -898,3 +920,7 @@ func (n *node) String() string {
 	return fmt.Sprintf("node %p: %d size, %d locks, %d overflow pages, %d total used, %d %.1f%% entries used, %d %.1f%% overflow used, %.1f%% total used is overflowed, %d tombstones", n, bc, blc, oc, u, bu, 100*float64(bu)/float64(bc), ou, 100*float64(ou)/float64(oc*bc), 100*float64(ou)/float64(u), t)
 }
 */
+
+func (s *stats) String() string {
+	return ""
+}
