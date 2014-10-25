@@ -19,9 +19,9 @@ type entry struct {
 type node struct {
 	bits               uint32
 	mask               uint32
-	buckets            []entry
-	bucketLockMask     uint32
-	bucketLocks        []sync.RWMutex
+	entries            []entry
+	entriesLockMask    uint32
+	entriesLocks       []sync.RWMutex
 	overflow           [][]entry
 	overflowLowestFree uint32
 	overflowLock       sync.RWMutex
@@ -37,11 +37,11 @@ func newNode(bits uint32, lockBits uint32) *node {
 		lockBits = 1
 	}
 	return &node{
-		bits:           bits,
-		mask:           (1 << bits) - 1,
-		buckets:        make([]entry, 1<<bits),
-		bucketLockMask: (1 << lockBits) - 1,
-		bucketLocks:    make([]sync.RWMutex, 1<<lockBits),
+		bits:            bits,
+		mask:            (1 << bits) - 1,
+		entries:         make([]entry, 1<<bits),
+		entriesLockMask: (1 << lockBits) - 1,
+		entriesLocks:    make([]sync.RWMutex, 1<<lockBits),
 	}
 }
 
@@ -50,15 +50,17 @@ func (n *node) split(highMask uint64) *node {
 	b := n.bits
 	m := n.mask
 	nn := &node{
-		bits:           b,
-		mask:           m,
-		buckets:        make([]entry, len(n.buckets)),
-		bucketLockMask: n.bucketLockMask,
-		bucketLocks:    make([]sync.RWMutex, len(n.bucketLocks)),
+		bits:            b,
+		mask:            m,
+		entries:         make([]entry, len(n.entries)),
+		entriesLockMask: n.entriesLockMask,
+		entriesLocks:    make([]sync.RWMutex, len(n.entriesLocks)),
 	}
 	o := n.overflow
-	nes := nn.buckets
+	nes := nn.entries
 	noc := uint32(0)
+	// Move over all matching overflow entries that have an overflow entry
+	// pointing to them.
 	c := true
 	for c {
 		c = false
@@ -113,7 +115,9 @@ func (n *node) split(highMask uint64) *node {
 			}
 		}
 	}
-	es := n.buckets
+	// Now any matching overflow entries left are pointed to by their
+	// respective non-overflow entry. Move those.
+	es := n.entries
 	for i := uint32(0); i <= m; i++ {
 		e := &es[i]
 		if e.blockID != 0 && e.next != 0 {
@@ -161,10 +165,10 @@ func (n *node) split(highMask uint64) *node {
 			}
 		}
 	}
-	es = n.buckets
+	// Now any matching entries left are non-overflow entries. Move those.
 	for i := uint32(0); i <= m; i++ {
 		e := &es[i]
-		for e.blockID != 0 && e.keyA&highMask != 0 {
+		if e.blockID != 0 && e.keyA&highMask != 0 {
 			ne := &nes[i]
 			if ne.blockID == 0 {
 				*ne = *e
@@ -216,13 +220,201 @@ func (n *node) split(highMask uint64) *node {
 	return nn
 }
 
+func (n *node) merge(on *node) {
+	b := n.bits
+	m := n.mask
+	es := n.entries
+	o := n.overflow
+	oc := uint32(len(o))
+	// Move over all overflow entries that have an overflow entry pointing to
+	// them.
+	c := true
+	for c {
+		c = false
+		for _, oes := range on.overflow {
+			for i := uint32(0); i <= m; i++ {
+				oe := &oes[i]
+				if oe.blockID != 0 && oe.next != 0 {
+					oen := &on.overflow[oe.next>>b][oe.next&m]
+					e := &es[uint32(oen.keyB)&m]
+					if e.blockID == 0 {
+						*e = *oen
+						e.next = 0
+					} else {
+						if n.overflowLowestFree != 0 {
+							nA := n.overflowLowestFree >> b
+							nB := n.overflowLowestFree & m
+							e2 := &o[nA][nB]
+							*e2 = *oen
+							e2.next = e.next
+							e.next = n.overflowLowestFree
+							n.overflowLowestFree = 0
+							for {
+								if nB == m {
+									nA++
+									if nA == oc {
+										break
+									}
+									nB = 0
+								} else {
+									nB++
+								}
+								if o[nA][nB].blockID == 0 {
+									n.overflowLowestFree = nA<<b | nB
+									break
+								}
+							}
+						} else {
+							o = append(o, make([]entry, 1<<b))
+							n.overflow = o
+							if oc == 0 {
+								e2 := &o[0][1]
+								*e2 = *oen
+								e2.next = e.next
+								e.next = 1
+								n.overflowLowestFree = 2
+							} else {
+								e2 := &o[oc][0]
+								*e2 = *oen
+								e2.next = e.next
+								e.next = oc << b
+								n.overflowLowestFree = oc<<b + 1
+							}
+							oc++
+						}
+					}
+					n.used++
+					oe.next = oen.next
+					oen.blockID = 0
+					c = true
+				}
+			}
+		}
+	}
+	// Now we just have overflow entries that are pointed to by their
+	// respective non-overflow entries. Move those.
+	oes := on.entries
+	oo := on.overflow
+	for i := uint32(0); i <= m; i++ {
+		oe := &oes[i]
+		if oe.blockID != 0 && oe.next != 0 {
+			oen := &oo[oe.next>>b][oe.next&m]
+			e := &es[i]
+			if e.blockID == 0 {
+				*e = *oen
+				e.next = 0
+			} else {
+				if n.overflowLowestFree != 0 {
+					nA := n.overflowLowestFree >> b
+					nB := n.overflowLowestFree & m
+					e2 := &o[nA][nB]
+					*e2 = *oen
+					e2.next = e.next
+					e.next = n.overflowLowestFree
+					n.overflowLowestFree = 0
+					for {
+						if nB == m {
+							nA++
+							if nA == oc {
+								break
+							}
+							nB = 0
+						} else {
+							nB++
+						}
+						if o[nA][nB].blockID == 0 {
+							n.overflowLowestFree = nA<<b | nB
+							break
+						}
+					}
+				} else {
+					o = append(o, make([]entry, 1<<b))
+					n.overflow = o
+					if oc == 0 {
+						e2 := &o[0][1]
+						*e2 = *oen
+						e2.next = e.next
+						e.next = 1
+						n.overflowLowestFree = 2
+					} else {
+						e2 := &o[oc][0]
+						*e2 = *oen
+						e2.next = e.next
+						e.next = oc << b
+						n.overflowLowestFree = oc<<b + 1
+					}
+					oc++
+				}
+			}
+			n.used++
+			oen.blockID = 0
+		}
+	}
+	// Now we just have the non-overflow entries. Move those.
+	for i := uint32(0); i <= m; i++ {
+		oe := &oes[i]
+		if oe.blockID != 0 {
+			e := &es[i]
+			if e.blockID == 0 {
+				*e = *oe
+				e.next = 0
+			} else {
+				if n.overflowLowestFree != 0 {
+					nA := n.overflowLowestFree >> b
+					nB := n.overflowLowestFree & m
+					e2 := &o[nA][nB]
+					*e2 = *oe
+					e2.next = e.next
+					e.next = n.overflowLowestFree
+					n.overflowLowestFree = 0
+					for {
+						if nB == m {
+							nA++
+							if nA == oc {
+								break
+							}
+							nB = 0
+						} else {
+							nB++
+						}
+						if o[nA][nB].blockID == 0 {
+							n.overflowLowestFree = nA<<b | nB
+							break
+						}
+					}
+				} else {
+					o = append(o, make([]entry, 1<<b))
+					n.overflow = o
+					if oc == 0 {
+						e2 := &o[0][1]
+						*e2 = *oe
+						e2.next = e.next
+						e.next = 1
+						n.overflowLowestFree = 2
+					} else {
+						e2 := &o[oc][0]
+						*e2 = *oe
+						e2.next = e.next
+						e.next = oc << b
+						n.overflowLowestFree = oc<<b + 1
+					}
+					oc++
+				}
+			}
+			n.used++
+			oe.blockID = 0
+		}
+	}
+	on.used = 0
+}
+
 func (n *node) get(keyA uint64, keyB uint64) (uint64, uint32, uint32, uint32) {
 	b := n.bits
 	m := n.mask
 	i := uint32(keyB) & m
-	l := &n.bucketLocks[i%n.bucketLockMask]
+	l := &n.entriesLocks[i%n.entriesLockMask]
 	ol := &n.overflowLock
-	e := &n.buckets[i]
+	e := &n.entries[i]
 	l.RLock()
 	for {
 		if e.keyA == keyA && e.keyB == keyB {
@@ -248,9 +440,9 @@ func (n *node) set(keyA uint64, keyB uint64, timestamp uint64, blockID uint32, o
 	b := n.bits
 	m := n.mask
 	i := uint32(keyB) & m
-	l := &n.bucketLocks[i%n.bucketLockMask]
+	l := &n.entriesLocks[i%n.entriesLockMask]
 	ol := &n.overflowLock
-	e := &n.buckets[i]
+	e := &n.entries[i]
 	var p *entry
 	l.Lock()
 	for {
@@ -340,7 +532,7 @@ func (n *node) set(keyA uint64, keyB uint64, timestamp uint64, blockID uint32, o
 		ol.RUnlock()
 	}
 	if blockID != 0 {
-		e = &n.buckets[i]
+		e = &n.entries[i]
 		if e.blockID != 0 {
 			ol.Lock()
 			o := n.overflow
@@ -349,8 +541,8 @@ func (n *node) set(keyA uint64, keyB uint64, timestamp uint64, blockID uint32, o
 				nA := n.overflowLowestFree >> b
 				nB := n.overflowLowestFree & m
 				e = &o[nA][nB]
-				e.next = n.buckets[i].next
-				n.buckets[i].next = n.overflowLowestFree
+				e.next = n.entries[i].next
+				n.entries[i].next = n.overflowLowestFree
 				n.overflowLowestFree = 0
 				for {
 					if nB == m {
@@ -371,13 +563,13 @@ func (n *node) set(keyA uint64, keyB uint64, timestamp uint64, blockID uint32, o
 				n.overflow = append(n.overflow, make([]entry, 1<<b))
 				if oc == 0 {
 					e = &n.overflow[0][1]
-					e.next = n.buckets[i].next
-					n.buckets[i].next = 1
+					e.next = n.entries[i].next
+					n.entries[i].next = 1
 					n.overflowLowestFree = 2
 				} else {
 					e = &n.overflow[oc][0]
-					e.next = n.buckets[i].next
-					n.buckets[i].next = oc << b
+					e.next = n.entries[i].next
+					n.entries[i].next = oc << b
 					n.overflowLowestFree = oc<<b + 1
 				}
 			}
@@ -399,7 +591,7 @@ func (n *node) set(keyA uint64, keyB uint64, timestamp uint64, blockID uint32, o
 func (n *node) rangeCount(start uint64, stop uint64) uint64 {
 	var c uint64
 	m := n.mask
-	es := n.buckets
+	es := n.entries
 	for i := uint32(0); i <= m; i++ {
 		e := &es[i]
 		if e.blockID != 0 && e.keyA >= start && e.keyA <= stop {
@@ -420,7 +612,7 @@ func (n *node) rangeCount(start uint64, stop uint64) uint64 {
 // Ensure nothing writes to the node when calling RangeCallback.
 func (n *node) rangeCallback(start uint64, stop uint64, callback func(keyA uint64, keyB uint64, timestamp uint64)) {
 	m := n.mask
-	es := n.buckets
+	es := n.entries
 	for i := uint32(0); i <= m; i++ {
 		e := &es[i]
 		if e.blockID != 0 && e.keyA >= start && e.keyA <= stop {
@@ -442,7 +634,7 @@ func (n *node) stats() (uint32, uint32, uint32, uint32, uint32, uint32, uint32) 
 	var bu uint32
 	var t uint32
 	m := n.mask
-	es := n.buckets
+	es := n.entries
 	for i := uint32(0); i <= m; i++ {
 		e := &es[i]
 		if e.blockID != 0 {
@@ -464,11 +656,11 @@ func (n *node) stats() (uint32, uint32, uint32, uint32, uint32, uint32, uint32) 
 			}
 		}
 	}
-	return 1 << n.bits, uint32(n.bucketLockMask + 1), uint32(len(n.overflow)), atomic.LoadUint32(&n.used), bu, ou, t
+	return 1 << n.bits, uint32(n.entriesLockMask + 1), uint32(len(n.overflow)), atomic.LoadUint32(&n.used), bu, ou, t
 }
 
 // Ensure nothing writes to the node when calling String.
 func (n *node) String() string {
 	bc, blc, oc, u, bu, ou, t := n.stats()
-	return fmt.Sprintf("node %p: %d size, %d locks, %d overflow pages, %d total used, %d %.1f%% buckets used, %d %.1f%% overflow used, %.1f%% total used is overflowed, %d tombstones", n, bc, blc, oc, u, bu, 100*float64(bu)/float64(bc), ou, 100*float64(ou)/float64(oc*bc), 100*float64(ou)/float64(u), t)
+	return fmt.Sprintf("node %p: %d size, %d locks, %d overflow pages, %d total used, %d %.1f%% entries used, %d %.1f%% overflow used, %.1f%% total used is overflowed, %d tombstones", n, bc, blc, oc, u, bu, 100*float64(bu)/float64(bc), ou, 100*float64(ou)/float64(oc*bc), 100*float64(ou)/float64(u), t)
 }

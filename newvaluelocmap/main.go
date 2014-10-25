@@ -33,27 +33,34 @@ func main() {
 	fmt.Println(nn.rangeCount(0, 0x7fffffffffffffff))
 	fmt.Println(n.rangeCount(0x8000000000000000, 0xffffffffffffffff))
 	fmt.Println(nn.rangeCount(0x8000000000000000, 0xffffffffffffffff))
-	dur = time.Duration(0)
-	for it := 0; it < 100; it++ {
-		s = brimutil.NewSeededScrambled(1)
-		n = newNode(p, 6)
-		for i := uint32(0); i < count; i++ {
-			s.Read(k)
-			a, b := murmur3.Sum128(k)
-			n.set(a, b, t+uint64(binary.BigEndian.Uint32(k)), 1, i, i, false)
-		}
-		begin = time.Now()
-		nn = n.split(0x8000000000000000)
-		dur += time.Now().Sub(begin)
-	}
-	count *= 100
-	fmt.Printf("%s %f/s %fns each, splitting %d entries\n", dur, float64(count)/(float64(dur)/float64(time.Second)), float64(dur)/float64(count), count)
+	nn.merge(n)
 	fmt.Println(n)
 	fmt.Println(nn)
 	fmt.Println(n.rangeCount(0, 0x7fffffffffffffff))
 	fmt.Println(nn.rangeCount(0, 0x7fffffffffffffff))
 	fmt.Println(n.rangeCount(0x8000000000000000, 0xffffffffffffffff))
 	fmt.Println(nn.rangeCount(0x8000000000000000, 0xffffffffffffffff))
+	//dur = time.Duration(0)
+	//for it := 0; it < 100; it++ {
+	//	s = brimutil.NewSeededScrambled(1)
+	//	n = newNode(p, 6)
+	//	for i := uint32(0); i < count; i++ {
+	//		s.Read(k)
+	//		a, b := murmur3.Sum128(k)
+	//		n.set(a, b, t+uint64(binary.BigEndian.Uint32(k)), 1, i, i, false)
+	//	}
+	//	begin = time.Now()
+	//	nn = n.split(0x8000000000000000)
+	//	dur += time.Now().Sub(begin)
+	//}
+	//count *= 100
+	//fmt.Printf("%s %f/s %fns each, splitting %d entries\n", dur, float64(count)/(float64(dur)/float64(time.Second)), float64(dur)/float64(count), count)
+	//fmt.Println(n)
+	//fmt.Println(nn)
+	//fmt.Println(n.rangeCount(0, 0x7fffffffffffffff))
+	//fmt.Println(nn.rangeCount(0, 0x7fffffffffffffff))
+	//fmt.Println(n.rangeCount(0x8000000000000000, 0xffffffffffffffff))
+	//fmt.Println(nn.rangeCount(0x8000000000000000, 0xffffffffffffffff))
 	//s = brimutil.NewSeededScrambled(1)
 	//begin = time.Now()
 	//for i := uint32(0); i < count; i++ {
