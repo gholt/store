@@ -36,7 +36,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/gholt/brimstore/valuelocmap"
+	"github.com/gholt/brimstore/newvaluelocmap"
 	"github.com/gholt/brimtext"
 	"github.com/gholt/brimutil"
 	"github.com/spaolacci/murmur3"
@@ -309,15 +309,13 @@ var ErrNotFound error = errors.New("not found")
 // specify your own ValueLocMap implemention instead of the default.
 //
 // For documentation of each of these functions, see the default implementation
-// in valuelocmap.ValueLocMap.
+// in newvaluelocmap.ValueLocMap.
 type ValueLocMap interface {
 	Get(keyA uint64, keyB uint64) (timestamp uint64, blockID uint16, offset uint32, length uint32)
 	Set(keyA uint64, keyB uint64, timestamp uint64, blockID uint16, offset uint32, length uint32, evenIfSameTimestamp bool) (previousTimestamp uint64)
 	GatherStats(goroutines int, debug bool) (count uint64, length uint64, debugInfo fmt.Stringer)
-	Scan(tombstoneCutoff uint64, start uint64, stop uint64)
 	ScanCount(tombstoneCutoff uint64, start uint64, stop uint64, max uint64) uint64
 	ScanCallback(start uint64, stop uint64, callback func(keyA uint64, keyB uint64, timestamp uint64))
-	ScanCallbackFull(start uint64, stop uint64, callback func(keyA uint64, keyB uint64, timestamp uint64, blockID uint16, offset uint32, length uint32))
 }
 
 // ValueStore instances are created with NewValueStore.
@@ -438,7 +436,7 @@ func NewValueStore(opts ...func(*config)) *ValueStore {
 	cfg := resolveConfig(opts...)
 	vlm := cfg.vlm
 	if vlm == nil {
-		vlm = valuelocmap.NewValueLocMap()
+		vlm = newvaluelocmap.NewValueLocMap()
 	}
 	vs := &ValueStore{
 		valueLocBlocks:     make([]valueLocBlock, math.MaxUint16),
