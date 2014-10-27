@@ -30,6 +30,7 @@ import (
 
 type config struct {
 	cores           int
+	roots           int
 	pageSize        int
 	splitMultiplier float64
 }
@@ -47,6 +48,14 @@ func resolveConfig(opts ...func(*config)) *config {
 	}
 	if cfg.cores <= 0 {
 		cfg.cores = runtime.GOMAXPROCS(0)
+	}
+	if env := os.Getenv("BRIMSTORE_VALUELOCMAP_ROOTS"); env != "" {
+		if val, err := strconv.Atoi(env); err == nil {
+			cfg.roots = val
+		}
+	}
+	if cfg.roots <= 0 {
+		cfg.roots = cfg.cores * cfg.cores
 	}
 	if env := os.Getenv("BRIMSTORE_VALUELOCMAP_PAGESIZE"); env != "" {
 		if val, err := strconv.Atoi(env); err == nil {
@@ -70,6 +79,9 @@ func resolveConfig(opts ...func(*config)) *config {
 	if cfg.cores < 1 {
 		cfg.cores = 1
 	}
+	if cfg.roots < 2 {
+		cfg.roots = 2
+	}
 	if cfg.pageSize < 1 {
 		cfg.pageSize = 1
 	}
@@ -87,11 +99,21 @@ func OptList(opts ...func(*config)) []func(*config) {
 }
 
 // OptCores indicates how many cores may be in use (for calculating the number
-// of locks to create, for example) and how many cores may be used for resizes.
-// Defaults to env BRIMSTORE_VALUELOCMAP_CORES, BRIMSTORE_CORES, or GOMAXPROCS.
+// of locks to create, for example). Defaults to env
+// BRIMSTORE_VALUELOCMAP_CORES, BRIMSTORE_CORES, or GOMAXPROCS.
 func OptCores(cores int) func(*config) {
 	return func(cfg *config) {
 		cfg.cores = cores
+	}
+}
+
+// OptRoots indicates how many top level nodes the map should have. More top
+// level nodes means less contention but a bit more memory. Defaults to
+// BRIMSTORE_VALUELOCMAP_ROOTS or the OptCores value squared. This will be
+// rounded up to the next power of two.
+func OptRoots(roots int) func(*config) {
+	return func(cfg *config) {
+		cfg.roots = roots
 	}
 }
 
@@ -170,7 +192,7 @@ func NewValueLocMap(opts ...func(*config)) *ValueLocMap {
 	vlm.lowMask = c - 1
 	vlm.rootsShift = 63
 	c = 2
-	for c < vlm.cores*vlm.cores {
+	for c < uint32(cfg.roots) {
 		vlm.rootsShift--
 		c <<= 1
 	}
