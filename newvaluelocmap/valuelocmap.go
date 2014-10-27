@@ -27,6 +27,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"unsafe"
+
+	"github.com/gholt/brimtext"
 )
 
 type config struct {
@@ -176,6 +178,22 @@ type node struct {
 }
 
 type stats struct {
+	statsDebug        bool
+	cores             uint32
+	roots             uint32
+	usedRoots         uint32
+	entryPageSize     uint64
+	entryLockPageSize uint64
+	splitCount        uint32
+	nodes             uint64
+	depthCounts       []uint64
+	allocedEntries    uint64
+	allocedInOverflow uint64
+	usedEntries       uint64
+	usedInOverflow    uint64
+	tombstones        uint64
+	active            uint64
+	length            uint64
 }
 
 func NewValueLocMap(opts ...func(*config)) *ValueLocMap {
@@ -678,7 +696,7 @@ func (vlm *ValueLocMap) Get(keyA uint64, keyB uint64) (uint64, uint16, uint32, u
 			rl := e.length
 			l.RUnlock()
 			n.lock.RUnlock()
-			// TODO: Change tb to return full uint32
+			// TODO: Change rb to return full uint32
 			return rt, uint16(rb), ro, rl
 		}
 		if e.next == 0 {
@@ -899,96 +917,204 @@ func (vlm *ValueLocMap) Set(keyA uint64, keyB uint64, timestamp uint64, blockID 
 }
 
 func (vlm *ValueLocMap) GatherStats(goroutines int, debug bool) (uint64, uint64, fmt.Stringer) {
-	return 0, 0, &stats{}
+	s := &stats{
+		statsDebug:        debug,
+		cores:             vlm.cores,
+		roots:             uint32(len(vlm.roots)),
+		entryPageSize:     uint64(vlm.lowMask) + 1,
+		entryLockPageSize: uint64(vlm.entriesLockMask) + 1,
+		splitCount:        uint32(vlm.splitCount),
+	}
+	for i := uint32(0); i < s.roots; i++ {
+		n := &vlm.roots[i]
+		n.lock.Lock() // Will be released by gatherStats
+		if s.statsDebug && (n.a != nil || n.entries != nil) {
+			s.usedRoots++
+		}
+		vlm.gatherStats(s, n, 0)
+	}
+	return s.active, s.length, s
+}
+
+// Will call n.lock.Unlock()
+func (vlm *ValueLocMap) gatherStats(s *stats, n *node, depth int) {
+	if s.statsDebug {
+		s.nodes++
+		for len(s.depthCounts) <= depth {
+			s.depthCounts = append(s.depthCounts, 0)
+		}
+		s.depthCounts[depth]++
+	}
+	if n.a != nil {
+		n.a.lock.Lock() // Will be released by gatherStats
+		vlm.gatherStats(s, n.a, depth+1)
+		n.b.lock.Lock() // Will be released by gatherStats
+		n.lock.Unlock()
+		vlm.gatherStats(s, n.b, depth+1)
+	} else {
+		if s.statsDebug {
+			s.allocedEntries += uint64(len(n.entries))
+			for _, o := range n.overflow {
+				s.allocedEntries += uint64(len(o))
+				s.allocedInOverflow += uint64(len(o))
+			}
+		}
+		lm := vlm.lowMask
+		es := n.entries
+		for i := uint32(0); i <= lm; i++ {
+			e := &es[i]
+			if e.blockID != 0 {
+				if s.statsDebug {
+					s.usedEntries++
+					if e.timestamp&1 == 0 {
+						s.active++
+						s.length += uint64(e.length)
+					} else {
+						s.tombstones++
+					}
+				} else if e.timestamp&1 == 0 {
+					s.active++
+					s.length += uint64(e.length)
+				}
+			}
+		}
+		for _, es = range n.overflow {
+			for i := uint32(0); i <= lm; i++ {
+				e := &es[i]
+				if e.blockID != 0 {
+					if s.statsDebug {
+						s.usedEntries++
+						s.usedInOverflow++
+						if e.timestamp&1 == 0 {
+							s.active++
+							s.length += uint64(e.length)
+						} else {
+							s.tombstones++
+						}
+					} else if e.timestamp&1 == 0 {
+						s.active++
+						s.length += uint64(e.length)
+					}
+				}
+			}
+		}
+		n.lock.Unlock()
+	}
 }
 
 func (vlm *ValueLocMap) ScanCount(tombstoneCutoff uint64, start uint64, stop uint64, max uint64) uint64 {
-	return 0
-}
-
-func (vlm *ValueLocMap) ScanCallback(start uint64, stop uint64, callback func(keyA uint64, keyB uint64, timestamp uint64)) {
-}
-
-/*
-// Ensure nothing writes to the node when calling RangeCount.
-func (n *node) rangeCount(start uint64, stop uint64) uint64 {
 	var c uint64
-	lm := n.lowMask
-	es := n.entries
-	for i := uint32(0); i <= lm; i++ {
-		e := &es[i]
-		if e.blockID != 0 && e.keyA >= start && e.keyA <= stop {
-			c++
-		}
-	}
-	for _, es = range n.overflow {
-		for i := uint32(0); i <= lm; i++ {
-			e := &es[i]
-			if e.blockID != 0 && e.keyA >= start && e.keyA <= stop {
-				c++
-			}
-		}
+	for i := 0; i < len(vlm.roots); i++ {
+		n := &vlm.roots[i]
+		n.lock.Lock() // Will be released by scanCount
+		c += vlm.scanCount(tombstoneCutoff, start, stop, max, n)
 	}
 	return c
 }
 
-// Ensure nothing writes to the node when calling RangeCallback.
-func (n *node) rangeCallback(start uint64, stop uint64, callback func(keyA uint64, keyB uint64, timestamp uint64)) {
-	lm := n.lowMask
-	es := n.entries
-	for i := uint32(0); i <= lm; i++ {
-		e := &es[i]
-		if e.blockID != 0 && e.keyA >= start && e.keyA <= stop {
-			callback(e.keyA, e.keyB, e.timestamp)
+// Will call n.lock.Unlock()
+func (vlm *ValueLocMap) scanCount(tombstoneCutoff uint64, start uint64, stop uint64, max uint64, n *node) uint64 {
+	var c uint64
+	if n.a != nil {
+		n.a.lock.Lock() // Will be released by scanCount
+		c += vlm.scanCount(tombstoneCutoff, start, stop, max, n.a)
+		n.b.lock.Lock() // Will be released by scanCount
+		n.lock.Unlock()
+		c += vlm.scanCount(tombstoneCutoff, start, stop, max, n.b)
+	} else {
+		// TODO: This is wrong. Need to scan each bucket and if discarding
+		// tombstones slide the nexts backwards. Or do like is done with split,
+		// working from outside back in. Either way, this is wrong.
+		lm := vlm.lowMask
+		es := n.entries
+		for i := uint32(0); i <= lm; i++ {
+			e := &es[i]
+			if e.blockID != 0 && e.keyA >= start && e.keyA <= stop {
+				if e.timestamp&1 != 0 && e.timestamp < tombstoneCutoff {
+					e.blockID = 0
+				} else {
+					c++
+				}
+			}
 		}
+		for _, es = range n.overflow {
+			for i := uint32(0); i <= lm; i++ {
+				e := &es[i]
+				if e.blockID != 0 && e.keyA >= start && e.keyA <= stop {
+					if e.timestamp&1 != 0 && e.timestamp < tombstoneCutoff {
+						e.blockID = 0
+					} else {
+						c++
+					}
+				}
+			}
+		}
+		n.lock.Unlock()
 	}
-	for _, es = range n.overflow {
+	return c
+}
+
+func (vlm *ValueLocMap) ScanCallback(start uint64, stop uint64, callback func(keyA uint64, keyB uint64, timestamp uint64)) {
+	for i := 0; i < len(vlm.roots); i++ {
+		n := &vlm.roots[i]
+		n.lock.Lock() // Will be released by scanCallback
+		vlm.scanCallback(start, stop, callback, n)
+	}
+}
+
+func (vlm *ValueLocMap) scanCallback(start uint64, stop uint64, callback func(keyA uint64, keyB uint64, timestamp uint64), n *node) {
+	if n.a != nil {
+		n.a.lock.Lock() // Will be released by scanCallback
+		vlm.scanCallback(start, stop, callback, n.a)
+		n.b.lock.Lock() // Will be released by scanCallback
+		n.lock.Unlock()
+		vlm.scanCallback(start, stop, callback, n.b)
+	} else {
+		lm := vlm.lowMask
+		es := n.entries
 		for i := uint32(0); i <= lm; i++ {
 			e := &es[i]
 			if e.blockID != 0 && e.keyA >= start && e.keyA <= stop {
 				callback(e.keyA, e.keyB, e.timestamp)
 			}
 		}
-	}
-}
-
-// Ensure nothing writes to the node when calling Stats.
-func (n *node) stats() (uint32, uint32, uint32, uint32, uint32, uint32, uint32) {
-	var bu uint32
-	var t uint32
-	lm := n.lowMask
-	es := n.entries
-	for i := uint32(0); i <= lm; i++ {
-		e := &es[i]
-		if e.blockID != 0 {
-			bu++
-			if e.timestamp&1 != 0 {
-				t++
-			}
-		}
-	}
-	var ou uint32
-	for _, es = range n.overflow {
-		for i := uint32(0); i <= lm; i++ {
-			e := &es[i]
-			if e.blockID != 0 {
-				ou++
-				if e.timestamp&1 != 0 {
-					t++
+		for _, es = range n.overflow {
+			for i := uint32(0); i <= lm; i++ {
+				e := &es[i]
+				if e.blockID != 0 && e.keyA >= start && e.keyA <= stop {
+					callback(e.keyA, e.keyB, e.timestamp)
 				}
 			}
 		}
+		n.lock.Unlock()
 	}
-	return 1 << n.bits, uint32(n.entriesLockMask + 1), uint32(len(n.overflow)), atomic.LoadUint32(&n.used), bu, ou, t
 }
-
-// Ensure nothing writes to the node when calling String.
-func (n *node) String() string {
-	bc, blc, oc, u, bu, ou, t := n.stats()
-	return fmt.Sprintf("node %p: %d size, %d locks, %d overflow pages, %d total used, %d %.1f%% entries used, %d %.1f%% overflow used, %.1f%% total used is overflowed, %d tombstones", n, bc, blc, oc, u, bu, 100*float64(bu)/float64(bc), ou, 100*float64(ou)/float64(oc*bc), 100*float64(ou)/float64(u), t)
-}
-*/
 
 func (s *stats) String() string {
-	return ""
+	if s.statsDebug {
+		depthCounts := fmt.Sprintf("%d", s.depthCounts[0])
+		for i := 1; i < len(s.depthCounts); i++ {
+			depthCounts += fmt.Sprintf(" %d", s.depthCounts[i])
+		}
+		return brimtext.Align([][]string{
+			[]string{"cores", fmt.Sprintf("%d", s.cores)},
+			[]string{"roots", fmt.Sprintf("%d (%d bytes)", s.roots, uint64(s.roots)*uint64(unsafe.Sizeof(node{})))},
+			[]string{"usedRoots", fmt.Sprintf("%d", s.usedRoots)},
+			[]string{"entryPageSize", fmt.Sprintf("%d (%d bytes)", s.entryPageSize, uint64(s.entryPageSize)*uint64(unsafe.Sizeof(entry{})))},
+			[]string{"entryLockPageSize", fmt.Sprintf("%d (%d bytes)", s.entryLockPageSize, uint64(s.entryLockPageSize)*uint64(unsafe.Sizeof(sync.RWMutex{})))},
+			[]string{"splitCount", fmt.Sprintf("%d +-10%%", s.splitCount)},
+			[]string{"nodes", fmt.Sprintf("%d", s.nodes)},
+			[]string{"depth", fmt.Sprintf("%d", len(s.depthCounts))},
+			[]string{"depthCounts", depthCounts},
+			[]string{"allocedEntries", fmt.Sprintf("%d", s.allocedEntries)},
+			[]string{"allocedInOverflow", fmt.Sprintf("%d %.1f%%", s.allocedInOverflow, 100*float64(s.allocedInOverflow)/float64(s.allocedEntries))},
+			[]string{"usedEntries", fmt.Sprintf("%d %.1f%%", s.usedEntries, 100*float64(s.usedEntries)/float64(s.allocedEntries))},
+			[]string{"usedInOverflow", fmt.Sprintf("%d %.1f%%", s.usedInOverflow, 100*float64(s.usedInOverflow)/float64(s.usedEntries))},
+			[]string{"tombstones", fmt.Sprintf("%d %.1f%%", s.tombstones, 100*float64(s.tombstones)/float64(s.usedEntries))},
+			[]string{"active", fmt.Sprintf("%d %.1f%%", s.active, 100*float64(s.active)/float64(s.usedEntries))},
+			[]string{"length", fmt.Sprintf("%d", s.length)},
+		}, nil)
+	} else {
+		return brimtext.Align([][]string{}, nil)
+	}
 }
