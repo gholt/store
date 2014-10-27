@@ -20,6 +20,7 @@ package newvaluelocmap
 
 import (
 	"fmt"
+	"math/rand"
 	"os"
 	"runtime"
 	"strconv"
@@ -141,7 +142,6 @@ type ValueLocMap struct {
 	entriesLockMask uint32
 	cores           uint32
 	splitCount      uint32
-	mergeCount      uint32
 	rootsShift      uint64
 	roots           []node
 }
@@ -163,6 +163,8 @@ type node struct {
 	highMask           uint64
 	rangeStart         uint64
 	rangeStop          uint64
+	splitCount         uint32
+	mergeCount         uint32
 	a                  *node
 	b                  *node
 	entries            []entry
@@ -198,13 +200,14 @@ func NewValueLocMap(opts ...func(*config)) *ValueLocMap {
 	}
 	vlm.entriesLockMask = c - 1
 	vlm.splitCount = uint32(float64(uint32(1<<vlm.bits)) * cfg.splitMultiplier)
-	vlm.mergeCount = 0
 	vlm.roots = make([]node, c)
 	j := uint64(1<<(64-vlm.rootsShift)) - 1
 	for i := 0; i < len(vlm.roots); i++ {
 		vlm.roots[i].highMask = 1 << (vlm.rootsShift - 1)
 		vlm.roots[i].rangeStart = uint64(i) << vlm.rootsShift
 		vlm.roots[i].rangeStop = vlm.roots[i].rangeStart + j
+		vlm.roots[i].splitCount = uint32(float64(vlm.splitCount) + (rand.Float64()-.5)/5*float64(vlm.splitCount))
+		vlm.roots[i].mergeCount = uint32(rand.Float64() / 10 * float64(vlm.splitCount))
 	}
 	return vlm
 }
@@ -227,6 +230,8 @@ func (vlm *ValueLocMap) split2(n *node) {
 		highMask:           hm >> 1,
 		rangeStart:         n.rangeStart,
 		rangeStop:          n.rangeStop - hm,
+		splitCount:         uint32(float64(vlm.splitCount) + (rand.Float64()-.5)/5*float64(vlm.splitCount)),
+		mergeCount:         uint32(rand.Float64() / 10 * float64(vlm.splitCount)),
 		entries:            n.entries,
 		entriesLocks:       n.entriesLocks,
 		overflow:           n.overflow,
@@ -237,6 +242,8 @@ func (vlm *ValueLocMap) split2(n *node) {
 		highMask:     hm >> 1,
 		rangeStart:   n.rangeStart + hm,
 		rangeStop:    n.rangeStop,
+		splitCount:   uint32(float64(vlm.splitCount) + (rand.Float64()-.5)/5*float64(vlm.splitCount)),
+		mergeCount:   uint32(rand.Float64() / 10 * float64(vlm.splitCount)),
 		entries:      make([]entry, len(n.entries)),
 		entriesLocks: make([]sync.RWMutex, len(n.entriesLocks)),
 	}
@@ -745,7 +752,7 @@ func (vlm *ValueLocMap) Set(keyA uint64, keyB uint64, timestamp uint64, blockID 
 					u := atomic.AddUint32(&n.used, 1)
 					l.Unlock()
 					n.lock.RUnlock()
-					if u >= vlm.splitCount {
+					if u >= n.splitCount {
 						vlm.split(n)
 					}
 					return 0
@@ -767,7 +774,7 @@ func (vlm *ValueLocMap) Set(keyA uint64, keyB uint64, timestamp uint64, blockID 
 					}
 					l.Unlock()
 					n.lock.RUnlock()
-					if u <= vlm.mergeCount && pn != nil {
+					if u <= n.mergeCount && pn != nil {
 						vlm.merge(pn)
 					}
 					return t
@@ -791,7 +798,7 @@ func (vlm *ValueLocMap) Set(keyA uint64, keyB uint64, timestamp uint64, blockID 
 					u := atomic.AddUint32(&n.used, 1)
 					l.Unlock()
 					n.lock.RUnlock()
-					if u >= vlm.splitCount {
+					if u >= n.splitCount {
 						vlm.split(n)
 					}
 					return timestamp
@@ -808,7 +815,7 @@ func (vlm *ValueLocMap) Set(keyA uint64, keyB uint64, timestamp uint64, blockID 
 					}
 					l.Unlock()
 					n.lock.RUnlock()
-					if u <= vlm.mergeCount && pn != nil {
+					if u <= n.mergeCount && pn != nil {
 						vlm.merge(pn)
 					}
 					return timestamp
@@ -885,7 +892,7 @@ func (vlm *ValueLocMap) Set(keyA uint64, keyB uint64, timestamp uint64, blockID 
 	}
 	l.Unlock()
 	n.lock.RUnlock()
-	if u >= vlm.splitCount {
+	if u >= n.splitCount {
 		vlm.split(n)
 	}
 	return 0
