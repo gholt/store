@@ -170,7 +170,7 @@ func NewValueLocMap(opts ...func(*config)) *ValueLocMap {
 	vlm.lowMask = c - 1
 	vlm.rootsShift = 63
 	c = 2
-	for c < vlm.cores {
+	for c < vlm.cores*vlm.cores {
 		vlm.rootsShift--
 		c <<= 1
 	}
@@ -183,8 +183,6 @@ func NewValueLocMap(opts ...func(*config)) *ValueLocMap {
 		vlm.roots[i].highMask = 1 << (vlm.rootsShift - 1)
 		vlm.roots[i].rangeStart = uint64(i) << vlm.rootsShift
 		vlm.roots[i].rangeStop = vlm.roots[i].rangeStart + j
-		vlm.roots[i].entries = make([]entry, 1<<vlm.bits)
-		vlm.roots[i].entriesLocks = make([]sync.RWMutex, c)
 	}
 	return vlm
 }
@@ -621,6 +619,10 @@ func (vlm *ValueLocMap) Get(keyA uint64, keyB uint64) (uint64, uint16, uint32, u
 	n.lock.RLock()
 	for {
 		if n.a == nil {
+			if n.entries == nil {
+				n.lock.RUnlock()
+				return 0, 0, 0, 0
+			}
 			break
 		}
 		l := &n.lock
@@ -670,6 +672,16 @@ func (vlm *ValueLocMap) Set(keyA uint64, keyB uint64, timestamp uint64, blockID 
 	n.lock.RLock()
 	for {
 		if n.a == nil {
+			if n.entries == nil {
+				n.lock.RUnlock()
+				n.lock.Lock()
+				if n.entries == nil {
+					n.entries = make([]entry, 1<<vlm.bits)
+					n.entriesLocks = make([]sync.RWMutex, vlm.entriesLockMask+1)
+				}
+				n.lock.Unlock()
+				n.lock.RLock()
+			}
 			break
 		}
 		pn = n
