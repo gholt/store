@@ -135,6 +135,8 @@ type entry struct {
 }
 
 type node struct {
+	resizingLock       sync.Mutex
+	resizing           bool
 	lock               sync.RWMutex
 	highMask           uint64
 	rangeStart         uint64
@@ -187,9 +189,19 @@ func NewValueLocMap(opts ...func(*config)) *ValueLocMap {
 	return vlm
 }
 
-// split is called after obtaining the n.lock and will free that lock before
-// returning.
 func (vlm *ValueLocMap) split(n *node) {
+	n.resizingLock.Lock()
+	if n.resizing {
+		n.resizingLock.Unlock()
+		return
+	}
+	n.resizing = true
+	n.resizingLock.Unlock()
+	go vlm.split2(n)
+}
+
+func (vlm *ValueLocMap) split2(n *node) {
+	n.lock.Lock()
 	hm := n.highMask
 	an := &node{
 		highMask:           hm >> 1,
@@ -381,11 +393,24 @@ func (vlm *ValueLocMap) split(n *node) {
 		}
 	}
 	n.lock.Unlock()
+	n.resizingLock.Lock()
+	n.resizing = false
+	n.resizingLock.Unlock()
 }
 
-// merge is called after obtaining the n.lock and will free that lock before
-// returning.
 func (vlm *ValueLocMap) merge(n *node) {
+	n.resizingLock.Lock()
+	if n.resizing {
+		n.resizingLock.Unlock()
+		return
+	}
+	n.resizing = true
+	n.resizingLock.Unlock()
+	go vlm.merge2(n)
+}
+
+func (vlm *ValueLocMap) merge2(n *node) {
+	n.lock.Lock()
 	an := n.a
 	bn := n.b
 	an.lock.Lock()
@@ -585,6 +610,9 @@ func (vlm *ValueLocMap) merge(n *node) {
 	bn.lock.Unlock()
 	an.lock.Unlock()
 	n.lock.Unlock()
+	n.resizingLock.Lock()
+	n.resizing = false
+	n.resizingLock.Unlock()
 }
 
 // TODO: Change blockID returned to uint32
@@ -684,12 +712,7 @@ func (vlm *ValueLocMap) Set(keyA uint64, keyB uint64, timestamp uint64, blockID 
 					l.Unlock()
 					n.lock.RUnlock()
 					if u >= vlm.splitCount {
-						n.lock.Lock()
-						if n.a == nil {
-							go vlm.split(n) // split will free lock
-						} else {
-							n.lock.Unlock()
-						}
+						vlm.split(n)
 					}
 					return 0
 				}
@@ -711,12 +734,7 @@ func (vlm *ValueLocMap) Set(keyA uint64, keyB uint64, timestamp uint64, blockID 
 					l.Unlock()
 					n.lock.RUnlock()
 					if u <= vlm.mergeCount && pn != nil {
-						pn.lock.Lock()
-						if pn.a != nil {
-							go vlm.merge(pn) // merge will free lock
-						} else {
-							pn.lock.Unlock()
-						}
+						vlm.merge(pn)
 					}
 					return t
 				}
@@ -740,12 +758,7 @@ func (vlm *ValueLocMap) Set(keyA uint64, keyB uint64, timestamp uint64, blockID 
 					l.Unlock()
 					n.lock.RUnlock()
 					if u >= vlm.splitCount {
-						n.lock.Lock()
-						if n.a == nil {
-							go vlm.split(n) // split will free lock
-						} else {
-							n.lock.Unlock()
-						}
+						vlm.split(n)
 					}
 					return timestamp
 				} else if e.blockID != 0 {
@@ -762,12 +775,7 @@ func (vlm *ValueLocMap) Set(keyA uint64, keyB uint64, timestamp uint64, blockID 
 					l.Unlock()
 					n.lock.RUnlock()
 					if u <= vlm.mergeCount && pn != nil {
-						pn.lock.Lock()
-						if pn.a != nil {
-							go vlm.merge(pn) // merge will free lock
-						} else {
-							pn.lock.Unlock()
-						}
+						vlm.merge(pn)
 					}
 					return timestamp
 				}
@@ -844,12 +852,7 @@ func (vlm *ValueLocMap) Set(keyA uint64, keyB uint64, timestamp uint64, blockID 
 	l.Unlock()
 	n.lock.RUnlock()
 	if u >= vlm.splitCount {
-		n.lock.Lock()
-		if n.a == nil {
-			go vlm.split(n) // split will free lock
-		} else {
-			n.lock.Unlock()
-		}
+		vlm.split(n)
 	}
 	return 0
 }
