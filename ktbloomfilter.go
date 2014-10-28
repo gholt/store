@@ -17,6 +17,7 @@ type ktBloomFilter struct {
 	kDiv4   uint32
 	bits    []byte
 	scratch []byte
+	added   uint64
 }
 
 func newKTBloomFilter(n uint64, p float64, salt uint16) *ktBloomFilter {
@@ -37,6 +38,7 @@ func (ktbf *ktBloomFilter) String() string {
 }
 
 func (ktbf *ktBloomFilter) add(keyA uint64, keyB uint64, timestamp uint64) {
+	ktbf.added++
 	if !ktbf.hasData {
 		ktbf.hasData = true
 	}

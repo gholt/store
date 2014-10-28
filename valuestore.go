@@ -28,7 +28,6 @@ import (
 	"os"
 	"path"
 	"runtime"
-	"runtime/pprof"
 	"sort"
 	"strconv"
 	"strings"
@@ -404,14 +403,6 @@ type backgroundNotification struct {
 	doneChan   chan struct{}
 }
 
-type backgroundRun struct {
-	vlm             ValueLocMap
-	goroutines      int
-	funcChan        chan func()
-	iteration       uint16
-	tombstoneCutoff uint64
-}
-
 // NewValueStore creates a ValueStore for use in storing []byte values
 // referenced by 128 bit keys.
 //
@@ -505,7 +496,6 @@ func (vs *ValueStore) MaxValueSize() uint32 {
 // Close shuts down all background processing and the ValueStore will refuse
 // any additional writes; reads may still occur.
 func (vs *ValueStore) Close() {
-	fmt.Println("GLH Close")
 	for _, c := range vs.pendingVWRChans {
 		c <- nil
 	}
@@ -513,9 +503,7 @@ func (vs *ValueStore) Close() {
 		<-vs.freeVMChan
 	}
 	<-vs.tocWriterDoneChan
-	fmt.Println("GLH Close BackgroundStop")
 	vs.BackgroundStop()
-	fmt.Println("GLH Close done")
 }
 
 // Lookup will return timestamp, length, err for keyA, keyB.
@@ -1199,27 +1187,11 @@ WORK:
 	vs.backgroundDoneChan <- struct{}{}
 }
 
-func (vs *ValueStore) background(goroutines int) {
-	// TODO: Disabled by default for the moment as I work on performance.
-	if goroutines != -1 {
-		return
-	}
-	log.Println("background")
-	fp, err := os.Create("background.pprof")
-	if err != nil {
-		panic(err)
-	}
-	pprof.StartCPUProfile(fp)
-	runtime.GC()
-	begin := time.Now()
-	if goroutines < 0 {
-		//time.Sleep(2 * time.Minute)
-		pprof.StopCPUProfile()
-		fp.Close()
-		return
-	}
-	goroutines = 0
+const _GLH_BLOOM_FILTER_N = 1000000
+const _GLH_BLOOM_FILTER_P = 0.001
 
+func (vs *ValueStore) background(goroutines int) {
+	begin := time.Now()
 	if goroutines < 1 {
 		goroutines = vs.backgroundCores
 	}
@@ -1228,85 +1200,48 @@ func (vs *ValueStore) background(goroutines int) {
 	} else {
 		vs.backgroundIteration++
 	}
-	bg := &backgroundRun{
-		goroutines:      goroutines,
-		funcChan:        make(chan func(), goroutines),
-		iteration:       vs.backgroundIteration,
-		tombstoneCutoff: uint64(time.Now().UnixNano()) - vs.tombstoneAge,
-	}
-	funcsDone := make(chan struct{}, 1)
-	go func() {
-		wg := &sync.WaitGroup{}
-		for {
-			f := <-bg.funcChan
-			if f == nil {
-				break
+	iteration := vs.backgroundIteration
+	tombstoneCutoff := uint64(time.Now().UnixNano()) - vs.tombstoneAge
+	partitionPower := uint16(8)
+	partitions := uint32(1) << partitionPower
+	wg := &sync.WaitGroup{}
+	wg.Add(goroutines)
+	for g := 0; g < goroutines; g++ {
+		go func(g int) {
+			var pullSize uint64
+			for p := uint32(g); p < partitions; p += uint32(goroutines) {
+				// Here I'm doing "pull" replication scans for every partition
+				// when eventually it should just do this for partitions we're
+				// in the ring for. Partitions we're not in the ring for
+				// (handoffs, old data from ring changes, etc.) we should just
+				// send out what data we have and the remove it locally.
+				start := uint64(p) << uint64(64-partitionPower)
+				stop := start + ((uint64(1) << (64 - partitionPower)) - 1)
+				if pullSize == 0 {
+					pullSize = uint64(1) << (64 - partitionPower)
+					for vs.vlm.ScanCount(tombstoneCutoff, start, start+(pullSize-1), _GLH_BLOOM_FILTER_N) >= _GLH_BLOOM_FILTER_N {
+						pullSize /= 2
+					}
+				}
+				substart := start
+				substop := start + (pullSize - 1)
+				for {
+					ktbf := newKTBloomFilter(_GLH_BLOOM_FILTER_N, _GLH_BLOOM_FILTER_P, iteration)
+					vs.vlm.ScanCallback(substart, substop, ktbf.add)
+					fmt.Printf("GLH %d %016x->%016x %016x %d\n", p, substart, substop, pullSize, ktbf.added)
+					substart += pullSize
+					if substart < start {
+						break
+					}
+					substop += pullSize
+					if substop >= stop || substop < substart {
+						break
+					}
+				}
 			}
-			wg.Add(1)
-			go func() {
-				f()
-				wg.Done()
-			}()
-		}
-		wg.Wait()
-		funcsDone <- struct{}{}
-	}()
-	p := 0
-	ppower := 8
-	pincrement := uint64(1) << uint64(64-ppower)
-	pstart := uint64(0)
-	pstop := pstart + (pincrement - 1)
-	for {
-		// Here I'm doing bloom filter scans for every partition when
-		// eventually it should just do filters for partitions we're in the
-		// ring for. Partitions we're not in the ring for (handoffs, old
-		// data from ring changes, etc.) we should just send out what data
-		// we have and the remove it locally.
-		bg.funcChan <- func(p int, pstart uint64, pstop uint64) func() {
-			return func() {
-				vs.bloom(bg, p, pstart, pstop)
-			}
-		}(p, pstart, pstop)
-		if pstop == math.MaxUint64 {
-			break
-		}
-		p++
-		pstart += pincrement
-		pstop += pincrement
-		if pstop == math.MaxUint64 {
-			break
-		}
+			wg.Done()
+		}(g)
 	}
-	log.Println("background sending nil")
-	bg.funcChan <- nil
-	log.Println("background waiting for funcsDone")
-	<-funcsDone
-
-	log.Println(time.Now().Sub(begin), "to run background tasks, iteration", bg.iteration)
-	pprof.StopCPUProfile()
-	fp.Close()
-}
-
-const _GLH_BLOOM_FILTER_N = 1000000
-const _GLH_BLOOM_FILTER_P = 0.001
-
-func (vs *ValueStore) bloom(bg *backgroundRun, p int, pstart uint64, pstop uint64) {
-	count := vs.vlm.ScanCount(bg.tombstoneCutoff, pstart, pstop, _GLH_BLOOM_FILTER_N)
-	for count > _GLH_BLOOM_FILTER_N {
-		pstopNew := pstart + (pstop-pstart+1)/2 - 1
-		func(pstart uint64) {
-			bg.funcChan <- func() {
-				vs.bloom(bg, p, pstart, pstop)
-			}
-		}(pstopNew + 1)
-		pstop = pstopNew
-		count = vs.vlm.ScanCount(bg.tombstoneCutoff, pstart, pstop, _GLH_BLOOM_FILTER_N)
-	}
-	if count > 0 {
-		ktbf := newKTBloomFilter(_GLH_BLOOM_FILTER_N, _GLH_BLOOM_FILTER_P, bg.iteration)
-		vs.vlm.ScanCallback(pstart, pstop, ktbf.add)
-		if ktbf.hasData {
-			// TODO
-		}
-	}
+	wg.Wait()
+	log.Println(time.Now().Sub(begin), "background tasks")
 }
