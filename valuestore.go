@@ -13,7 +13,9 @@
 //
 // TODO: List probably not comprehensive:
 //  Replication
+//      blockID = 0 setting due to replication of handoffs
 //  Compaction
+//  Tombstone cleaning
 package brimstore
 
 import (
@@ -313,7 +315,7 @@ type ValueLocMap interface {
 	Get(keyA uint64, keyB uint64) (timestamp uint64, blockID uint16, offset uint32, length uint32)
 	Set(keyA uint64, keyB uint64, timestamp uint64, blockID uint16, offset uint32, length uint32, evenIfSameTimestamp bool) (previousTimestamp uint64)
 	GatherStats(debug bool) (count uint64, length uint64, debugInfo fmt.Stringer)
-	ScanCount(tombstoneCutoff uint64, start uint64, stop uint64, max uint64) uint64
+	ScanCount(start uint64, stop uint64, max uint64) uint64
 	ScanCallback(start uint64, stop uint64, callback func(keyA uint64, keyB uint64, timestamp uint64))
 }
 
@@ -1201,7 +1203,7 @@ func (vs *ValueStore) background(goroutines int) {
 		vs.backgroundIteration++
 	}
 	iteration := vs.backgroundIteration
-	tombstoneCutoff := uint64(time.Now().UnixNano()) - vs.tombstoneAge
+	//tombstoneCutoff := uint64(time.Now().UnixNano()) - vs.tombstoneAge
 	partitionPower := uint16(8)
 	partitions := uint32(1) << partitionPower
 	wg := &sync.WaitGroup{}
@@ -1219,7 +1221,7 @@ func (vs *ValueStore) background(goroutines int) {
 				stop := start + ((uint64(1) << (64 - partitionPower)) - 1)
 				if pullSize == 0 {
 					pullSize = uint64(1) << (64 - partitionPower)
-					for vs.vlm.ScanCount(tombstoneCutoff, start, start+(pullSize-1), _GLH_BLOOM_FILTER_N) >= _GLH_BLOOM_FILTER_N {
+					for vs.vlm.ScanCount(start, start+(pullSize-1), _GLH_BLOOM_FILTER_N) >= _GLH_BLOOM_FILTER_N {
 						pullSize /= 2
 					}
 				}
@@ -1228,7 +1230,6 @@ func (vs *ValueStore) background(goroutines int) {
 				for {
 					ktbf := newKTBloomFilter(_GLH_BLOOM_FILTER_N, _GLH_BLOOM_FILTER_P, iteration)
 					vs.vlm.ScanCallback(substart, substop, ktbf.add)
-					fmt.Printf("GLH %d %016x->%016x %016x %d\n", p, substart, substop, pullSize, ktbf.added)
 					substart += pullSize
 					if substart < start {
 						break

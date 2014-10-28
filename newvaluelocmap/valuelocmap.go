@@ -1006,60 +1006,57 @@ func (vlm *ValueLocMap) gatherStats(s *stats, n *node, depth int) {
 	}
 }
 
-func (vlm *ValueLocMap) ScanCount(tombstoneCutoff uint64, start uint64, stop uint64, max uint64) uint64 {
+func (vlm *ValueLocMap) ScanCount(start uint64, stop uint64, max uint64) uint64 {
 	var c uint64
 	for i := 0; i < len(vlm.roots); i++ {
 		n := &vlm.roots[i]
 		n.lock.Lock() // Will be released by scanCount
-		c += vlm.scanCount(tombstoneCutoff, start, stop, max, n)
+		c += vlm.scanCount(start, stop, max, n)
 	}
 	return c
 }
 
 // Will call n.lock.Unlock()
-func (vlm *ValueLocMap) scanCount(tombstoneCutoff uint64, start uint64, stop uint64, max uint64, n *node) uint64 {
-	var c uint64
+func (vlm *ValueLocMap) scanCount(start uint64, stop uint64, max uint64, n *node) uint64 {
+	if start > n.rangeStop || stop < n.rangeStart {
+		n.lock.Unlock()
+		return 0
+	}
 	if n.a != nil {
 		n.a.lock.Lock() // Will be released by scanCount
 		n.lock.Unlock()
-		c += vlm.scanCount(tombstoneCutoff, start, stop, max, n.a)
+		c := vlm.scanCount(start, stop, max, n.a)
 		n.lock.Lock()
 		if n.b != nil {
 			n.b.lock.Lock() // Will be released by scanCount
 			n.lock.Unlock()
-			c += vlm.scanCount(tombstoneCutoff, start, stop, max, n.b)
+			c += vlm.scanCount(start, stop, max, n.b)
 		}
+		return c
+	} else if n.used == 0 {
+		n.lock.Unlock()
+		return 0
 	} else {
-		// TODO: This is wrong. Need to scan each bucket and if discarding
-		// tombstones slide the nexts backwards. Or do like is done with split,
-		// working from outside back in. Either way, this is wrong.
+		var c uint64
 		lm := vlm.lowMask
 		es := n.entries
 		for i := uint32(0); i <= lm; i++ {
 			e := &es[i]
 			if e.blockID != 0 && e.keyA >= start && e.keyA <= stop {
-				if e.timestamp&1 != 0 && e.timestamp < tombstoneCutoff {
-					e.blockID = 0
-				} else {
-					c++
-				}
+				c++
 			}
 		}
 		for _, es = range n.overflow {
 			for i := uint32(0); i <= lm; i++ {
 				e := &es[i]
 				if e.blockID != 0 && e.keyA >= start && e.keyA <= stop {
-					if e.timestamp&1 != 0 && e.timestamp < tombstoneCutoff {
-						e.blockID = 0
-					} else {
-						c++
-					}
+					c++
 				}
 			}
 		}
 		n.lock.Unlock()
+		return c
 	}
-	return c
 }
 
 func (vlm *ValueLocMap) ScanCallback(start uint64, stop uint64, callback func(keyA uint64, keyB uint64, timestamp uint64)) {
@@ -1071,6 +1068,10 @@ func (vlm *ValueLocMap) ScanCallback(start uint64, stop uint64, callback func(ke
 }
 
 func (vlm *ValueLocMap) scanCallback(start uint64, stop uint64, callback func(keyA uint64, keyB uint64, timestamp uint64), n *node) {
+	if start > n.rangeStop || stop < n.rangeStart {
+		n.lock.Unlock()
+		return
+	}
 	if n.a != nil {
 		n.a.lock.Lock() // Will be released by scanCallback
 		n.lock.Unlock()
@@ -1081,6 +1082,8 @@ func (vlm *ValueLocMap) scanCallback(start uint64, stop uint64, callback func(ke
 			n.lock.Unlock()
 			vlm.scanCallback(start, stop, callback, n.b)
 		}
+	} else if n.used == 0 {
+		n.lock.Unlock()
 	} else {
 		lm := vlm.lowMask
 		es := n.entries
