@@ -947,10 +947,14 @@ func (vlm *ValueLocMap) gatherStats(s *stats, n *node, depth int) {
 	}
 	if n.a != nil {
 		n.a.lock.Lock() // Will be released by gatherStats
-		vlm.gatherStats(s, n.a, depth+1)
-		n.b.lock.Lock() // Will be released by gatherStats
 		n.lock.Unlock()
-		vlm.gatherStats(s, n.b, depth+1)
+		vlm.gatherStats(s, n.a, depth+1)
+		n.lock.Lock()
+		if n.b != nil {
+			n.b.lock.Lock() // Will be released by gatherStats
+			n.lock.Unlock()
+			vlm.gatherStats(s, n.b, depth+1)
+		}
 	} else {
 		if s.statsDebug {
 			s.allocedEntries += uint64(len(n.entries))
@@ -1017,10 +1021,14 @@ func (vlm *ValueLocMap) scanCount(tombstoneCutoff uint64, start uint64, stop uin
 	var c uint64
 	if n.a != nil {
 		n.a.lock.Lock() // Will be released by scanCount
-		c += vlm.scanCount(tombstoneCutoff, start, stop, max, n.a)
-		n.b.lock.Lock() // Will be released by scanCount
 		n.lock.Unlock()
-		c += vlm.scanCount(tombstoneCutoff, start, stop, max, n.b)
+		c += vlm.scanCount(tombstoneCutoff, start, stop, max, n.a)
+		n.lock.Lock()
+		if n.b != nil {
+			n.b.lock.Lock() // Will be released by scanCount
+			n.lock.Unlock()
+			c += vlm.scanCount(tombstoneCutoff, start, stop, max, n.b)
+		}
 	} else {
 		// TODO: This is wrong. Need to scan each bucket and if discarding
 		// tombstones slide the nexts backwards. Or do like is done with split,
@@ -1065,10 +1073,14 @@ func (vlm *ValueLocMap) ScanCallback(start uint64, stop uint64, callback func(ke
 func (vlm *ValueLocMap) scanCallback(start uint64, stop uint64, callback func(keyA uint64, keyB uint64, timestamp uint64), n *node) {
 	if n.a != nil {
 		n.a.lock.Lock() // Will be released by scanCallback
-		vlm.scanCallback(start, stop, callback, n.a)
-		n.b.lock.Lock() // Will be released by scanCallback
 		n.lock.Unlock()
-		vlm.scanCallback(start, stop, callback, n.b)
+		vlm.scanCallback(start, stop, callback, n.a)
+		n.lock.Lock()
+		if n.b != nil {
+			n.b.lock.Lock() // Will be released by scanCallback
+			n.lock.Unlock()
+			vlm.scanCallback(start, stop, callback, n.b)
+		}
 	} else {
 		lm := vlm.lowMask
 		es := n.entries
