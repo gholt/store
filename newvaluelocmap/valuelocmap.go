@@ -916,7 +916,7 @@ func (vlm *ValueLocMap) Set(keyA uint64, keyB uint64, timestamp uint64, blockID 
 	return 0
 }
 
-func (vlm *ValueLocMap) GatherStats(goroutines int, debug bool) (uint64, uint64, fmt.Stringer) {
+func (vlm *ValueLocMap) GatherStats(debug bool) (uint64, uint64, fmt.Stringer) {
 	s := &stats{
 		statsDebug:        debug,
 		cores:             vlm.cores,

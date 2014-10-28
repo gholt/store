@@ -313,7 +313,7 @@ var ErrNotFound error = errors.New("not found")
 type ValueLocMap interface {
 	Get(keyA uint64, keyB uint64) (timestamp uint64, blockID uint16, offset uint32, length uint32)
 	Set(keyA uint64, keyB uint64, timestamp uint64, blockID uint16, offset uint32, length uint32, evenIfSameTimestamp bool) (previousTimestamp uint64)
-	GatherStats(goroutines int, debug bool) (count uint64, length uint64, debugInfo fmt.Stringer)
+	GatherStats(debug bool) (count uint64, length uint64, debugInfo fmt.Stringer)
 	ScanCount(tombstoneCutoff uint64, start uint64, stop uint64, max uint64) uint64
 	ScanCallback(start uint64, stop uint64, callback func(keyA uint64, keyB uint64, timestamp uint64))
 }
@@ -593,7 +593,7 @@ func (vs *ValueStore) Delete(keyA uint64, keyB uint64, timestamp uint64) (uint64
 // GatherStats returns overall information about the state of the ValueStore.
 //
 // This may be called even after Close.
-func (vs *ValueStore) GatherStats(goroutines int, debug bool) (count uint64, length uint64, debugInfo fmt.Stringer) {
+func (vs *ValueStore) GatherStats(debug bool) (count uint64, length uint64, debugInfo fmt.Stringer) {
 	stats := &valueStoreStats{}
 	if debug {
 		stats.debug = debug
@@ -631,9 +631,9 @@ func (vs *ValueStore) GatherStats(goroutines int, debug bool) (count uint64, len
 		stats.valuesFileSize = vs.valuesFileSize
 		stats.valuesFileReaders = vs.valuesFileReaders
 		stats.checksumInterval = vs.checksumInterval
-		stats.vlmCount, stats.vlmLength, stats.vlmDebugInfo = vs.vlm.GatherStats(goroutines, true)
+		stats.vlmCount, stats.vlmLength, stats.vlmDebugInfo = vs.vlm.GatherStats(true)
 	} else {
-		stats.vlmCount, stats.vlmLength, stats.vlmDebugInfo = vs.vlm.GatherStats(goroutines, false)
+		stats.vlmCount, stats.vlmLength, stats.vlmDebugInfo = vs.vlm.GatherStats(false)
 	}
 	return stats.vlmCount, stats.vlmLength, stats
 }
@@ -1071,7 +1071,7 @@ func (vs *ValueStore) recovery() {
 	wg.Wait()
 	if fromDiskCount > 0 {
 		dur := time.Now().Sub(start)
-		valueCount, valueLength, _ := vs.GatherStats(vs.cores, false)
+		valueCount, valueLength, _ := vs.GatherStats(false)
 		log.Printf("%d key locations loaded in %s, %.0f/s; %d caused change; %d resulting locations referencing %d bytes.\n", fromDiskCount, dur, float64(fromDiskCount)/(float64(dur)/float64(time.Second)), count, valueCount, valueLength)
 	}
 }

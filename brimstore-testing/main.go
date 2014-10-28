@@ -113,7 +113,7 @@ func main() {
 	fmt.Println(dur, "to close ValuesStore")
 	memstat()
 	begin = time.Now()
-	statsCount, statsLength, stats := opts.vs.GatherStats(0, opts.ExtendedStats)
+	statsCount, statsLength, stats := opts.vs.GatherStats(opts.ExtendedStats)
 	dur = time.Now().Sub(begin)
 	fmt.Println(dur, "to gather stats")
 	if opts.ExtendedStats {
