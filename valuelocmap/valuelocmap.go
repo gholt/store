@@ -1,4 +1,4 @@
-// Package newvaluelocmap provides a concurrency-safe data structure that maps
+// Package valuelocmap provides a concurrency-safe data structure that maps
 // keys to value locations. A key is 128 bits and is specified using two
 // uint64s (keyA, keyB). A value location is specified using a blockID, offset,
 // and length triplet. Each mapping is assigned a timestamp and the greatest
@@ -16,7 +16,7 @@
 //
 // There are also functions for scanning key ranges, both to clean out old
 // tombstones and to provide callbacks for replication or other tasks.
-package newvaluelocmap
+package valuelocmap
 
 import (
 	"fmt"

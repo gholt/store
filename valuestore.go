@@ -37,7 +37,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/gholt/brimstore/newvaluelocmap"
+	"github.com/gholt/brimstore/valuelocmap"
 	"github.com/gholt/brimtext"
 	"github.com/gholt/brimutil"
 	"github.com/spaolacci/murmur3"
@@ -310,7 +310,7 @@ var ErrNotFound error = errors.New("not found")
 // specify your own ValueLocMap implemention instead of the default.
 //
 // For documentation of each of these functions, see the default implementation
-// in newvaluelocmap.ValueLocMap.
+// in valuelocmap.ValueLocMap.
 type ValueLocMap interface {
 	Get(keyA uint64, keyB uint64) (timestamp uint64, blockID uint16, offset uint32, length uint32)
 	Set(keyA uint64, keyB uint64, timestamp uint64, blockID uint16, offset uint32, length uint32, evenIfSameTimestamp bool) (previousTimestamp uint64)
@@ -429,7 +429,7 @@ func NewValueStore(opts ...func(*config)) *ValueStore {
 	cfg := resolveConfig(opts...)
 	vlm := cfg.vlm
 	if vlm == nil {
-		vlm = newvaluelocmap.NewValueLocMap()
+		vlm = valuelocmap.NewValueLocMap()
 	}
 	vs := &ValueStore{
 		valueLocBlocks:     make([]valueLocBlock, math.MaxUint16),
