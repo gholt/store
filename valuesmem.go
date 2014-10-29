@@ -7,8 +7,8 @@ import (
 
 type valuesMem struct {
 	vs          *ValueStore
-	id          uint16
-	vfID        uint16
+	id          uint32
+	vfID        uint32
 	vfOffset    uint32
 	toc         []byte
 	values      []byte

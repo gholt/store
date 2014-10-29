@@ -312,8 +312,8 @@ var ErrNotFound error = errors.New("not found")
 // For documentation of each of these functions, see the default implementation
 // in valuelocmap.ValueLocMap.
 type ValueLocMap interface {
-	Get(keyA uint64, keyB uint64) (timestamp uint64, blockID uint16, offset uint32, length uint32)
-	Set(keyA uint64, keyB uint64, timestamp uint64, blockID uint16, offset uint32, length uint32, evenIfSameTimestamp bool) (previousTimestamp uint64)
+	Get(keyA uint64, keyB uint64) (timestamp uint64, blockID uint32, offset uint32, length uint32)
+	Set(keyA uint64, keyB uint64, timestamp uint64, blockID uint32, offset uint32, length uint32, evenIfSameTimestamp bool) (previousTimestamp uint64)
 	GatherStats(debug bool) (count uint64, length uint64, debugInfo fmt.Stringer)
 	ScanCount(start uint64, stop uint64, max uint64) uint64
 	ScanCallback(start uint64, stop uint64, callback func(keyA uint64, keyB uint64, timestamp uint64))
@@ -330,7 +330,7 @@ type ValueStore struct {
 	pendingTOCBlockChan  chan []byte
 	tocWriterDoneChan    chan struct{}
 	valueLocBlocks       []valueLocBlock
-	valueLocBlockIDer    uint32
+	valueLocBlockIDer    uint64
 	path                 string
 	pathtoc              string
 	vlm                  ValueLocMap
@@ -381,7 +381,7 @@ type valueStoreStats struct {
 	freeTOCBlockChanIn     int
 	pendingTOCBlockChanCap int
 	pendingTOCBlockChanIn  int
-	maxValueLocBlockID     uint32
+	maxValueLocBlockID     uint64
 	path                   string
 	pathtoc                string
 	cores                  int
@@ -607,7 +607,7 @@ func (vs *ValueStore) GatherStats(debug bool) (count uint64, length uint64, debu
 		stats.freeTOCBlockChanIn = len(vs.freeTOCBlockChan)
 		stats.pendingTOCBlockChanCap = cap(vs.pendingTOCBlockChan)
 		stats.pendingTOCBlockChanIn = len(vs.pendingTOCBlockChan)
-		stats.maxValueLocBlockID = atomic.LoadUint32(&vs.valueLocBlockIDer)
+		stats.maxValueLocBlockID = atomic.LoadUint64(&vs.valueLocBlockIDer)
 		stats.path = vs.path
 		stats.pathtoc = vs.pathtoc
 		stats.cores = vs.cores
@@ -628,17 +628,17 @@ func (vs *ValueStore) GatherStats(debug bool) (count uint64, length uint64, debu
 	return stats.vlmCount, stats.vlmLength, stats
 }
 
-func (vs *ValueStore) valueLocBlock(valueLocBlockID uint16) valueLocBlock {
+func (vs *ValueStore) valueLocBlock(valueLocBlockID uint32) valueLocBlock {
 	return vs.valueLocBlocks[valueLocBlockID]
 }
 
-func (vs *ValueStore) addValueLocBlock(block valueLocBlock) uint16 {
-	id := atomic.AddUint32(&vs.valueLocBlockIDer, 1)
-	if id >= 65536 {
+func (vs *ValueStore) addValueLocBlock(block valueLocBlock) uint32 {
+	id := atomic.AddUint64(&vs.valueLocBlockIDer, 1)
+	if id >= math.MaxUint32 {
 		panic("too many valueLocBlocks")
 	}
 	vs.valueLocBlocks[id] = block
-	return uint16(id)
+	return uint32(id)
 }
 
 func (vs *ValueStore) memClearer() {
@@ -899,7 +899,7 @@ func (vs *ValueStore) recovery() {
 		keyA      uint64
 		keyB      uint64
 		timestamp uint64
-		blockID   uint16
+		blockID   uint32
 		offset    uint32
 		length    uint32
 	}

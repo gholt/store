@@ -16,7 +16,7 @@ import (
 
 type valuesFile struct {
 	vs           *ValueStore
-	id           uint16
+	id           uint32
 	bts          int64
 	writerFP     io.WriteCloser
 	atOffset     uint32

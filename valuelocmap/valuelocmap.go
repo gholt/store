@@ -660,8 +660,7 @@ func (vlm *ValueLocMap) merge2(n *node) {
 	n.resizingLock.Unlock()
 }
 
-// TODO: Change blockID returned to uint32
-func (vlm *ValueLocMap) Get(keyA uint64, keyB uint64) (uint64, uint16, uint32, uint32) {
+func (vlm *ValueLocMap) Get(keyA uint64, keyB uint64) (uint64, uint32, uint32, uint32) {
 	n := &vlm.roots[keyA>>vlm.rootsShift]
 	n.lock.RLock()
 	for {
@@ -696,8 +695,7 @@ func (vlm *ValueLocMap) Get(keyA uint64, keyB uint64) (uint64, uint16, uint32, u
 			rl := e.length
 			l.RUnlock()
 			n.lock.RUnlock()
-			// TODO: Change rb to return full uint32
-			return rt, uint16(rb), ro, rl
+			return rt, rb, ro, rl
 		}
 		if e.next == 0 {
 			break
@@ -711,8 +709,7 @@ func (vlm *ValueLocMap) Get(keyA uint64, keyB uint64) (uint64, uint16, uint32, u
 	return 0, 0, 0, 0
 }
 
-// TODO: Change blockID to be uint32
-func (vlm *ValueLocMap) Set(keyA uint64, keyB uint64, timestamp uint64, blockID uint16, offset uint32, length uint32, evenIfSameTimestamp bool) uint64 {
+func (vlm *ValueLocMap) Set(keyA uint64, keyB uint64, timestamp uint64, blockID uint32, offset uint32, length uint32, evenIfSameTimestamp bool) uint64 {
 	bblockID := uint32(blockID)
 	n := &vlm.roots[keyA>>vlm.rootsShift]
 	var pn *node
