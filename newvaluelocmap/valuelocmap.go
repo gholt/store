@@ -1010,51 +1010,58 @@ func (vlm *ValueLocMap) ScanCount(start uint64, stop uint64, max uint64) uint64 
 	var c uint64
 	for i := 0; i < len(vlm.roots); i++ {
 		n := &vlm.roots[i]
-		n.lock.Lock() // Will be released by scanCount
+		n.lock.RLock() // Will be released by scanCount
 		c += vlm.scanCount(start, stop, max, n)
 	}
 	return c
 }
 
-// Will call n.lock.Unlock()
+// Will call n.lock.RUnlock()
 func (vlm *ValueLocMap) scanCount(start uint64, stop uint64, max uint64, n *node) uint64 {
 	if start > n.rangeStop || stop < n.rangeStart {
-		n.lock.Unlock()
+		n.lock.RUnlock()
 		return 0
 	}
 	if n.a != nil {
-		n.a.lock.Lock() // Will be released by scanCount
-		n.lock.Unlock()
+		n.a.lock.RLock() // Will be released by scanCount
+		n.lock.RUnlock()
 		c := vlm.scanCount(start, stop, max, n.a)
-		n.lock.Lock()
+		n.lock.RLock()
 		if n.b != nil {
-			n.b.lock.Lock() // Will be released by scanCount
-			n.lock.Unlock()
+			n.b.lock.RLock() // Will be released by scanCount
+			n.lock.RUnlock()
 			c += vlm.scanCount(start, stop, max, n.b)
 		}
 		return c
 	} else if n.used == 0 {
-		n.lock.Unlock()
+		n.lock.RUnlock()
 		return 0
 	} else {
 		var c uint64
+		b := vlm.bits
 		lm := vlm.lowMask
 		es := n.entries
+		ol := &n.overflowLock
 		for i := uint32(0); i <= lm; i++ {
 			e := &es[i]
-			if e.blockID != 0 && e.keyA >= start && e.keyA <= stop {
-				c++
-			}
-		}
-		for _, es = range n.overflow {
-			for i := uint32(0); i <= lm; i++ {
-				e := &es[i]
-				if e.blockID != 0 && e.keyA >= start && e.keyA <= stop {
-					c++
+			l := &n.entriesLocks[i&vlm.entriesLockMask]
+			l.RLock()
+			if e.blockID != 0 {
+				for {
+					if e.keyA >= start && e.keyA <= stop {
+						c++
+					}
+					if e.next == 0 {
+						break
+					}
+					ol.RLock()
+					e = &n.overflow[e.next>>b][e.next&lm]
+					ol.RUnlock()
 				}
 			}
+			l.RUnlock()
 		}
-		n.lock.Unlock()
+		n.lock.RUnlock()
 		return c
 	}
 }
@@ -1062,46 +1069,54 @@ func (vlm *ValueLocMap) scanCount(start uint64, stop uint64, max uint64, n *node
 func (vlm *ValueLocMap) ScanCallback(start uint64, stop uint64, callback func(keyA uint64, keyB uint64, timestamp uint64)) {
 	for i := 0; i < len(vlm.roots); i++ {
 		n := &vlm.roots[i]
-		n.lock.Lock() // Will be released by scanCallback
+		n.lock.RLock() // Will be released by scanCallback
 		vlm.scanCallback(start, stop, callback, n)
 	}
 }
 
+// Will call n.lock.RUnlock()
 func (vlm *ValueLocMap) scanCallback(start uint64, stop uint64, callback func(keyA uint64, keyB uint64, timestamp uint64), n *node) {
 	if start > n.rangeStop || stop < n.rangeStart {
-		n.lock.Unlock()
+		n.lock.RUnlock()
 		return
 	}
 	if n.a != nil {
-		n.a.lock.Lock() // Will be released by scanCallback
-		n.lock.Unlock()
+		n.a.lock.RLock() // Will be released by scanCallback
+		n.lock.RUnlock()
 		vlm.scanCallback(start, stop, callback, n.a)
-		n.lock.Lock()
+		n.lock.RLock()
 		if n.b != nil {
-			n.b.lock.Lock() // Will be released by scanCallback
-			n.lock.Unlock()
+			n.b.lock.RLock() // Will be released by scanCallback
+			n.lock.RUnlock()
 			vlm.scanCallback(start, stop, callback, n.b)
 		}
 	} else if n.used == 0 {
-		n.lock.Unlock()
+		n.lock.RUnlock()
 	} else {
+		b := vlm.bits
 		lm := vlm.lowMask
 		es := n.entries
+		ol := &n.overflowLock
 		for i := uint32(0); i <= lm; i++ {
 			e := &es[i]
-			if e.blockID != 0 && e.keyA >= start && e.keyA <= stop {
-				callback(e.keyA, e.keyB, e.timestamp)
-			}
-		}
-		for _, es = range n.overflow {
-			for i := uint32(0); i <= lm; i++ {
-				e := &es[i]
-				if e.blockID != 0 && e.keyA >= start && e.keyA <= stop {
-					callback(e.keyA, e.keyB, e.timestamp)
+			l := &n.entriesLocks[i&vlm.entriesLockMask]
+			l.RLock()
+			if e.blockID != 0 {
+				for {
+					if e.keyA >= start && e.keyA <= stop {
+						callback(e.keyA, e.keyB, e.timestamp)
+					}
+					if e.next == 0 {
+						break
+					}
+					ol.RLock()
+					e = &n.overflow[e.next>>b][e.next&lm]
+					ol.RUnlock()
 				}
 			}
+			l.RUnlock()
 		}
-		n.lock.Unlock()
+		n.lock.RUnlock()
 	}
 }
 
