@@ -1036,6 +1036,9 @@ func (vlm *ValueLocMap) scanCount(start uint64, stop uint64, max uint64, n *node
 	} else if n.used == 0 {
 		n.lock.RUnlock()
 		return 0
+	} else if start <= n.rangeStart && stop >= n.rangeStop {
+		n.lock.RUnlock()
+		return uint64(atomic.LoadUint32(&n.used))
 	} else {
 		var c uint64
 		b := vlm.bits
@@ -1091,6 +1094,29 @@ func (vlm *ValueLocMap) scanCallback(start uint64, stop uint64, callback func(ke
 			vlm.scanCallback(start, stop, callback, n.b)
 		}
 	} else if n.used == 0 {
+		n.lock.RUnlock()
+	} else if start <= n.rangeStart && stop >= n.rangeStop {
+		b := vlm.bits
+		lm := vlm.lowMask
+		es := n.entries
+		ol := &n.overflowLock
+		for i := uint32(0); i <= lm; i++ {
+			e := &es[i]
+			l := &n.entriesLocks[i&vlm.entriesLockMask]
+			l.RLock()
+			if e.blockID != 0 {
+				for {
+					callback(e.keyA, e.keyB, e.timestamp)
+					if e.next == 0 {
+						break
+					}
+					ol.RLock()
+					e = &n.overflow[e.next>>b][e.next&lm]
+					ol.RUnlock()
+				}
+			}
+			l.RUnlock()
+		}
 		n.lock.RUnlock()
 	} else {
 		b := vlm.bits
