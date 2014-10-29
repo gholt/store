@@ -1210,6 +1210,7 @@ func (vs *ValueStore) background(goroutines int) {
 	wg.Add(goroutines)
 	for g := 0; g < goroutines; g++ {
 		go func(g int) {
+			ktbf := newKTBloomFilter(_GLH_BLOOM_FILTER_N, _GLH_BLOOM_FILTER_P, iteration)
 			var pullSize uint64
 			for p := uint32(g); p < partitions; p += uint32(goroutines) {
 				// Here I'm doing "pull" replication scans for every partition
@@ -1228,8 +1229,8 @@ func (vs *ValueStore) background(goroutines int) {
 				substart := start
 				substop := start + (pullSize - 1)
 				for {
-					ktbf := newKTBloomFilter(_GLH_BLOOM_FILTER_N, _GLH_BLOOM_FILTER_P, iteration)
 					vs.vlm.ScanCallback(substart, substop, ktbf.add)
+					ktbf.clear()
 					substart += pullSize
 					if substart < start {
 						break

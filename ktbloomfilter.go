@@ -9,7 +9,6 @@ import (
 )
 
 type ktBloomFilter struct {
-	hasData bool
 	n       uint64
 	p       float64
 	salt    uint32
@@ -17,7 +16,6 @@ type ktBloomFilter struct {
 	kDiv4   uint32
 	bits    []byte
 	scratch []byte
-	added   uint64
 }
 
 func newKTBloomFilter(n uint64, p float64, salt uint16) *ktBloomFilter {
@@ -38,10 +36,6 @@ func (ktbf *ktBloomFilter) String() string {
 }
 
 func (ktbf *ktBloomFilter) add(keyA uint64, keyB uint64, timestamp uint64) {
-	ktbf.added++
-	if !ktbf.hasData {
-		ktbf.hasData = true
-	}
 	scratch := ktbf.scratch
 	binary.BigEndian.PutUint64(scratch[4:], keyA)
 	binary.BigEndian.PutUint64(scratch[12:], keyB)
@@ -86,4 +80,12 @@ func (ktbf *ktBloomFilter) mayHave(keyA uint64, keyB uint64, timestamp uint64) b
 		}
 	}
 	return true
+}
+
+func (ktbf *ktBloomFilter) clear() {
+	b := ktbf.bits
+	l := len(b)
+	for i := 0; i < l; i++ {
+		b[i] = 0
+	}
 }
