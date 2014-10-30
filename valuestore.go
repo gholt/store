@@ -44,20 +44,21 @@ import (
 )
 
 type config struct {
-	path               string
-	pathtoc            string
-	vlm                ValueLocMap
-	cores              int
-	backgroundCores    int
-	backgroundInterval int
-	maxValueSize       int
-	checksumInterval   int
-	pageSize           int
-	minValueAlloc      int
-	writePagesPerCore  int
-	tombstoneAge       int
-	valuesFileSize     int
-	valuesFileReaders  int
+	path                string
+	pathtoc             string
+	vlm                 ValueLocMap
+	cores               int
+	backgroundCores     int
+	backgroundInterval  int
+	maxValueSize        int
+	pageSize            int
+	minValueAlloc       int
+	writePagesPerCore   int
+	tombstoneAge        int
+	valuesFileSize      int
+	valuesFileReaders   int
+	checksumInterval    int
+	pullReplicationChan chan PullReplicationMsg
 }
 
 func resolveConfig(opts ...func(*config)) *config {
@@ -94,12 +95,6 @@ func resolveConfig(opts ...func(*config)) *config {
 			cfg.maxValueSize = val
 		}
 	}
-	cfg.checksumInterval = 65532
-	if env := os.Getenv("BRIMSTORE_CHECKSUMINTERVAL"); env != "" {
-		if val, err := strconv.Atoi(env); err == nil {
-			cfg.checksumInterval = val
-		}
-	}
 	cfg.pageSize = 4 * 1024 * 1024
 	if env := os.Getenv("BRIMSTORE_PAGESIZE"); env != "" {
 		if val, err := strconv.Atoi(env); err == nil {
@@ -128,6 +123,12 @@ func resolveConfig(opts ...func(*config)) *config {
 	if env := os.Getenv("BRIMSTORE_VALUESFILEREADERS"); env != "" {
 		if val, err := strconv.Atoi(env); err == nil {
 			cfg.valuesFileReaders = val
+		}
+	}
+	cfg.checksumInterval = 65532
+	if env := os.Getenv("BRIMSTORE_CHECKSUMINTERVAL"); env != "" {
+		if val, err := strconv.Atoi(env); err == nil {
+			cfg.checksumInterval = val
 		}
 	}
 	for _, opt := range opts {
@@ -303,6 +304,26 @@ func OptValuesFileReaders(bytes int) func(*config) {
 	}
 }
 
+// OptChecksumInterval indicates how many bytes are output to a file before a
+// 4-byte checksum is also output. Defaults to env BRIMSTORE_CHECKSUMINTERVAL
+// or 65532.
+func OptChecksumInterval(bytes int) func(*config) {
+	return func(cfg *config) {
+		cfg.checksumInterval = bytes
+	}
+}
+
+// OptPullReplicationChan will receive PullReplicationRequests from the
+// ValueStore's background tasks for ring partitions of responsibility. These
+// requests should be sent to other responsible ValueStores and they will send
+// back any missing information. Defaults to no channel (nil), which disables
+// pull replication background tasks.
+func OptPullReplicationChan(c chan PullReplicationMsg) func(*config) {
+	return func(cfg *config) {
+		cfg.pullReplicationChan = c
+	}
+}
+
 var ErrNotFound error = errors.New("not found")
 
 // ValueLocMap is an interface used by ValueStore for tracking the mappings
@@ -318,6 +339,22 @@ type ValueLocMap interface {
 	DiscardTombstones(tombstoneCutoff uint64)
 	ScanCount(start uint64, stop uint64, max uint64) uint64
 	ScanCallback(start uint64, stop uint64, callback func(keyA uint64, keyB uint64, timestamp uint64))
+}
+
+// PullReplicationMsg is a message requesting missing data be replicated back
+// to the sender.
+type PullReplicationMsg interface {
+	MsgType() MsgType
+	RingID() uint64
+	Partition() uint32
+	SendData(io.Writer) (int, error)
+}
+
+type pullReplicationMsg struct {
+	ringID    uint64
+	partition uint32
+	header    []byte
+	body      []byte
 }
 
 // ValueStore instances are created with NewValueStore.
@@ -346,9 +383,11 @@ type ValueStore struct {
 	valuesFileSize       uint32
 	valuesFileReaders    int
 	checksumInterval     uint32
+	pullReplicationChan  chan PullReplicationMsg
 	backgroundNotifyChan chan *backgroundNotification
 	backgroundDoneChan   chan struct{}
 	backgroundIteration  uint16
+	ktbfs                []*ktBloomFilter
 }
 
 type valueWriteReq struct {
@@ -396,6 +435,8 @@ type valueStoreStats struct {
 	valuesFileSize         uint32
 	valuesFileReaders      int
 	checksumInterval       uint32
+	pullReplicationChanIn  int
+	pullReplicationChanCap int
 	vlmCount               uint64
 	vlmLength              uint64
 	vlmDebugInfo           fmt.Stringer
@@ -433,21 +474,22 @@ func NewValueStore(opts ...func(*config)) *ValueStore {
 		vlm = valuelocmap.NewValueLocMap()
 	}
 	vs := &ValueStore{
-		valueLocBlocks:     make([]valueLocBlock, math.MaxUint16),
-		path:               cfg.path,
-		pathtoc:            cfg.pathtoc,
-		vlm:                vlm,
-		cores:              cfg.cores,
-		backgroundCores:    cfg.backgroundCores,
-		backgroundInterval: cfg.backgroundInterval,
-		maxValueSize:       uint32(cfg.maxValueSize),
-		checksumInterval:   uint32(cfg.checksumInterval),
-		pageSize:           uint32(cfg.pageSize),
-		minValueAlloc:      cfg.minValueAlloc,
-		writePagesPerCore:  cfg.writePagesPerCore,
-		tombstoneAge:       uint64(cfg.tombstoneAge) * uint64(time.Second),
-		valuesFileSize:     uint32(cfg.valuesFileSize),
-		valuesFileReaders:  cfg.valuesFileReaders,
+		valueLocBlocks:      make([]valueLocBlock, math.MaxUint16),
+		path:                cfg.path,
+		pathtoc:             cfg.pathtoc,
+		vlm:                 vlm,
+		cores:               cfg.cores,
+		backgroundCores:     cfg.backgroundCores,
+		backgroundInterval:  cfg.backgroundInterval,
+		maxValueSize:        uint32(cfg.maxValueSize),
+		pageSize:            uint32(cfg.pageSize),
+		minValueAlloc:       cfg.minValueAlloc,
+		writePagesPerCore:   cfg.writePagesPerCore,
+		tombstoneAge:        uint64(cfg.tombstoneAge) * uint64(time.Second),
+		valuesFileSize:      uint32(cfg.valuesFileSize),
+		valuesFileReaders:   cfg.valuesFileReaders,
+		checksumInterval:    uint32(cfg.checksumInterval),
+		pullReplicationChan: cfg.pullReplicationChan,
 	}
 	vs.freeableVMChan = make(chan *valuesMem, vs.cores*vs.writePagesPerCore)
 	vs.freeVMChan = make(chan *valuesMem, vs.cores)
@@ -622,6 +664,13 @@ func (vs *ValueStore) GatherStats(debug bool) (count uint64, length uint64, debu
 		stats.valuesFileSize = vs.valuesFileSize
 		stats.valuesFileReaders = vs.valuesFileReaders
 		stats.checksumInterval = vs.checksumInterval
+		if vs.pullReplicationChan == nil {
+			stats.pullReplicationChanIn = -1
+			stats.pullReplicationChanCap = -1
+		} else {
+			stats.pullReplicationChanIn = len(vs.pullReplicationChan)
+			stats.pullReplicationChanCap = cap(vs.pullReplicationChan)
+		}
 		stats.vlmCount, stats.vlmLength, stats.vlmDebugInfo = vs.vlm.GatherStats(true)
 	} else {
 		stats.vlmCount, stats.vlmLength, stats.vlmDebugInfo = vs.vlm.GatherStats(false)
@@ -1093,13 +1142,15 @@ func (stats *valueStoreStats) String() string {
 			[]string{"backgroundCores", fmt.Sprintf("%d", stats.backgroundCores)},
 			[]string{"backgroundInterval", fmt.Sprintf("%d", stats.backgroundInterval)},
 			[]string{"maxValueSize", fmt.Sprintf("%d", stats.maxValueSize)},
-			[]string{"checksumInterval", fmt.Sprintf("%d", stats.checksumInterval)},
 			[]string{"pageSize", fmt.Sprintf("%d", stats.pageSize)},
 			[]string{"minValueAlloc", fmt.Sprintf("%d", stats.minValueAlloc)},
 			[]string{"writePagesPerCore", fmt.Sprintf("%d", stats.writePagesPerCore)},
 			[]string{"tombstoneAge", fmt.Sprintf("%d", stats.tombstoneAge)},
 			[]string{"valuesFileSize", fmt.Sprintf("%d", stats.valuesFileSize)},
 			[]string{"valuesFileReaders", fmt.Sprintf("%d", stats.valuesFileReaders)},
+			[]string{"checksumInterval", fmt.Sprintf("%d", stats.checksumInterval)},
+			[]string{"pullReplicationChanIn", fmt.Sprintf("%d", stats.pullReplicationChanIn)},
+			[]string{"pullReplicationChanCap", fmt.Sprintf("%d", stats.pullReplicationChanCap)},
 			[]string{"vlmCount", fmt.Sprintf("%d", stats.vlmCount)},
 			[]string{"vlmLength", fmt.Sprintf("%d", stats.vlmLength)},
 			[]string{"vlmDebugInfo", stats.vlmDebugInfo.String()},
@@ -1204,6 +1255,7 @@ func (vs *ValueStore) background(goroutines int) {
 		vs.backgroundIteration++
 	}
 	iteration := vs.backgroundIteration
+	ringID := uint64(0)
 	partitionPower := uint16(8)
 	partitions := uint32(1) << partitionPower
 	wg := &sync.WaitGroup{}
@@ -1212,43 +1264,88 @@ func (vs *ValueStore) background(goroutines int) {
 		vs.vlm.DiscardTombstones(uint64(time.Now().UnixNano()) - vs.tombstoneAge)
 		wg.Done()
 	}()
-	wg.Add(goroutines)
-	for g := 0; g < goroutines; g++ {
-		go func(g int) {
-			ktbf := newKTBloomFilter(_GLH_BLOOM_FILTER_N, _GLH_BLOOM_FILTER_P, iteration)
-			var pullSize uint64
-			for p := uint32(g); p < partitions; p += uint32(goroutines) {
-				// Here I'm doing "pull" replication scans for every partition
-				// when eventually it should just do this for partitions we're
-				// in the ring for. Partitions we're not in the ring for
-				// (handoffs, old data from ring changes, etc.) we should just
-				// send out what data we have and the remove it locally.
-				start := uint64(p) << uint64(64-partitionPower)
-				stop := start + ((uint64(1) << (64 - partitionPower)) - 1)
-				if pullSize == 0 {
-					pullSize = uint64(1) << (64 - partitionPower)
-					for vs.vlm.ScanCount(start, start+(pullSize-1), _GLH_BLOOM_FILTER_N) >= _GLH_BLOOM_FILTER_N {
-						pullSize /= 2
+	if vs.pullReplicationChan != nil {
+		wg.Add(goroutines)
+		for len(vs.ktbfs) < goroutines {
+			vs.ktbfs = append(vs.ktbfs, newKTBloomFilter(_GLH_BLOOM_FILTER_N, _GLH_BLOOM_FILTER_P, iteration))
+		}
+		for g := 0; g < goroutines; g++ {
+			go func(g int) {
+				ktbf := vs.ktbfs[g]
+				var pullSize uint64
+				for p := uint32(g); p < partitions; p += uint32(goroutines) {
+					// Here I'm doing "pull" replication scans for every
+					// partition when eventually it should just do this for
+					// partitions we're in the ring for. Partitions we're not
+					// in the ring for (handoffs, old data from ring changes,
+					// etc.) we should just send out what data we have and the
+					// remove it locally.
+					start := uint64(p) << uint64(64-partitionPower)
+					stop := start + ((uint64(1) << (64 - partitionPower)) - 1)
+					if pullSize == 0 {
+						pullSize = uint64(1) << (64 - partitionPower)
+						for vs.vlm.ScanCount(start, start+(pullSize-1), _GLH_BLOOM_FILTER_N) >= _GLH_BLOOM_FILTER_N {
+							pullSize /= 2
+						}
+					}
+					substart := start
+					substop := start + (pullSize - 1)
+					for {
+						ktbf.reset(iteration)
+						vs.vlm.ScanCallback(substart, substop, ktbf.add)
+						if vs.pullReplicationChan == nil {
+							break
+						} else {
+							vs.pullReplicationChan <- newPullReplicationMsg(ringID, p, substart, substop, ktbf)
+						}
+						substart += pullSize
+						if substart < start {
+							break
+						}
+						substop += pullSize
+						if substop >= stop || substop < substart {
+							break
+						}
 					}
 				}
-				substart := start
-				substop := start + (pullSize - 1)
-				for {
-					vs.vlm.ScanCallback(substart, substop, ktbf.add)
-					ktbf.clear()
-					substart += pullSize
-					if substart < start {
-						break
-					}
-					substop += pullSize
-					if substop >= stop || substop < substart {
-						break
-					}
-				}
-			}
-			wg.Done()
-		}(g)
+				wg.Done()
+			}(g)
+		}
 	}
 	wg.Wait()
 	log.Println(time.Now().Sub(begin), "background tasks")
+}
+
+func newPullReplicationMsg(ringID uint64, partition uint32, rangeStart uint64, rangeStop uint64, ktbf *ktBloomFilter) *pullReplicationMsg {
+	msg := &pullReplicationMsg{ringID: ringID, partition: partition}
+	ktbf.toMsg(msg, 16)
+	binary.BigEndian.PutUint64(msg.header, rangeStart)
+	binary.BigEndian.PutUint64(msg.header[8:], rangeStop)
+	return msg
+}
+
+func (prm *pullReplicationMsg) MsgType() MsgType {
+	return MSG_TYPE_PULL_REPLICATION
+}
+
+func (prm *pullReplicationMsg) RingID() uint64 {
+	return prm.ringID
+}
+
+func (prm *pullReplicationMsg) Partition() uint32 {
+	return prm.partition
+}
+
+func (prm *pullReplicationMsg) SendData(w io.Writer) (int, error) {
+	var n int
+	var sn int
+	var err error
+	sn, err = w.Write(prm.header)
+	n += sn
+	if err != nil {
+		return n, err
+	}
+	sn, err = w.Write(prm.body)
+	n += sn
+	return n, err
 }
