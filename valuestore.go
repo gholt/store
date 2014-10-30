@@ -315,6 +315,7 @@ type ValueLocMap interface {
 	Get(keyA uint64, keyB uint64) (timestamp uint64, blockID uint32, offset uint32, length uint32)
 	Set(keyA uint64, keyB uint64, timestamp uint64, blockID uint32, offset uint32, length uint32, evenIfSameTimestamp bool) (previousTimestamp uint64)
 	GatherStats(debug bool) (count uint64, length uint64, debugInfo fmt.Stringer)
+	DiscardTombstones(tombstoneCutoff uint64)
 	ScanCount(start uint64, stop uint64, max uint64) uint64
 	ScanCallback(start uint64, stop uint64, callback func(keyA uint64, keyB uint64, timestamp uint64))
 }
@@ -1203,10 +1204,14 @@ func (vs *ValueStore) background(goroutines int) {
 		vs.backgroundIteration++
 	}
 	iteration := vs.backgroundIteration
-	//tombstoneCutoff := uint64(time.Now().UnixNano()) - vs.tombstoneAge
 	partitionPower := uint16(8)
 	partitions := uint32(1) << partitionPower
 	wg := &sync.WaitGroup{}
+	wg.Add(1)
+	go func() {
+		vs.vlm.DiscardTombstones(uint64(time.Now().UnixNano()) - vs.tombstoneAge)
+		wg.Done()
+	}()
 	wg.Add(goroutines)
 	for g := 0; g < goroutines; g++ {
 		go func(g int) {

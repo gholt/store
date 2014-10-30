@@ -710,7 +710,6 @@ func (vlm *ValueLocMap) Get(keyA uint64, keyB uint64) (uint64, uint32, uint32, u
 }
 
 func (vlm *ValueLocMap) Set(keyA uint64, keyB uint64, timestamp uint64, blockID uint32, offset uint32, length uint32, evenIfSameTimestamp bool) uint64 {
-	bblockID := uint32(blockID)
 	n := &vlm.roots[keyA>>vlm.rootsShift]
 	var pn *node
 	n.lock.RLock()
@@ -749,11 +748,11 @@ func (vlm *ValueLocMap) Set(keyA uint64, keyB uint64, timestamp uint64, blockID 
 		var f uint32
 		if e.keyA == keyA && e.keyB == keyB {
 			if e.timestamp < timestamp {
-				if bblockID != 0 {
+				if blockID != 0 {
 					if e.blockID != 0 {
 						t := e.timestamp
 						e.timestamp = timestamp
-						e.blockID = bblockID
+						e.blockID = blockID
 						e.offset = offset
 						e.length = length
 						l.Unlock()
@@ -761,7 +760,7 @@ func (vlm *ValueLocMap) Set(keyA uint64, keyB uint64, timestamp uint64, blockID 
 						return t
 					}
 					e.timestamp = timestamp
-					e.blockID = bblockID
+					e.blockID = blockID
 					e.offset = offset
 					e.length = length
 					u := atomic.AddUint32(&n.used, 1)
@@ -798,16 +797,16 @@ func (vlm *ValueLocMap) Set(keyA uint64, keyB uint64, timestamp uint64, blockID 
 				n.lock.RUnlock()
 				return 0
 			} else if evenIfSameTimestamp && e.timestamp == timestamp {
-				if bblockID != 0 {
+				if blockID != 0 {
 					if e.blockID != 0 {
-						e.blockID = bblockID
+						e.blockID = blockID
 						e.offset = offset
 						e.length = length
 						l.Unlock()
 						n.lock.RUnlock()
 						return timestamp
 					}
-					e.blockID = bblockID
+					e.blockID = blockID
 					e.offset = offset
 					e.length = length
 					u := atomic.AddUint32(&n.used, 1)
@@ -853,7 +852,7 @@ func (vlm *ValueLocMap) Set(keyA uint64, keyB uint64, timestamp uint64, blockID 
 		ol.RUnlock()
 	}
 	var u uint32
-	if bblockID != 0 {
+	if blockID != 0 {
 		e = &n.entries[i]
 		if e.blockID != 0 {
 			ol.Lock()
@@ -900,7 +899,7 @@ func (vlm *ValueLocMap) Set(keyA uint64, keyB uint64, timestamp uint64, blockID 
 		e.keyA = keyA
 		e.keyB = keyB
 		e.timestamp = timestamp
-		e.blockID = bblockID
+		e.blockID = blockID
 		e.offset = offset
 		e.length = length
 		u = atomic.AddUint32(&n.used, 1)
@@ -924,7 +923,7 @@ func (vlm *ValueLocMap) GatherStats(debug bool) (uint64, uint64, fmt.Stringer) {
 	}
 	for i := uint32(0); i < s.roots; i++ {
 		n := &vlm.roots[i]
-		n.lock.Lock() // Will be released by gatherStats
+		n.lock.RLock() // Will be released by gatherStats
 		if s.statsDebug && (n.a != nil || n.entries != nil) {
 			s.usedRoots++
 		}
@@ -933,7 +932,7 @@ func (vlm *ValueLocMap) GatherStats(debug bool) (uint64, uint64, fmt.Stringer) {
 	return s.active, s.length, s
 }
 
-// Will call n.lock.Unlock()
+// Will call n.lock.RUnlock()
 func (vlm *ValueLocMap) gatherStats(s *stats, n *node, depth int) {
 	if s.statsDebug {
 		s.nodes++
@@ -943,15 +942,24 @@ func (vlm *ValueLocMap) gatherStats(s *stats, n *node, depth int) {
 		s.depthCounts[depth]++
 	}
 	if n.a != nil {
-		n.a.lock.Lock() // Will be released by gatherStats
-		n.lock.Unlock()
+		n.a.lock.RLock() // Will be released by gatherStats
+		n.lock.RUnlock()
 		vlm.gatherStats(s, n.a, depth+1)
-		n.lock.Lock()
+		n.lock.RLock()
 		if n.b != nil {
-			n.b.lock.Lock() // Will be released by gatherStats
-			n.lock.Unlock()
+			n.b.lock.RLock() // Will be released by gatherStats
+			n.lock.RUnlock()
 			vlm.gatherStats(s, n.b, depth+1)
 		}
+	} else if n.used == 0 {
+		if s.statsDebug {
+			s.allocedEntries += uint64(len(n.entries))
+			for _, o := range n.overflow {
+				s.allocedEntries += uint64(len(o))
+				s.allocedInOverflow += uint64(len(o))
+			}
+		}
+		n.lock.RUnlock()
 	} else {
 		if s.statsDebug {
 			s.allocedEntries += uint64(len(n.entries))
@@ -960,32 +968,18 @@ func (vlm *ValueLocMap) gatherStats(s *stats, n *node, depth int) {
 				s.allocedInOverflow += uint64(len(o))
 			}
 		}
+		b := vlm.bits
 		lm := vlm.lowMask
 		es := n.entries
+		ol := &n.overflowLock
 		for i := uint32(0); i <= lm; i++ {
 			e := &es[i]
+			l := &n.entriesLocks[i&vlm.entriesLockMask]
+			l.RLock()
 			if e.blockID != 0 {
-				if s.statsDebug {
-					s.usedEntries++
-					if e.timestamp&1 == 0 {
-						s.active++
-						s.length += uint64(e.length)
-					} else {
-						s.tombstones++
-					}
-				} else if e.timestamp&1 == 0 {
-					s.active++
-					s.length += uint64(e.length)
-				}
-			}
-		}
-		for _, es = range n.overflow {
-			for i := uint32(0); i <= lm; i++ {
-				e := &es[i]
-				if e.blockID != 0 {
+				for {
 					if s.statsDebug {
 						s.usedEntries++
-						s.usedInOverflow++
 						if e.timestamp&1 == 0 {
 							s.active++
 							s.length += uint64(e.length)
@@ -996,10 +990,91 @@ func (vlm *ValueLocMap) gatherStats(s *stats, n *node, depth int) {
 						s.active++
 						s.length += uint64(e.length)
 					}
+					if e.next == 0 {
+						break
+					}
+					ol.RLock()
+					e = &n.overflow[e.next>>b][e.next&lm]
+					ol.RUnlock()
 				}
 			}
+			l.RUnlock()
 		}
-		n.lock.Unlock()
+		n.lock.RUnlock()
+	}
+}
+
+func (vlm *ValueLocMap) DiscardTombstones(tombstoneCutoff uint64) {
+	for i := 0; i < len(vlm.roots); i++ {
+		n := &vlm.roots[i]
+		n.lock.RLock() // Will be released by discardTombstones
+		vlm.discardTombstones(tombstoneCutoff, n)
+	}
+}
+
+// Will call n.lock.RUnlock()
+func (vlm *ValueLocMap) discardTombstones(tombstoneCutoff uint64, n *node) {
+	if n.a != nil {
+		n.a.lock.RLock() // Will be released by discardTombstones
+		n.lock.RUnlock()
+		vlm.discardTombstones(tombstoneCutoff, n.a)
+		n.lock.RLock()
+		if n.b != nil {
+			n.b.lock.RLock() // Will be released by discardTombstones
+			n.lock.RUnlock()
+			vlm.discardTombstones(tombstoneCutoff, n.b)
+		}
+	} else if n.used == 0 {
+		n.lock.RUnlock()
+	} else {
+		b := vlm.bits
+		lm := vlm.lowMask
+		es := n.entries
+		ol := &n.overflowLock
+		for i := uint32(0); i <= lm; i++ {
+			e := &es[i]
+			var p *entry
+			l := &n.entriesLocks[i&vlm.entriesLockMask]
+			l.Lock()
+			if e.blockID != 0 {
+				for {
+					if e.timestamp&1 != 0 {
+						if p == nil {
+							if e.next == 0 {
+								e.blockID = 0
+								break
+							} else {
+								ol.RLock()
+								en := &n.overflow[e.next>>b][e.next&lm]
+								ol.RUnlock()
+								*e = *en
+								en.blockID = 0
+								continue
+							}
+						} else {
+							p.next = e.next
+							e.blockID = 0
+							if p.next == 0 {
+								break
+							}
+							ol.RLock()
+							e = &n.overflow[p.next>>b][p.next&lm]
+							ol.RUnlock()
+							continue
+						}
+					}
+					if e.next == 0 {
+						break
+					}
+					p = e
+					ol.RLock()
+					e = &n.overflow[e.next>>b][e.next&lm]
+					ol.RUnlock()
+				}
+			}
+			l.Unlock()
+		}
+		n.lock.RUnlock()
 	}
 }
 
