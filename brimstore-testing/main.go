@@ -86,20 +86,20 @@ func main() {
 		vsopts = append(vsopts, brimstore.OptTombstoneAge(opts.TombstoneAge))
 	}
 	wg := sync.WaitGroup{}
-	prc := make(chan brimstore.PullReplicationMsg, opts.Cores)
-	prms := 0
+	outPRC := make(chan brimstore.PullReplicationMsg, opts.Cores)
+	outPRMs := 0
 	wg.Add(1)
 	go func() {
 		for {
-			prm := <-prc
+			prm := <-outPRC
 			if prm == nil {
 				break
 			}
-			prms++
+			outPRMs++
 		}
 		wg.Done()
 	}()
-	vsopts = append(vsopts, brimstore.OptPullReplicationChan(prc))
+	vsopts = append(vsopts, brimstore.OptOutPullReplicationChan(outPRC))
 	opts.vs = brimstore.NewValueStore(vsopts...)
 	opts.vs.BackgroundStart()
 	dur := time.Now().Sub(begin)
@@ -124,9 +124,9 @@ func main() {
 	}
 	begin = time.Now()
 	opts.vs.Close()
-	prc <- nil
+	outPRC <- nil
 	wg.Wait()
-	fmt.Println("Got", prms, "prms")
+	fmt.Println("Got", outPRMs, "outPRMs")
 	dur = time.Now().Sub(begin)
 	fmt.Println(dur, "to close ValuesStore")
 	memstat()
