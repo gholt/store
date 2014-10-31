@@ -8,6 +8,8 @@ import (
 	"github.com/spaolacci/murmur3"
 )
 
+const ktBloomFilterHeaderBytes int = 20
+
 type ktBloomFilter struct {
 	n       uint64
 	p       float64
@@ -48,7 +50,7 @@ func newKTBloomFilterFromMsg(prm *pullReplicationMsg, headerExtra int) *ktBloomF
 }
 
 func (ktbf *ktBloomFilter) toMsg(prm *pullReplicationMsg, headerExtra int) {
-	prm.header = make([]byte, 20+headerExtra)
+	prm.header = make([]byte, ktBloomFilterHeaderBytes+headerExtra)
 	binary.BigEndian.PutUint64(prm.header[headerExtra:], ktbf.n)
 	binary.BigEndian.PutUint64(prm.header[headerExtra+8:], math.Float64bits(ktbf.p))
 	binary.BigEndian.PutUint16(prm.header[headerExtra+16:], uint16(ktbf.salt>>16))

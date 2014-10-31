@@ -1,9 +1,11 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/binary"
 	"fmt"
+	"io"
 	"os"
 	"runtime"
 	"sync"
@@ -88,12 +90,14 @@ func main() {
 		vsopts = append(vsopts, brimstore.OptTombstoneAge(opts.TombstoneAge))
 	}
 	if opts.Replicate {
-		prc := make(chan brimstore.PullReplicationMsg, opts.Cores)
+		r, w2 := io.Pipe()
+		r2, w := io.Pipe()
 		vs2opts := brimstore.OptList(vsopts...)
 		vs2opts = append(vs2opts, brimstore.OptPath("replicated"))
-		vs2opts = append(vs2opts, brimstore.OptOutPullReplicationChan(prc))
+		vs2opts = append(vs2opts, brimstore.OptMsgConn(brimstore.NewMsgConn(bufio.NewReader(r2), bufio.NewWriter(w2))))
 		opts.vs2 = brimstore.NewValueStore(vs2opts...)
-		vsopts = append(vsopts, brimstore.OptInPullReplicationChan(prc))
+		opts.vs2.BackgroundStart()
+		vsopts = append(vsopts, brimstore.OptMsgConn(brimstore.NewMsgConn(bufio.NewReader(r), bufio.NewWriter(w))))
 	}
 	opts.vs = brimstore.NewValueStore(vsopts...)
 	opts.vs.BackgroundStart()
@@ -381,5 +385,5 @@ func write() {
 }
 
 func run() {
-	<-time.After(5 * time.Minute)
+	<-time.After(1 * time.Minute)
 }
