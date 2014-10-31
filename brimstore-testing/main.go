@@ -22,6 +22,7 @@ type optsStruct struct {
 	Length        int    `short:"l" long:"length" description:"Length of values. Default: 0"`
 	Number        int    `short:"n" long:"number" description:"Number of keys. Default: 0"`
 	Random        int    `long:"random" description:"Random number seed. Default: 0"`
+	Replicate     bool   `long:"replicate" description:"Creates a second value store that will test replication."`
 	Timestamp     uint64 `long:"timestamp" description:"Timestamp value. Default: current time"`
 	TombstoneAge  int    `long:"tombstone-age" description:"Seconds to keep tombstones. Default: 4 hours"`
 	Positional    struct {
@@ -31,6 +32,7 @@ type optsStruct struct {
 	buffers  [][]byte
 	st       runtime.MemStats
 	vs       *brimstore.ValueStore
+	vs2      *brimstore.ValueStore
 }
 
 var opts optsStruct
@@ -85,21 +87,14 @@ func main() {
 	if opts.TombstoneAge > 0 {
 		vsopts = append(vsopts, brimstore.OptTombstoneAge(opts.TombstoneAge))
 	}
-	wg := sync.WaitGroup{}
-	outPRC := make(chan brimstore.PullReplicationMsg, opts.Cores)
-	outPRMs := 0
-	wg.Add(1)
-	go func() {
-		for {
-			prm := <-outPRC
-			if prm == nil {
-				break
-			}
-			outPRMs++
-		}
-		wg.Done()
-	}()
-	vsopts = append(vsopts, brimstore.OptOutPullReplicationChan(outPRC))
+	if opts.Replicate {
+		prc := make(chan brimstore.PullReplicationMsg, opts.Cores)
+		vs2opts := brimstore.OptList(vsopts...)
+		vs2opts = append(vs2opts, brimstore.OptPath("replicated"))
+		vs2opts = append(vs2opts, brimstore.OptOutPullReplicationChan(prc))
+		opts.vs2 = brimstore.NewValueStore(vs2opts...)
+		vsopts = append(vsopts, brimstore.OptInPullReplicationChan(prc))
+	}
 	opts.vs = brimstore.NewValueStore(vsopts...)
 	opts.vs.BackgroundStart()
 	dur := time.Now().Sub(begin)
@@ -124,11 +119,11 @@ func main() {
 	}
 	begin = time.Now()
 	opts.vs.Close()
-	outPRC <- nil
-	wg.Wait()
-	fmt.Println("Got", outPRMs, "outPRMs")
+	if opts.vs2 != nil {
+		opts.vs2.Close()
+	}
 	dur = time.Now().Sub(begin)
-	fmt.Println(dur, "to close ValuesStore")
+	fmt.Println(dur, "to close value store(s)")
 	memstat()
 	begin = time.Now()
 	statsCount, statsLength, stats := opts.vs.GatherStats(opts.ExtendedStats)
@@ -141,6 +136,19 @@ func main() {
 		fmt.Println(statsLength, "ValuesLength")
 	}
 	memstat()
+	if opts.vs2 != nil {
+		begin = time.Now()
+		statsCount, statsLength, stats := opts.vs2.GatherStats(opts.ExtendedStats)
+		dur = time.Now().Sub(begin)
+		fmt.Println(dur, "to gather stats for replicated store")
+		if opts.ExtendedStats {
+			fmt.Println(stats.String())
+		} else {
+			fmt.Println(statsCount, "ValueCount")
+			fmt.Println(statsLength, "ValuesLength")
+		}
+		memstat()
+	}
 }
 
 func memstat() {
@@ -154,6 +162,9 @@ func memstat() {
 func background() {
 	begin := time.Now()
 	opts.vs.BackgroundNow(opts.Cores)
+	if opts.vs2 != nil {
+		opts.vs2.BackgroundNow(opts.Cores)
+	}
 	dur := time.Now().Sub(begin)
 	fmt.Printf("%s to run background tasks\n", dur)
 }
