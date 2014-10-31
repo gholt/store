@@ -385,5 +385,5 @@ func write() {
 }
 
 func run() {
-	<-time.After(1 * time.Minute)
+	<-time.After(5 * time.Minute)
 }

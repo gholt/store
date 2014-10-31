@@ -545,6 +545,10 @@ func (vs *ValueStore) Close() {
 		vs.inPullReplicationChan <- nil
 		<-vs.inPullReplicationDoneChan
 	}
+	if vs.inBulkSetChan != nil {
+		vs.inBulkSetChan <- nil
+		<-vs.inBulkSetDoneChan
+	}
 	for _, c := range vs.pendingVWRChans {
 		c <- nil
 	}
