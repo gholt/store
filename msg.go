@@ -3,9 +3,11 @@ package brimstore
 import (
 	"io"
 	"log"
+	"net"
 	"os"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 type FlushWriter interface {
@@ -54,8 +56,7 @@ type msg interface {
 
 type MsgConn struct {
 	closing         uint32
-	reader          io.Reader
-	writer          FlushWriter
+	conn            net.Conn
 	lock            sync.RWMutex
 	msgMap          *msgMap
 	logError        *log.Logger
@@ -66,10 +67,9 @@ type MsgConn struct {
 	writingDoneChan chan struct{}
 }
 
-func NewMsgConn(r io.Reader, w FlushWriter) *MsgConn {
+func NewMsgConn(c net.Conn) *MsgConn {
 	mc := &MsgConn{
-		reader:          r,
-		writer:          w,
+		conn:            c,
 		msgMap:          newMsgMap(),
 		logError:        log.New(os.Stderr, "", log.LstdFlags),
 		logWarning:      log.New(os.Stderr, "", log.LstdFlags),
@@ -78,14 +78,20 @@ func NewMsgConn(r io.Reader, w FlushWriter) *MsgConn {
 		writeChan:       make(chan msg, 40),
 		writingDoneChan: make(chan struct{}, 1),
 	}
+	return mc
+}
+
+func (mc *MsgConn) start() {
 	go mc.reading()
 	go mc.writing()
-	return mc
 }
 
 func (mc *MsgConn) send(m msg) {
 	if atomic.LoadUint32(&mc.closing) == 0 {
-		mc.writeChan <- m
+		select {
+		case mc.writeChan <- m:
+		default:
+		}
 	}
 }
 
@@ -111,7 +117,8 @@ func (mc *MsgConn) reading() {
 				}
 				return
 			}
-			sn, err = mc.reader.Read(b[n:])
+			mc.conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+			sn, err = mc.conn.Read(b[n:])
 			n += sn
 		}
 		if err != nil {
@@ -128,27 +135,27 @@ func (mc *MsgConn) reading() {
 		}
 		f := mc.msgMap.get(t)
 		if f != nil && atomic.LoadUint32(&mc.closing) == 0 {
-			_, err = f(mc.reader, l)
+			_, err = f(mc.conn, l)
 			if err != nil {
 				mc.logError.Print("error reading msg content", err)
 				return
 			}
 		} else {
 			if f == nil {
-				mc.logWarning.Print("unknown msg type", t)
+				mc.logWarning.Printf("unknown msg type %d", t)
 			}
-			n = 0
-			for uint64(n) != l {
+			for l > 0 {
 				if err != nil {
 					mc.logError.Print("err reading msg content", err)
 					return
 				}
+				mc.conn.SetReadDeadline(time.Now().Add(5 * time.Second))
 				if l >= uint64(len(d)) {
-					sn, err = mc.reader.Read(d)
+					sn, err = mc.conn.Read(d)
 				} else {
-					sn, err = mc.reader.Read(d[:l])
+					sn, err = mc.conn.Read(d[:l])
 				}
-				l += uint64(sn)
+				l -= uint64(sn)
 			}
 		}
 	}
@@ -174,17 +181,13 @@ func (mc *MsgConn) writing() {
 			b[mc.typeBytes+i] = byte(l)
 			l >>= 8
 		}
-		_, err := mc.writer.Write(b)
+		mc.conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
+		_, err := mc.conn.Write(b)
 		if err != nil {
 			mc.logError.Print("err writing msg", err)
 			break
 		}
-		_, err = m.writeContent(mc.writer)
-		if err != nil {
-			mc.logError.Print("err writing msg content", err)
-			break
-		}
-		err = mc.writer.Flush()
+		_, err = m.writeContent(mc.conn)
 		if err != nil {
 			mc.logError.Print("err writing msg content", err)
 			break

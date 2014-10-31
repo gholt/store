@@ -284,64 +284,14 @@ func (vlm *ValueLocMap) split2(n *node) {
 		for _, aes := range ao {
 			for j := uint32(0); j <= lm; j++ {
 				ae := &aes[j]
-				if ae.blockID != 0 && ae.next != 0 {
-					aen := &ao[ae.next>>b][ae.next&lm]
-					if aen.keyA&hm != 0 {
-						be := &bes[uint32(aen.keyB)&lm]
-						if be.blockID == 0 {
-							*be = *aen
-							be.next = 0
-						} else {
-							if bn.overflowLowestFree != 0 {
-								be2 := &bo[bn.overflowLowestFree>>b][bn.overflowLowestFree&lm]
-								*be2 = *aen
-								be2.next = be.next
-								be.next = bn.overflowLowestFree
-								bn.overflowLowestFree++
-								if bn.overflowLowestFree&lm == 0 {
-									bn.overflowLowestFree = 0
-								}
-							} else {
-								bo = append(bo, make([]entry, 1<<b))
-								bn.overflow = bo
-								if boc == 0 {
-									be2 := &bo[0][1]
-									*be2 = *aen
-									be2.next = be.next
-									be.next = 1
-									bn.overflowLowestFree = 2
-								} else {
-									be2 := &bo[boc][0]
-									*be2 = *aen
-									be2.next = be.next
-									be.next = boc << b
-									bn.overflowLowestFree = boc<<b + 1
-								}
-								boc++
-							}
-						}
-						bn.used++
-						if ae.next < an.overflowLowestFree {
-							an.overflowLowestFree = ae.next
-						}
-						ae.next = aen.next
-						aen.blockID = 0
-						an.used--
-						c = true
-					}
+				if ae.blockID == 0 || ae.next == 0 {
+					continue
 				}
-			}
-		}
-	}
-	// Now any matching overflow entries left are pointed to by their
-	// respective non-overflow entry. Move those.
-	aes := an.entries
-	for i := uint32(0); i <= lm; i++ {
-		ae := &aes[i]
-		if ae.blockID != 0 && ae.next != 0 {
-			aen := &ao[ae.next>>b][ae.next&lm]
-			if aen.keyA&hm != 0 {
-				be := &bes[i]
+				aen := &ao[ae.next>>b][ae.next&lm]
+				if aen.keyA&hm == 0 {
+					continue
+				}
+				be := &bes[uint32(aen.keyB)&lm]
 				if be.blockID == 0 {
 					*be = *aen
 					be.next = 0
@@ -379,63 +329,114 @@ func (vlm *ValueLocMap) split2(n *node) {
 					an.overflowLowestFree = ae.next
 				}
 				ae.next = aen.next
-				aen.blockID = 0
 				an.used--
+				c = true
 			}
 		}
+	}
+	// Now any matching overflow entries left are pointed to by their
+	// respective non-overflow entry. Move those.
+	aes := an.entries
+	for i := uint32(0); i <= lm; i++ {
+		ae := &aes[i]
+		if ae.blockID == 0 || ae.next == 0 {
+			continue
+		}
+		aen := &ao[ae.next>>b][ae.next&lm]
+		if aen.keyA&hm == 0 {
+			continue
+		}
+		be := &bes[i]
+		if be.blockID == 0 {
+			*be = *aen
+			be.next = 0
+		} else {
+			if bn.overflowLowestFree != 0 {
+				be2 := &bo[bn.overflowLowestFree>>b][bn.overflowLowestFree&lm]
+				*be2 = *aen
+				be2.next = be.next
+				be.next = bn.overflowLowestFree
+				bn.overflowLowestFree++
+				if bn.overflowLowestFree&lm == 0 {
+					bn.overflowLowestFree = 0
+				}
+			} else {
+				bo = append(bo, make([]entry, 1<<b))
+				bn.overflow = bo
+				if boc == 0 {
+					be2 := &bo[0][1]
+					*be2 = *aen
+					be2.next = be.next
+					be.next = 1
+					bn.overflowLowestFree = 2
+				} else {
+					be2 := &bo[boc][0]
+					*be2 = *aen
+					be2.next = be.next
+					be.next = boc << b
+					bn.overflowLowestFree = boc<<b + 1
+				}
+				boc++
+			}
+		}
+		bn.used++
+		if ae.next < an.overflowLowestFree {
+			an.overflowLowestFree = ae.next
+		}
+		ae.next = aen.next
+		an.used--
 	}
 	// Now any matching entries left are non-overflow entries. Move those.
 	for i := uint32(0); i <= lm; i++ {
 		ae := &aes[i]
-		if ae.blockID != 0 && ae.keyA&hm != 0 {
-			be := &bes[i]
-			if be.blockID == 0 {
-				*be = *ae
-				be.next = 0
+		if ae.blockID == 0 || ae.keyA&hm == 0 {
+			continue
+		}
+		be := &bes[i]
+		if be.blockID == 0 {
+			*be = *ae
+			be.next = 0
+		} else {
+			if bn.overflowLowestFree != 0 {
+				be2 := &bo[bn.overflowLowestFree>>b][bn.overflowLowestFree&lm]
+				*be2 = *ae
+				be2.next = be.next
+				be.next = bn.overflowLowestFree
+				bn.overflowLowestFree++
+				if bn.overflowLowestFree&lm == 0 {
+					bn.overflowLowestFree = 0
+				}
 			} else {
-				if bn.overflowLowestFree != 0 {
-					be2 := &bo[bn.overflowLowestFree>>b][bn.overflowLowestFree&lm]
+				bo = append(bo, make([]entry, 1<<b))
+				bn.overflow = bo
+				if boc == 0 {
+					be2 := &bo[0][1]
 					*be2 = *ae
 					be2.next = be.next
-					be.next = bn.overflowLowestFree
-					bn.overflowLowestFree++
-					if bn.overflowLowestFree&lm == 0 {
-						bn.overflowLowestFree = 0
-					}
+					be.next = 1
+					bn.overflowLowestFree = 2
 				} else {
-					bo = append(bo, make([]entry, 1<<b))
-					bn.overflow = bo
-					if boc == 0 {
-						be2 := &bo[0][1]
-						*be2 = *ae
-						be2.next = be.next
-						be.next = 1
-						bn.overflowLowestFree = 2
-					} else {
-						be2 := &bo[boc][0]
-						*be2 = *ae
-						be2.next = be.next
-						be.next = boc << b
-						bn.overflowLowestFree = boc<<b + 1
-					}
-					boc++
+					be2 := &bo[boc][0]
+					*be2 = *ae
+					be2.next = be.next
+					be.next = boc << b
+					bn.overflowLowestFree = boc<<b + 1
 				}
+				boc++
 			}
-			bn.used++
-			if ae.next == 0 {
-				ae.blockID = 0
-				ae.timestamp = 0
-			} else {
-				if ae.next < an.overflowLowestFree {
-					an.overflowLowestFree = ae.next
-				}
-				aen := &ao[ae.next>>b][ae.next&lm]
-				*ae = *aen
-				aen.blockID = 0
-				aen.next = 0
-			}
-			an.used--
 		}
+		bn.used++
+		if ae.next == 0 {
+			ae.blockID = 0
+		} else {
+			if ae.next < an.overflowLowestFree {
+				an.overflowLowestFree = ae.next
+			}
+			aen := &ao[ae.next>>b][ae.next&lm]
+			*ae = *aen
+			aen.blockID = 0
+		}
+		an.used--
 	}
 	n.lock.Unlock()
 	n.resizingLock.Lock()
@@ -481,60 +482,61 @@ func (vlm *ValueLocMap) merge2(n *node) {
 		for _, bes := range bo {
 			for j := uint32(0); j <= lm; j++ {
 				be := &bes[j]
-				if be.blockID != 0 && be.next != 0 {
-					ben := &bo[be.next>>b][be.next&lm]
-					ae := &aes[uint32(ben.keyB)&lm]
-					if ae.blockID == 0 {
-						*ae = *ben
-						ae.next = 0
-					} else {
-						if an.overflowLowestFree != 0 {
-							oA := an.overflowLowestFree >> b
-							oB := an.overflowLowestFree & lm
-							ae2 := &ao[oA][oB]
-							*ae2 = *ben
-							ae2.next = ae.next
-							ae.next = an.overflowLowestFree
-							an.overflowLowestFree = 0
-							for {
-								if oB == lm {
-									oA++
-									if oA == aoc {
-										break
-									}
-									oB = 0
-								} else {
-									oB++
-								}
-								if ao[oA][oB].blockID == 0 {
-									an.overflowLowestFree = oA<<b | oB
+				if be.blockID == 0 || be.next == 0 {
+					continue
+				}
+				ben := &bo[be.next>>b][be.next&lm]
+				ae := &aes[uint32(ben.keyB)&lm]
+				if ae.blockID == 0 {
+					*ae = *ben
+					ae.next = 0
+				} else {
+					if an.overflowLowestFree != 0 {
+						oA := an.overflowLowestFree >> b
+						oB := an.overflowLowestFree & lm
+						ae2 := &ao[oA][oB]
+						*ae2 = *ben
+						ae2.next = ae.next
+						ae.next = an.overflowLowestFree
+						an.overflowLowestFree = 0
+						for {
+							if oB == lm {
+								oA++
+								if oA == aoc {
 									break
 								}
-							}
-						} else {
-							ao = append(ao, make([]entry, 1<<b))
-							an.overflow = ao
-							if aoc == 0 {
-								ae2 := &ao[0][1]
-								*ae2 = *ben
-								ae2.next = ae.next
-								ae.next = 1
-								an.overflowLowestFree = 2
+								oB = 0
 							} else {
-								ae2 := &ao[aoc][0]
-								*ae2 = *ben
-								ae2.next = ae.next
-								ae.next = aoc << b
-								an.overflowLowestFree = aoc<<b + 1
+								oB++
 							}
-							aoc++
+							if ao[oA][oB].blockID == 0 {
+								an.overflowLowestFree = oA<<b | oB
+								break
+							}
 						}
+					} else {
+						ao = append(ao, make([]entry, 1<<b))
+						an.overflow = ao
+						if aoc == 0 {
+							ae2 := &ao[0][1]
+							*ae2 = *ben
+							ae2.next = ae.next
+							ae.next = 1
+							an.overflowLowestFree = 2
+						} else {
+							ae2 := &ao[aoc][0]
+							*ae2 = *ben
+							ae2.next = ae.next
+							ae.next = aoc << b
+							an.overflowLowestFree = aoc<<b + 1
+						}
+						aoc++
 					}
-					an.used++
-					be.next = ben.next
-					ben.blockID = 0
-					c = true
 				}
+				an.used++
+				be.next = ben.next
+				ben.blockID = 0
+				c = true
 			}
 		}
 	}
@@ -543,113 +545,115 @@ func (vlm *ValueLocMap) merge2(n *node) {
 	bes := bn.entries
 	for i := uint32(0); i <= lm; i++ {
 		be := &bes[i]
-		if be.blockID != 0 && be.next != 0 {
-			ben := &bo[be.next>>b][be.next&lm]
-			ae := &aes[i]
-			if ae.blockID == 0 {
-				*ae = *ben
-				ae.next = 0
-			} else {
-				if an.overflowLowestFree != 0 {
-					oA := an.overflowLowestFree >> b
-					oB := an.overflowLowestFree & lm
-					ae2 := &ao[oA][oB]
-					*ae2 = *ben
-					ae2.next = ae.next
-					ae.next = an.overflowLowestFree
-					an.overflowLowestFree = 0
-					for {
-						if oB == lm {
-							oA++
-							if oA == aoc {
-								break
-							}
-							oB = 0
-						} else {
-							oB++
-						}
-						if ao[oA][oB].blockID == 0 {
-							an.overflowLowestFree = oA<<b | oB
+		if be.blockID == 0 || be.next == 0 {
+			continue
+		}
+		ben := &bo[be.next>>b][be.next&lm]
+		ae := &aes[i]
+		if ae.blockID == 0 {
+			*ae = *ben
+			ae.next = 0
+		} else {
+			if an.overflowLowestFree != 0 {
+				oA := an.overflowLowestFree >> b
+				oB := an.overflowLowestFree & lm
+				ae2 := &ao[oA][oB]
+				*ae2 = *ben
+				ae2.next = ae.next
+				ae.next = an.overflowLowestFree
+				an.overflowLowestFree = 0
+				for {
+					if oB == lm {
+						oA++
+						if oA == aoc {
 							break
 						}
-					}
-				} else {
-					ao = append(ao, make([]entry, 1<<b))
-					an.overflow = ao
-					if aoc == 0 {
-						ae2 := &ao[0][1]
-						*ae2 = *ben
-						ae2.next = ae.next
-						ae.next = 1
-						an.overflowLowestFree = 2
+						oB = 0
 					} else {
-						ae2 := &ao[aoc][0]
-						*ae2 = *ben
-						ae2.next = ae.next
-						ae.next = aoc << b
-						an.overflowLowestFree = aoc<<b + 1
+						oB++
 					}
-					aoc++
+					if ao[oA][oB].blockID == 0 {
+						an.overflowLowestFree = oA<<b | oB
+						break
+					}
 				}
+			} else {
+				ao = append(ao, make([]entry, 1<<b))
+				an.overflow = ao
+				if aoc == 0 {
+					ae2 := &ao[0][1]
+					*ae2 = *ben
+					ae2.next = ae.next
+					ae.next = 1
+					an.overflowLowestFree = 2
+				} else {
+					ae2 := &ao[aoc][0]
+					*ae2 = *ben
+					ae2.next = ae.next
+					ae.next = aoc << b
+					an.overflowLowestFree = aoc<<b + 1
+				}
+				aoc++
 			}
-			an.used++
-			ben.blockID = 0
 		}
+		an.used++
+		ben.blockID = 0
 	}
 	// Now we just have the non-overflow entries. Move those.
 	for i := uint32(0); i <= lm; i++ {
 		be := &bes[i]
-		if be.blockID != 0 {
-			ae := &aes[i]
-			if ae.blockID == 0 {
-				*ae = *be
-				ae.next = 0
-			} else {
-				if an.overflowLowestFree != 0 {
-					oA := an.overflowLowestFree >> b
-					oB := an.overflowLowestFree & lm
-					ae2 := &ao[oA][oB]
-					*ae2 = *be
-					ae2.next = ae.next
-					ae.next = an.overflowLowestFree
-					an.overflowLowestFree = 0
-					for {
-						if oB == lm {
-							oA++
-							if oA == aoc {
-								break
-							}
-							oB = 0
-						} else {
-							oB++
-						}
-						if ao[oA][oB].blockID == 0 {
-							an.overflowLowestFree = oA<<b | oB
+		if be.blockID == 0 {
+			continue
+		}
+		ae := &aes[i]
+		if ae.blockID == 0 {
+			*ae = *be
+			ae.next = 0
+		} else {
+			if an.overflowLowestFree != 0 {
+				oA := an.overflowLowestFree >> b
+				oB := an.overflowLowestFree & lm
+				ae2 := &ao[oA][oB]
+				*ae2 = *be
+				ae2.next = ae.next
+				ae.next = an.overflowLowestFree
+				an.overflowLowestFree = 0
+				for {
+					if oB == lm {
+						oA++
+						if oA == aoc {
 							break
 						}
-					}
-				} else {
-					ao = append(ao, make([]entry, 1<<b))
-					an.overflow = ao
-					if aoc == 0 {
-						ae2 := &ao[0][1]
-						*ae2 = *be
-						ae2.next = ae.next
-						ae.next = 1
-						an.overflowLowestFree = 2
+						oB = 0
 					} else {
-						ae2 := &ao[aoc][0]
-						*ae2 = *be
-						ae2.next = ae.next
-						ae.next = aoc << b
-						an.overflowLowestFree = aoc<<b + 1
+						oB++
 					}
-					aoc++
+					if ao[oA][oB].blockID == 0 {
+						an.overflowLowestFree = oA<<b | oB
+						break
+					}
 				}
+			} else {
+				ao = append(ao, make([]entry, 1<<b))
+				an.overflow = ao
+				if aoc == 0 {
+					ae2 := &ao[0][1]
+					*ae2 = *be
+					ae2.next = ae.next
+					ae.next = 1
+					an.overflowLowestFree = 2
+				} else {
+					ae2 := &ao[aoc][0]
+					*ae2 = *be
+					ae2.next = ae.next
+					ae.next = aoc << b
+					an.overflowLowestFree = aoc<<b + 1
+				}
+				aoc++
 			}
-			an.used++
-			be.blockID = 0
 		}
+		an.used++
+		be.blockID = 0
 	}
 	bn.used = 0
 	bn.lock.Unlock()
@@ -688,6 +692,9 @@ func (vlm *ValueLocMap) Get(keyA uint64, keyB uint64) (uint64, uint32, uint32, u
 	e := &n.entries[i]
 	l.RLock()
 	for {
+		if e.blockID == 0 {
+			break
+		}
 		if e.keyA == keyA && e.keyB == keyB {
 			rt := e.timestamp
 			rb := e.blockID
@@ -744,12 +751,12 @@ func (vlm *ValueLocMap) Set(keyA uint64, keyB uint64, timestamp uint64, blockID 
 	e := &n.entries[i]
 	var ep *entry
 	l.Lock()
-	for {
+	if e.blockID != 0 {
 		var f uint32
-		if e.keyA == keyA && e.keyB == keyB {
-			if e.timestamp < timestamp {
-				if blockID != 0 {
-					if e.blockID != 0 {
+		for {
+			if e.keyA == keyA && e.keyB == keyB {
+				if e.timestamp < timestamp || (evenIfSameTimestamp && e.timestamp == timestamp) {
+					if blockID != 0 {
 						t := e.timestamp
 						e.timestamp = timestamp
 						e.blockID = blockID
@@ -759,25 +766,11 @@ func (vlm *ValueLocMap) Set(keyA uint64, keyB uint64, timestamp uint64, blockID 
 						n.lock.RUnlock()
 						return t
 					}
-					e.timestamp = timestamp
-					e.blockID = blockID
-					e.offset = offset
-					e.length = length
-					u := atomic.AddUint32(&n.used, 1)
-					l.Unlock()
-					n.lock.RUnlock()
-					if u >= n.splitCount {
-						vlm.split(n)
-					}
-					return 0
-				}
-				if e.blockID != 0 {
 					t := e.timestamp
-					e.timestamp = 0
-					e.blockID = 0
 					if ep != nil {
 						ep.next = e.next
 					}
+					e.blockID = 0
 					u := atomic.AddUint32(&n.used, ^uint32(0))
 					if f != 0 {
 						ol.Lock()
@@ -795,115 +788,74 @@ func (vlm *ValueLocMap) Set(keyA uint64, keyB uint64, timestamp uint64, blockID 
 				}
 				l.Unlock()
 				n.lock.RUnlock()
-				return 0
-			} else if evenIfSameTimestamp && e.timestamp == timestamp {
-				if blockID != 0 {
-					if e.blockID != 0 {
-						e.blockID = blockID
-						e.offset = offset
-						e.length = length
-						l.Unlock()
-						n.lock.RUnlock()
-						return timestamp
-					}
-					e.blockID = blockID
-					e.offset = offset
-					e.length = length
-					u := atomic.AddUint32(&n.used, 1)
-					l.Unlock()
-					n.lock.RUnlock()
-					if u >= n.splitCount {
-						vlm.split(n)
-					}
-					return timestamp
-				} else if e.blockID != 0 {
-					e.timestamp = 0
-					e.blockID = 0
-					u := atomic.AddUint32(&n.used, ^uint32(0))
-					if f != 0 {
-						ol.Lock()
-						if f < n.overflowLowestFree {
-							n.overflowLowestFree = f
-						}
-						ol.Unlock()
-					}
-					l.Unlock()
-					n.lock.RUnlock()
-					if u <= n.mergeCount && pn != nil {
-						vlm.merge(pn)
-					}
-					return timestamp
-				}
-				l.Unlock()
-				n.lock.RUnlock()
-				return timestamp
+				return e.timestamp
 			}
-			l.Unlock()
-			n.lock.RUnlock()
-			return e.timestamp
+			if e.next == 0 {
+				break
+			}
+			ep = e
+			f = e.next
+			ol.RLock()
+			e = &n.overflow[f>>b][f&lm]
+			ol.RUnlock()
 		}
-		if e.next == 0 {
-			break
-		}
-		ep = e
-		f = e.next
-		ol.RLock()
-		e = &n.overflow[f>>b][f&lm]
-		ol.RUnlock()
+	}
+	if blockID == 0 {
+		l.Unlock()
+		n.lock.RUnlock()
+		return 0
 	}
 	var u uint32
-	if blockID != 0 {
-		e = &n.entries[i]
-		if e.blockID != 0 {
-			ol.Lock()
-			o := n.overflow
-			oc := uint32(len(o))
-			if n.overflowLowestFree != 0 {
-				oA := n.overflowLowestFree >> b
-				oB := n.overflowLowestFree & lm
-				e = &o[oA][oB]
-				e.next = n.entries[i].next
-				n.entries[i].next = n.overflowLowestFree
-				n.overflowLowestFree = 0
-				for {
-					if oB == lm {
-						oA++
-						if oA == oc {
-							break
-						}
-						oB = 0
-					} else {
-						oB++
-					}
-					if o[oA][oB].blockID == 0 {
-						n.overflowLowestFree = oA<<b | oB
+	e = &n.entries[i]
+	if e.blockID != 0 {
+		ol.Lock()
+		o := n.overflow
+		oc := uint32(len(o))
+		if n.overflowLowestFree != 0 {
+			oA := n.overflowLowestFree >> b
+			oB := n.overflowLowestFree & lm
+			e = &o[oA][oB]
+			e.next = n.entries[i].next
+			n.entries[i].next = n.overflowLowestFree
+			n.overflowLowestFree = 0
+			for {
+				if oB == lm {
+					oA++
+					if oA == oc {
 						break
 					}
-				}
-			} else {
-				n.overflow = append(n.overflow, make([]entry, 1<<b))
-				if oc == 0 {
-					e = &n.overflow[0][1]
-					e.next = n.entries[i].next
-					n.entries[i].next = 1
-					n.overflowLowestFree = 2
+					oB = 0
 				} else {
-					e = &n.overflow[oc][0]
-					e.next = n.entries[i].next
-					n.entries[i].next = oc << b
-					n.overflowLowestFree = oc<<b + 1
+					oB++
+				}
+				if o[oA][oB].blockID == 0 {
+					n.overflowLowestFree = oA<<b | oB
+					break
 				}
 			}
-			ol.Unlock()
+		} else {
+			n.overflow = append(n.overflow, make([]entry, 1<<b))
+			if oc == 0 {
+				e = &n.overflow[0][1]
+				e.next = n.entries[i].next
+				n.entries[i].next = 1
+				n.overflowLowestFree = 2
+			} else {
+				e = &n.overflow[oc][0]
+				e.next = n.entries[i].next
+				n.entries[i].next = oc << b
+				n.overflowLowestFree = oc<<b + 1
+			}
 		}
-		e.keyA = keyA
-		e.keyB = keyB
-		e.timestamp = timestamp
-		e.blockID = blockID
-		e.offset = offset
-		e.length = length
-		u = atomic.AddUint32(&n.used, 1)
+		ol.Unlock()
 	}
+	e.keyA = keyA
+	e.keyB = keyB
+	e.timestamp = timestamp
+	e.blockID = blockID
+	e.offset = offset
+	e.length = length
+	u = atomic.AddUint32(&n.used, 1)
 	l.Unlock()
 	n.lock.RUnlock()
 	if u >= n.splitCount {
@@ -976,27 +928,29 @@ func (vlm *ValueLocMap) gatherStats(s *stats, n *node, depth int) {
 			e := &es[i]
 			l := &n.entriesLocks[i&vlm.entriesLockMask]
 			l.RLock()
-			if e.blockID != 0 {
-				for {
-					if s.statsDebug {
-						s.usedEntries++
-						if e.timestamp&1 == 0 {
-							s.active++
-							s.length += uint64(e.length)
-						} else {
-							s.tombstones++
-						}
-					} else if e.timestamp&1 == 0 {
+			if e.blockID == 0 {
+				l.RUnlock()
+				continue
+			}
+			for {
+				if s.statsDebug {
+					s.usedEntries++
+					if e.timestamp&1 == 0 {
 						s.active++
 						s.length += uint64(e.length)
+					} else {
+						s.tombstones++
 					}
-					if e.next == 0 {
-						break
-					}
-					ol.RLock()
-					e = &n.overflow[e.next>>b][e.next&lm]
-					ol.RUnlock()
+				} else if e.timestamp&1 == 0 {
+					s.active++
+					s.length += uint64(e.length)
 				}
+				if e.next == 0 {
+					break
+				}
+				ol.RLock()
+				e = &n.overflow[e.next>>b][e.next&lm]
+				ol.RUnlock()
 			}
 			l.RUnlock()
 		}
@@ -1033,44 +987,46 @@ func (vlm *ValueLocMap) discardTombstones(tombstoneCutoff uint64, n *node) {
 		ol := &n.overflowLock
 		for i := uint32(0); i <= lm; i++ {
 			e := &es[i]
-			var p *entry
 			l := &n.entriesLocks[i&vlm.entriesLockMask]
 			l.Lock()
-			if e.blockID != 0 {
-				for {
-					if e.timestamp&1 != 0 {
-						if p == nil {
-							if e.next == 0 {
-								e.blockID = 0
-								break
-							} else {
-								ol.RLock()
-								en := &n.overflow[e.next>>b][e.next&lm]
-								ol.RUnlock()
-								*e = *en
-								en.blockID = 0
-								continue
-							}
-						} else {
-							p.next = e.next
+			if e.blockID == 0 {
+				l.Unlock()
+				continue
+			}
+			var p *entry
+			for {
+				if e.timestamp&1 != 0 {
+					if p == nil {
+						if e.next == 0 {
 							e.blockID = 0
-							if p.next == 0 {
-								break
-							}
+							break
+						} else {
 							ol.RLock()
-							e = &n.overflow[p.next>>b][p.next&lm]
+							en := &n.overflow[e.next>>b][e.next&lm]
 							ol.RUnlock()
+							*e = *en
+							en.blockID = 0
 							continue
 						}
+					} else {
+						p.next = e.next
+						e.blockID = 0
+						if p.next == 0 {
+							break
+						}
+						ol.RLock()
+						e = &n.overflow[p.next>>b][p.next&lm]
+						ol.RUnlock()
+						continue
 					}
-					if e.next == 0 {
-						break
-					}
-					p = e
-					ol.RLock()
-					e = &n.overflow[e.next>>b][e.next&lm]
-					ol.RUnlock()
 				}
+				if e.next == 0 {
+					break
+				}
+				p = e
+				ol.RLock()
+				e = &n.overflow[e.next>>b][e.next&lm]
+				ol.RUnlock()
 			}
 			l.Unlock()
 		}
@@ -1121,18 +1077,20 @@ func (vlm *ValueLocMap) scanCount(start uint64, stop uint64, max uint64, n *node
 			e := &es[i]
 			l := &n.entriesLocks[i&vlm.entriesLockMask]
 			l.RLock()
-			if e.blockID != 0 {
-				for {
-					if e.keyA >= start && e.keyA <= stop {
-						c++
-					}
-					if e.next == 0 {
-						break
-					}
-					ol.RLock()
-					e = &n.overflow[e.next>>b][e.next&lm]
-					ol.RUnlock()
+			if e.blockID == 0 {
+				l.RUnlock()
+				continue
+			}
+			for {
+				if e.keyA >= start && e.keyA <= stop {
+					c++
 				}
+				if e.next == 0 {
+					break
+				}
+				ol.RLock()
+				e = &n.overflow[e.next>>b][e.next&lm]
+				ol.RUnlock()
 			}
 			l.RUnlock()
 		}
@@ -1176,16 +1134,18 @@ func (vlm *ValueLocMap) scanCallback(start uint64, stop uint64, callback func(ke
 			e := &es[i]
 			l := &n.entriesLocks[i&vlm.entriesLockMask]
 			l.RLock()
-			if e.blockID != 0 {
-				for {
-					callback(e.keyA, e.keyB, e.timestamp)
-					if e.next == 0 {
-						break
-					}
-					ol.RLock()
-					e = &n.overflow[e.next>>b][e.next&lm]
-					ol.RUnlock()
+			if e.blockID == 0 {
+				l.RUnlock()
+				continue
+			}
+			for {
+				callback(e.keyA, e.keyB, e.timestamp)
+				if e.next == 0 {
+					break
 				}
+				ol.RLock()
+				e = &n.overflow[e.next>>b][e.next&lm]
+				ol.RUnlock()
 			}
 			l.RUnlock()
 		}
@@ -1199,18 +1159,20 @@ func (vlm *ValueLocMap) scanCallback(start uint64, stop uint64, callback func(ke
 			e := &es[i]
 			l := &n.entriesLocks[i&vlm.entriesLockMask]
 			l.RLock()
-			if e.blockID != 0 {
-				for {
-					if e.keyA >= start && e.keyA <= stop {
-						callback(e.keyA, e.keyB, e.timestamp)
-					}
-					if e.next == 0 {
-						break
-					}
-					ol.RLock()
-					e = &n.overflow[e.next>>b][e.next&lm]
-					ol.RUnlock()
+			if e.blockID == 0 {
+				l.RUnlock()
+				continue
+			}
+			for {
+				if e.keyA >= start && e.keyA <= stop {
+					callback(e.keyA, e.keyB, e.timestamp)
 				}
+				if e.next == 0 {
+					break
+				}
+				ol.RLock()
+				e = &n.overflow[e.next>>b][e.next&lm]
+				ol.RUnlock()
 			}
 			l.RUnlock()
 		}

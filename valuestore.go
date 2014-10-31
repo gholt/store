@@ -548,6 +548,7 @@ func NewValueStore(opts ...func(*config)) *ValueStore {
 		vs.inBulkSetChan = make(chan *bulkSetMsg, vs.cores)
 		vs.inBulkSetDoneChan = make(chan struct{}, 1)
 		go vs.inBulkSet()
+		vs.msgConn.start()
 	}
 	return vs
 }
@@ -1433,7 +1434,10 @@ func (vs *ValueStore) newInPullReplicationMsg(r io.Reader, l uint64) (uint64, er
 		n += sn
 	}
 	if atomic.LoadUint32(&vs.closing) == 0 {
-		vs.inPullReplicationChan <- prm
+		select {
+		case vs.inPullReplicationChan <- prm:
+		default:
+		}
 	}
 	return l, nil
 }
@@ -1508,7 +1512,10 @@ func (vs *ValueStore) newInBulkSetMsg(r io.Reader, l uint64) (uint64, error) {
 		n += sn
 	}
 	if atomic.LoadUint32(&vs.closing) == 0 {
-		vs.inBulkSetChan <- bsm
+		select {
+		case vs.inBulkSetChan <- bsm:
+		default:
+		}
 	}
 	return l, nil
 }

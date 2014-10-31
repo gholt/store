@@ -1,11 +1,10 @@
 package main
 
 import (
-	"bufio"
 	"bytes"
 	"encoding/binary"
 	"fmt"
-	"io"
+	"net"
 	"os"
 	"runtime"
 	"sync"
@@ -91,18 +90,17 @@ func main() {
 	}
 	wg := &sync.WaitGroup{}
 	if opts.Replicate {
-		r, w2 := io.Pipe()
-		r2, w := io.Pipe()
+		conn, conn2 := net.Pipe()
 		vs2opts := brimstore.OptList(vsopts...)
 		vs2opts = append(vs2opts, brimstore.OptPath("replicated"))
-		vs2opts = append(vs2opts, brimstore.OptMsgConn(brimstore.NewMsgConn(bufio.NewReader(r2), bufio.NewWriter(w2))))
+		vs2opts = append(vs2opts, brimstore.OptMsgConn(brimstore.NewMsgConn(conn2)))
 		wg.Add(1)
 		go func() {
 			opts.vs2 = brimstore.NewValueStore(vs2opts...)
 			opts.vs2.BackgroundStart()
 			wg.Done()
 		}()
-		vsopts = append(vsopts, brimstore.OptMsgConn(brimstore.NewMsgConn(bufio.NewReader(r), bufio.NewWriter(w))))
+		vsopts = append(vsopts, brimstore.OptMsgConn(brimstore.NewMsgConn(conn)))
 	}
 	opts.vs = brimstore.NewValueStore(vsopts...)
 	opts.vs.BackgroundStart()
