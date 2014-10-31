@@ -541,6 +541,7 @@ func (vs *ValueStore) MaxValueSize() uint32 {
 // Close shuts down all background processing and the ValueStore will refuse
 // any additional writes; reads may still occur.
 func (vs *ValueStore) Close() {
+	vs.BackgroundStop()
 	if vs.inPullReplicationChan != nil {
 		vs.inPullReplicationChan <- nil
 		<-vs.inPullReplicationDoneChan
@@ -549,6 +550,7 @@ func (vs *ValueStore) Close() {
 		vs.inBulkSetChan <- nil
 		<-vs.inBulkSetDoneChan
 	}
+	vs.msgConn.close()
 	for _, c := range vs.pendingVWRChans {
 		c <- nil
 	}
@@ -556,7 +558,6 @@ func (vs *ValueStore) Close() {
 		<-vs.freeVMChan
 	}
 	<-vs.tocWriterDoneChan
-	vs.BackgroundStop()
 }
 
 // Lookup will return timestamp, length, err for keyA, keyB.

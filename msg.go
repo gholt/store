@@ -5,6 +5,7 @@ import (
 	"log"
 	"os"
 	"sync"
+	"sync/atomic"
 )
 
 type FlushWriter interface {
@@ -52,6 +53,7 @@ type msg interface {
 }
 
 type MsgConn struct {
+	closed          uint32
 	reader          io.Reader
 	writer          FlushWriter
 	lock            sync.RWMutex
@@ -66,14 +68,15 @@ type MsgConn struct {
 
 func NewMsgConn(r io.Reader, w FlushWriter) *MsgConn {
 	mc := &MsgConn{
-		reader:      r,
-		writer:      w,
-		msgMap:      newMsgMap(),
-		logError:    log.New(os.Stderr, "", log.LstdFlags),
-		logWarning:  log.New(os.Stderr, "", log.LstdFlags),
-		typeBytes:   1,
-		lengthBytes: 3,
-		writeChan:   make(chan msg, 40),
+		reader:          r,
+		writer:          w,
+		msgMap:          newMsgMap(),
+		logError:        log.New(os.Stderr, "", log.LstdFlags),
+		logWarning:      log.New(os.Stderr, "", log.LstdFlags),
+		typeBytes:       1,
+		lengthBytes:     3,
+		writeChan:       make(chan msg, 40),
+		writingDoneChan: make(chan struct{}, 1),
 	}
 	go mc.reading()
 	go mc.writing()
@@ -81,10 +84,13 @@ func NewMsgConn(r io.Reader, w FlushWriter) *MsgConn {
 }
 
 func (mc *MsgConn) send(m msg) {
-	mc.writeChan <- m
+	if atomic.LoadUint32(&mc.closed) == 0 {
+		mc.writeChan <- m
+	}
 }
 
 func (mc *MsgConn) close() {
+	atomic.StoreUint32(&mc.closed, 1)
 	mc.writeChan <- nil
 	<-mc.writingDoneChan
 }
@@ -93,6 +99,9 @@ func (mc *MsgConn) reading() {
 	b := make([]byte, mc.typeBytes+mc.lengthBytes)
 	d := make([]byte, 65536)
 	for {
+		if atomic.LoadUint32(&mc.closed) != 0 {
+			return
+		}
 		var n int
 		var sn int
 		var err error
