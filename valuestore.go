@@ -44,21 +44,22 @@ import (
 )
 
 type config struct {
-	path               string
-	pathtoc            string
-	vlm                ValueLocMap
-	cores              int
-	backgroundCores    int
-	backgroundInterval int
-	maxValueSize       int
-	pageSize           int
-	minValueAlloc      int
-	writePagesPerCore  int
-	tombstoneAge       int
-	valuesFileSize     int
-	valuesFileReaders  int
-	checksumInterval   int
-	msgConn            *MsgConn
+	path                    string
+	pathtoc                 string
+	vlm                     ValueLocMap
+	cores                   int
+	backgroundCores         int
+	backgroundInterval      int
+	maxValueSize            int
+	pageSize                int
+	minValueAlloc           int
+	writePagesPerCore       int
+	tombstoneAge            int
+	valuesFileSize          int
+	valuesFileReaders       int
+	checksumInterval        int
+	msgConn                 *MsgConn
+	replicationIgnoreRecent int
 }
 
 func resolveConfig(opts ...func(*config)) *config {
@@ -125,6 +126,12 @@ func resolveConfig(opts ...func(*config)) *config {
 			cfg.checksumInterval = val
 		}
 	}
+	cfg.replicationIgnoreRecent = 60
+	if env := os.Getenv("BRIMSTORE_REPLICATIONIGNORERECENT"); env != "" {
+		if val, err := strconv.Atoi(env); err == nil {
+			cfg.replicationIgnoreRecent = val
+		}
+	}
 	for _, opt := range opts {
 		opt(cfg)
 	}
@@ -182,6 +189,9 @@ func resolveConfig(opts ...func(*config)) *config {
 	}
 	if cfg.valuesFileReaders < 1 {
 		cfg.valuesFileReaders = 1
+	}
+	if cfg.replicationIgnoreRecent < 0 {
+		cfg.replicationIgnoreRecent = 0
 	}
 	return cfg
 }
@@ -319,6 +329,12 @@ func OptMsgConn(mc *MsgConn) func(*config) {
 	}
 }
 
+func OptReplicationIgnoreRecent(seconds int) func(*config) {
+	return func(cfg *config) {
+		cfg.replicationIgnoreRecent = seconds
+	}
+}
+
 var ErrNotFound error = errors.New("not found")
 
 // ValueLocMap is an interface used by ValueStore for tracking the mappings
@@ -347,6 +363,7 @@ type bulkSetMsg struct {
 
 // ValueStore instances are created with NewValueStore.
 type ValueStore struct {
+	closing                   uint32
 	freeableVMChan            chan *valuesMem
 	freeVMChan                chan *valuesMem
 	freeVWRChans              []chan *valueWriteReq
@@ -372,6 +389,7 @@ type ValueStore struct {
 	valuesFileReaders         int
 	checksumInterval          uint32
 	msgConn                   *MsgConn
+	replicationIgnoreRecent   uint64
 	inPullReplicationChan     chan *pullReplicationMsg
 	inPullReplicationDoneChan chan struct{}
 	inBulkSetChan             chan *bulkSetMsg
@@ -396,40 +414,41 @@ type valueLocBlock interface {
 }
 
 type valueStoreStats struct {
-	debug                  bool
-	freeableVMChanCap      int
-	freeableVMChanIn       int
-	freeVMChanCap          int
-	freeVMChanIn           int
-	freeVWRChans           int
-	freeVWRChansCap        int
-	freeVWRChansIn         int
-	pendingVWRChans        int
-	pendingVWRChansCap     int
-	pendingVWRChansIn      int
-	vfVMChanCap            int
-	vfVMChanIn             int
-	freeTOCBlockChanCap    int
-	freeTOCBlockChanIn     int
-	pendingTOCBlockChanCap int
-	pendingTOCBlockChanIn  int
-	maxValueLocBlockID     uint64
-	path                   string
-	pathtoc                string
-	cores                  int
-	backgroundCores        int
-	backgroundInterval     int
-	maxValueSize           uint32
-	pageSize               uint32
-	minValueAlloc          int
-	writePagesPerCore      int
-	tombstoneAge           int
-	valuesFileSize         uint32
-	valuesFileReaders      int
-	checksumInterval       uint32
-	vlmCount               uint64
-	vlmLength              uint64
-	vlmDebugInfo           fmt.Stringer
+	debug                   bool
+	freeableVMChanCap       int
+	freeableVMChanIn        int
+	freeVMChanCap           int
+	freeVMChanIn            int
+	freeVWRChans            int
+	freeVWRChansCap         int
+	freeVWRChansIn          int
+	pendingVWRChans         int
+	pendingVWRChansCap      int
+	pendingVWRChansIn       int
+	vfVMChanCap             int
+	vfVMChanIn              int
+	freeTOCBlockChanCap     int
+	freeTOCBlockChanIn      int
+	pendingTOCBlockChanCap  int
+	pendingTOCBlockChanIn   int
+	maxValueLocBlockID      uint64
+	path                    string
+	pathtoc                 string
+	cores                   int
+	backgroundCores         int
+	backgroundInterval      int
+	maxValueSize            uint32
+	pageSize                uint32
+	minValueAlloc           int
+	writePagesPerCore       int
+	tombstoneAge            int
+	valuesFileSize          uint32
+	valuesFileReaders       int
+	checksumInterval        uint32
+	replicationIgnoreRecent int
+	vlmCount                uint64
+	vlmLength               uint64
+	vlmDebugInfo            fmt.Stringer
 }
 
 type backgroundNotification struct {
@@ -464,22 +483,23 @@ func NewValueStore(opts ...func(*config)) *ValueStore {
 		vlm = valuelocmap.NewValueLocMap()
 	}
 	vs := &ValueStore{
-		valueLocBlocks:     make([]valueLocBlock, math.MaxUint16),
-		path:               cfg.path,
-		pathtoc:            cfg.pathtoc,
-		vlm:                vlm,
-		cores:              cfg.cores,
-		backgroundCores:    cfg.backgroundCores,
-		backgroundInterval: cfg.backgroundInterval,
-		maxValueSize:       uint32(cfg.maxValueSize),
-		pageSize:           uint32(cfg.pageSize),
-		minValueAlloc:      cfg.minValueAlloc,
-		writePagesPerCore:  cfg.writePagesPerCore,
-		tombstoneAge:       uint64(cfg.tombstoneAge) * uint64(time.Second),
-		valuesFileSize:     uint32(cfg.valuesFileSize),
-		valuesFileReaders:  cfg.valuesFileReaders,
-		checksumInterval:   uint32(cfg.checksumInterval),
-		msgConn:            cfg.msgConn,
+		valueLocBlocks:          make([]valueLocBlock, math.MaxUint16),
+		path:                    cfg.path,
+		pathtoc:                 cfg.pathtoc,
+		vlm:                     vlm,
+		cores:                   cfg.cores,
+		backgroundCores:         cfg.backgroundCores,
+		backgroundInterval:      cfg.backgroundInterval,
+		maxValueSize:            uint32(cfg.maxValueSize),
+		pageSize:                uint32(cfg.pageSize),
+		minValueAlloc:           cfg.minValueAlloc,
+		writePagesPerCore:       cfg.writePagesPerCore,
+		tombstoneAge:            uint64(cfg.tombstoneAge) * uint64(time.Second),
+		valuesFileSize:          uint32(cfg.valuesFileSize),
+		valuesFileReaders:       cfg.valuesFileReaders,
+		checksumInterval:        uint32(cfg.checksumInterval),
+		msgConn:                 cfg.msgConn,
+		replicationIgnoreRecent: uint64(cfg.replicationIgnoreRecent) * uint64(time.Second),
 	}
 	vs.freeableVMChan = make(chan *valuesMem, vs.cores*vs.writePagesPerCore)
 	vs.freeVMChan = make(chan *valuesMem, vs.cores)
@@ -541,6 +561,7 @@ func (vs *ValueStore) MaxValueSize() uint32 {
 // Close shuts down all background processing and the ValueStore will refuse
 // any additional writes; reads may still occur.
 func (vs *ValueStore) Close() {
+	atomic.StoreUint32(&vs.closing, 1)
 	vs.BackgroundStop()
 	if vs.inPullReplicationChan != nil {
 		vs.inPullReplicationChan <- nil
@@ -550,7 +571,6 @@ func (vs *ValueStore) Close() {
 		vs.inBulkSetChan <- nil
 		<-vs.inBulkSetDoneChan
 	}
-	vs.msgConn.close()
 	for _, c := range vs.pendingVWRChans {
 		c <- nil
 	}
@@ -558,6 +578,7 @@ func (vs *ValueStore) Close() {
 		<-vs.freeVMChan
 	}
 	<-vs.tocWriterDoneChan
+	vs.msgConn.close()
 }
 
 // Lookup will return timestamp, length, err for keyA, keyB.
@@ -673,6 +694,7 @@ func (vs *ValueStore) GatherStats(debug bool) (count uint64, length uint64, debu
 		stats.valuesFileSize = vs.valuesFileSize
 		stats.valuesFileReaders = vs.valuesFileReaders
 		stats.checksumInterval = vs.checksumInterval
+		stats.replicationIgnoreRecent = int(vs.replicationIgnoreRecent / uint64(time.Second))
 		stats.vlmCount, stats.vlmLength, stats.vlmDebugInfo = vs.vlm.GatherStats(true)
 	} else {
 		stats.vlmCount, stats.vlmLength, stats.vlmDebugInfo = vs.vlm.GatherStats(false)
@@ -1126,10 +1148,14 @@ func (vs *ValueStore) inPullReplication() {
 		if prm == nil {
 			break
 		}
+		if atomic.LoadUint32(&vs.closing) != 0 {
+			continue
+		}
 		k = k[:0]
+		cutoff := prm.timestampCutoff()
 		ktbf := prm.ktBloomFilter()
 		vs.vlm.ScanCallback(prm.rangeStart(), prm.rangeStop(), func(keyA uint64, keyB uint64, timestamp uint64) {
-			if !ktbf.mayHave(keyA, keyB, timestamp) {
+			if timestamp < cutoff && !ktbf.mayHave(keyA, keyB, timestamp) {
 				k = append(k, keyA, keyB)
 			}
 		})
@@ -1150,7 +1176,9 @@ func (vs *ValueStore) inPullReplication() {
 					break
 				}
 			}
-			vs.msgConn.send(bsm)
+			if atomic.LoadUint32(&vs.closing) == 0 {
+				vs.msgConn.send(bsm)
+			}
 		}
 	}
 	vs.inPullReplicationDoneChan <- struct{}{}
@@ -1161,6 +1189,9 @@ func (vs *ValueStore) inBulkSet() {
 		bsm := <-vs.inBulkSetChan
 		if bsm == nil {
 			break
+		}
+		if atomic.LoadUint32(&vs.closing) != 0 {
+			continue
 		}
 		bsm.valueStore(vs)
 	}
@@ -1200,6 +1231,7 @@ func (stats *valueStoreStats) String() string {
 			[]string{"valuesFileSize", fmt.Sprintf("%d", stats.valuesFileSize)},
 			[]string{"valuesFileReaders", fmt.Sprintf("%d", stats.valuesFileReaders)},
 			[]string{"checksumInterval", fmt.Sprintf("%d", stats.checksumInterval)},
+			[]string{"replicationIgnoreRecent", fmt.Sprintf("%d", stats.replicationIgnoreRecent)},
 			[]string{"vlmCount", fmt.Sprintf("%d", stats.vlmCount)},
 			[]string{"vlmLength", fmt.Sprintf("%d", stats.vlmLength)},
 			[]string{"vlmDebugInfo", stats.vlmDebugInfo.String()},
@@ -1217,7 +1249,7 @@ func (stats *valueStoreStats) String() string {
 // can be temporarily suspended by calling BackgroundStop and BackgroundStart
 // as desired.
 func (vs *ValueStore) BackgroundStart() {
-	if vs.backgroundNotifyChan == nil {
+	if vs.backgroundNotifyChan == nil && atomic.LoadUint32(&vs.closing) == 0 {
 		vs.backgroundDoneChan = make(chan struct{}, 1)
 		vs.backgroundNotifyChan = make(chan *backgroundNotification, 1)
 		go vs.backgroundLauncher()
@@ -1244,12 +1276,14 @@ func (vs *ValueStore) BackgroundStop() {
 // function will not return until all background tasks have completed at least
 // one full pass.
 func (vs *ValueStore) BackgroundNow(goroutines int) {
-	if vs.backgroundNotifyChan == nil {
-		vs.background(goroutines)
-	} else {
-		c := make(chan struct{}, 1)
-		vs.backgroundNotifyChan <- &backgroundNotification{goroutines, c}
-		<-c
+	if atomic.LoadUint32(&vs.closing) == 0 {
+		if vs.backgroundNotifyChan == nil {
+			vs.background(goroutines)
+		} else {
+			c := make(chan struct{}, 1)
+			vs.backgroundNotifyChan <- &backgroundNotification{goroutines, c}
+			<-c
+		}
 	}
 }
 
@@ -1276,6 +1310,9 @@ WORK:
 				}
 			default:
 			}
+		}
+		if atomic.LoadUint32(&vs.closing) != 0 {
+			continue
 		}
 		nextRun = time.Now().Add(time.Duration(interval + interval*rand.NormFloat64()*0.1))
 		goroutines := vs.backgroundCores
@@ -1322,7 +1359,7 @@ func (vs *ValueStore) background(goroutines int) {
 			go func(g int) {
 				ktbf := vs.ktbfs[g]
 				var pullSize uint64
-				for p := uint32(g); p < partitions; p += uint32(goroutines) {
+				for p := uint32(g); p < partitions && atomic.LoadUint32(&vs.closing) == 0; p += uint32(goroutines) {
 					// Here I'm doing pull replication scans for every
 					// partition when eventually it should just do this for
 					// partitions we're in the ring for. Partitions we're not
@@ -1337,15 +1374,20 @@ func (vs *ValueStore) background(goroutines int) {
 							pullSize /= 2
 						}
 					}
+					cutoff := uint64(time.Now().UnixNano()) - vs.replicationIgnoreRecent
 					substart := start
 					substop := start + (pullSize - 1)
 					for {
 						ktbf.reset(iteration)
-						vs.vlm.ScanCallback(substart, substop, ktbf.add)
+						vs.vlm.ScanCallback(substart, substop, func(keyA uint64, keyB uint64, timestamp uint64) {
+							if timestamp < cutoff {
+								ktbf.add(keyA, keyB, timestamp)
+							}
+						})
 						if vs.msgConn == nil {
 							break
 						} else {
-							vs.msgConn.send(vs.newOutPullReplicationMsg(ringID, p, substart, substop, ktbf))
+							vs.msgConn.send(vs.newOutPullReplicationMsg(ringID, p, cutoff, substart, substop, ktbf))
 						}
 						substart += pullSize
 						if substart < start {
@@ -1365,10 +1407,12 @@ func (vs *ValueStore) background(goroutines int) {
 	log.Println(time.Now().Sub(begin), "background tasks")
 }
 
+const pullReplicationMsgHeaderBytes = 36
+
 func (vs *ValueStore) newInPullReplicationMsg(r io.Reader, l uint64) (uint64, error) {
 	prm := &pullReplicationMsg{
-		header: make([]byte, 28+ktBloomFilterHeaderBytes),
-		body:   make([]byte, l-28-uint64(ktBloomFilterHeaderBytes)),
+		header: make([]byte, pullReplicationMsgHeaderBytes+ktBloomFilterHeaderBytes),
+		body:   make([]byte, l-pullReplicationMsgHeaderBytes-uint64(ktBloomFilterHeaderBytes)),
 	}
 	var n int
 	var sn int
@@ -1388,17 +1432,20 @@ func (vs *ValueStore) newInPullReplicationMsg(r io.Reader, l uint64) (uint64, er
 		sn, err = r.Read(prm.body[n:])
 		n += sn
 	}
-	vs.inPullReplicationChan <- prm
+	if atomic.LoadUint32(&vs.closing) == 0 {
+		vs.inPullReplicationChan <- prm
+	}
 	return l, nil
 }
 
-func (vs *ValueStore) newOutPullReplicationMsg(ringID uint64, partition uint32, rangeStart uint64, rangeStop uint64, ktbf *ktBloomFilter) *pullReplicationMsg {
+func (vs *ValueStore) newOutPullReplicationMsg(ringID uint64, partition uint32, timestampCutoff uint64, rangeStart uint64, rangeStop uint64, ktbf *ktBloomFilter) *pullReplicationMsg {
 	prm := &pullReplicationMsg{}
-	ktbf.toMsg(prm, 28)
+	ktbf.toMsg(prm, pullReplicationMsgHeaderBytes)
 	binary.BigEndian.PutUint64(prm.header, ringID)
 	binary.BigEndian.PutUint32(prm.header[8:], partition)
-	binary.BigEndian.PutUint64(prm.header[12:], rangeStart)
-	binary.BigEndian.PutUint64(prm.header[20:], rangeStop)
+	binary.BigEndian.PutUint64(prm.header[12:], timestampCutoff)
+	binary.BigEndian.PutUint64(prm.header[20:], rangeStart)
+	binary.BigEndian.PutUint64(prm.header[28:], rangeStop)
 	return prm
 }
 
@@ -1418,16 +1465,20 @@ func (prm *pullReplicationMsg) partition() uint32 {
 	return binary.BigEndian.Uint32(prm.header[8:])
 }
 
-func (prm *pullReplicationMsg) rangeStart() uint64 {
+func (prm *pullReplicationMsg) timestampCutoff() uint64 {
 	return binary.BigEndian.Uint64(prm.header[12:])
 }
 
-func (prm *pullReplicationMsg) rangeStop() uint64 {
+func (prm *pullReplicationMsg) rangeStart() uint64 {
 	return binary.BigEndian.Uint64(prm.header[20:])
 }
 
+func (prm *pullReplicationMsg) rangeStop() uint64 {
+	return binary.BigEndian.Uint64(prm.header[28:])
+}
+
 func (prm *pullReplicationMsg) ktBloomFilter() *ktBloomFilter {
-	return newKTBloomFilterFromMsg(prm, 28)
+	return newKTBloomFilterFromMsg(prm, pullReplicationMsgHeaderBytes)
 }
 
 func (prm *pullReplicationMsg) writeContent(w io.Writer) (uint64, error) {
@@ -1456,7 +1507,9 @@ func (vs *ValueStore) newInBulkSetMsg(r io.Reader, l uint64) (uint64, error) {
 		sn, err = r.Read(bsm.body[n:])
 		n += sn
 	}
-	vs.inBulkSetChan <- bsm
+	if atomic.LoadUint32(&vs.closing) == 0 {
+		vs.inBulkSetChan <- bsm
+	}
 	return l, nil
 }
 
@@ -1494,8 +1547,15 @@ func (bsm *bulkSetMsg) add(keyA uint64, keyB uint64, timestamp uint64, value []b
 func (bsm *bulkSetMsg) valueStore(vs *ValueStore) {
 	body := bsm.body
 	for len(body) > 0 {
+		keyA := binary.BigEndian.Uint64(body)
+		keyB := binary.BigEndian.Uint64(body[8:])
+		timestamp := binary.BigEndian.Uint64(body[16:])
 		l := binary.BigEndian.Uint32(body[24:])
-		vs.Write(binary.BigEndian.Uint64(body), binary.BigEndian.Uint64(body[8:]), binary.BigEndian.Uint64(body[16:]), body[28:28+l])
+		if timestamp&1 == 0 {
+			vs.Write(keyA, keyB, timestamp, body[28:28+l])
+		} else {
+			vs.Delete(keyA, keyB, timestamp)
+		}
 		body = body[28+l:]
 	}
 }

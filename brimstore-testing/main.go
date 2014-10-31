@@ -89,18 +89,24 @@ func main() {
 	if opts.TombstoneAge > 0 {
 		vsopts = append(vsopts, brimstore.OptTombstoneAge(opts.TombstoneAge))
 	}
+	wg := &sync.WaitGroup{}
 	if opts.Replicate {
 		r, w2 := io.Pipe()
 		r2, w := io.Pipe()
 		vs2opts := brimstore.OptList(vsopts...)
 		vs2opts = append(vs2opts, brimstore.OptPath("replicated"))
 		vs2opts = append(vs2opts, brimstore.OptMsgConn(brimstore.NewMsgConn(bufio.NewReader(r2), bufio.NewWriter(w2))))
-		opts.vs2 = brimstore.NewValueStore(vs2opts...)
-		opts.vs2.BackgroundStart()
+		wg.Add(1)
+		go func() {
+			opts.vs2 = brimstore.NewValueStore(vs2opts...)
+			opts.vs2.BackgroundStart()
+			wg.Done()
+		}()
 		vsopts = append(vsopts, brimstore.OptMsgConn(brimstore.NewMsgConn(bufio.NewReader(r), bufio.NewWriter(w))))
 	}
 	opts.vs = brimstore.NewValueStore(vsopts...)
 	opts.vs.BackgroundStart()
+	wg.Wait()
 	dur := time.Now().Sub(begin)
 	fmt.Println(dur, "to start ValuesStore")
 	memstat()
@@ -122,15 +128,31 @@ func main() {
 		memstat()
 	}
 	begin = time.Now()
-	opts.vs.Close()
 	if opts.vs2 != nil {
-		opts.vs2.Close()
+		wg.Add(1)
+		go func() {
+			opts.vs2.Close()
+			wg.Done()
+		}()
 	}
+	opts.vs.Close()
+	wg.Wait()
 	dur = time.Now().Sub(begin)
 	fmt.Println(dur, "to close value store(s)")
 	memstat()
 	begin = time.Now()
+	var statsCount2 uint64
+	var statsLength2 uint64
+	var stats2 fmt.Stringer
+	if opts.vs2 != nil {
+		wg.Add(1)
+		go func() {
+			statsCount2, statsLength2, stats2 = opts.vs2.GatherStats(opts.ExtendedStats)
+			wg.Done()
+		}()
+	}
 	statsCount, statsLength, stats := opts.vs.GatherStats(opts.ExtendedStats)
+	wg.Wait()
 	dur = time.Now().Sub(begin)
 	fmt.Println(dur, "to gather stats")
 	if opts.ExtendedStats {
@@ -139,20 +161,15 @@ func main() {
 		fmt.Println(statsCount, "ValueCount")
 		fmt.Println(statsLength, "ValuesLength")
 	}
-	memstat()
 	if opts.vs2 != nil {
-		begin = time.Now()
-		statsCount, statsLength, stats := opts.vs2.GatherStats(opts.ExtendedStats)
-		dur = time.Now().Sub(begin)
-		fmt.Println(dur, "to gather stats for replicated store")
 		if opts.ExtendedStats {
-			fmt.Println(stats.String())
+			fmt.Println(stats2.String())
 		} else {
-			fmt.Println(statsCount, "ValueCount")
-			fmt.Println(statsLength, "ValuesLength")
+			fmt.Println(statsCount2, "ValueCount")
+			fmt.Println(statsLength2, "ValuesLength")
 		}
-		memstat()
 	}
+	memstat()
 }
 
 func memstat() {
@@ -165,10 +182,16 @@ func memstat() {
 
 func background() {
 	begin := time.Now()
-	opts.vs.BackgroundNow(opts.Cores)
+	wg := &sync.WaitGroup{}
 	if opts.vs2 != nil {
-		opts.vs2.BackgroundNow(opts.Cores)
+		wg.Add(1)
+		go func() {
+			opts.vs2.BackgroundNow(opts.Cores)
+			wg.Done()
+		}()
 	}
+	opts.vs.BackgroundNow(opts.Cores)
+	wg.Wait()
 	dur := time.Now().Sub(begin)
 	fmt.Printf("%s to run background tasks\n", dur)
 }
@@ -385,5 +408,5 @@ func write() {
 }
 
 func run() {
-	<-time.After(5 * time.Minute)
+	<-time.After(1 * time.Minute)
 }

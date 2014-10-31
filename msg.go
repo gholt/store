@@ -53,7 +53,7 @@ type msg interface {
 }
 
 type MsgConn struct {
-	closed          uint32
+	closing         uint32
 	reader          io.Reader
 	writer          FlushWriter
 	lock            sync.RWMutex
@@ -84,24 +84,23 @@ func NewMsgConn(r io.Reader, w FlushWriter) *MsgConn {
 }
 
 func (mc *MsgConn) send(m msg) {
-	if atomic.LoadUint32(&mc.closed) == 0 {
+	if atomic.LoadUint32(&mc.closing) == 0 {
 		mc.writeChan <- m
 	}
 }
 
 func (mc *MsgConn) close() {
-	atomic.StoreUint32(&mc.closed, 1)
-	mc.writeChan <- nil
-	<-mc.writingDoneChan
+	if atomic.LoadUint32(&mc.closing) == 0 {
+		atomic.StoreUint32(&mc.closing, 1)
+		mc.writeChan <- nil
+		<-mc.writingDoneChan
+	}
 }
 
 func (mc *MsgConn) reading() {
 	b := make([]byte, mc.typeBytes+mc.lengthBytes)
 	d := make([]byte, 65536)
 	for {
-		if atomic.LoadUint32(&mc.closed) != 0 {
-			return
-		}
 		var n int
 		var sn int
 		var err error
@@ -128,14 +127,16 @@ func (mc *MsgConn) reading() {
 			l = (l << 8) | uint64(b[mc.typeBytes+i])
 		}
 		f := mc.msgMap.get(t)
-		if f != nil {
+		if f != nil && atomic.LoadUint32(&mc.closing) == 0 {
 			_, err = f(mc.reader, l)
 			if err != nil {
 				mc.logError.Print("error reading msg content", err)
 				return
 			}
 		} else {
-			mc.logWarning.Print("unknown msg type", t)
+			if f == nil {
+				mc.logWarning.Print("unknown msg type", t)
+			}
 			n = 0
 			for uint64(n) != l {
 				if err != nil {
@@ -159,6 +160,9 @@ func (mc *MsgConn) writing() {
 		m := <-mc.writeChan
 		if m == nil {
 			break
+		}
+		if atomic.LoadUint32(&mc.closing) != 0 {
+			continue
 		}
 		t := m.msgType()
 		for i := mc.typeBytes - 1; i >= 0; i-- {
