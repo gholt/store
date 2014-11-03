@@ -159,6 +159,56 @@ func TestSetOverwriteKeyOldTimestampIsSameAndOverwriteWins(t *testing.T) {
 	}
 }
 
+func TestSetOverflowingKeys(t *testing.T) {
+	vlm := NewValueLocMap(OptRoots(1), OptPageSize(1))
+	keyA1 := uint64(0)
+	keyB1 := uint64(0)
+	timestamp1 := uint64(2)
+	blockID1 := uint32(1)
+	offset1 := uint32(0)
+	length1 := uint32(0)
+	oldTimestamp := vlm.Set(keyA1, keyB1, timestamp1, blockID1, offset1, length1, false)
+	if oldTimestamp != 0 {
+		t.Fatal(oldTimestamp)
+	}
+	timestampGet, blockIDGet, offsetGet, lengthGet := vlm.Get(keyA1, keyB1)
+	if timestampGet != timestamp1 {
+		t.Fatal(timestampGet, timestamp1)
+	}
+	if blockIDGet != blockID1 {
+		t.Fatal(blockIDGet, blockID1)
+	}
+	if offsetGet != offset1 {
+		t.Fatal(offsetGet, offset1)
+	}
+	if lengthGet != length1 {
+		t.Fatal(lengthGet, length1)
+	}
+	keyA2 := uint64(0)
+	keyB2 := uint64(2)
+	timestamp2 := timestamp1 + 2
+	blockID2 := blockID1 + 1
+	offset2 := offset1 + 1
+	length2 := length1 + 1
+	oldTimestamp = vlm.Set(keyA2, keyB2, timestamp2, blockID2, offset2, length2, false)
+	if oldTimestamp != 0 {
+		t.Fatal(oldTimestamp)
+	}
+	timestampGet, blockIDGet, offsetGet, lengthGet = vlm.Get(keyA2, keyB2)
+	if timestampGet != timestamp2 {
+		t.Fatal(timestampGet, timestamp2)
+	}
+	if blockIDGet != blockID2 {
+		t.Fatal(blockIDGet, blockID2)
+	}
+	if offsetGet != offset2 {
+		t.Fatal(offsetGet, offset2)
+	}
+	if lengthGet != length2 {
+		t.Fatal(lengthGet, length2)
+	}
+}
+
 func TestSetNewKeyBlockID0OldTimestampIs0AndNoEffect(t *testing.T) {
 	vlm := NewValueLocMap()
 	keyA := uint64(0)
