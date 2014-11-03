@@ -200,8 +200,8 @@ func NewValueLocMap(opts ...func(*config)) *ValueLocMap {
 	cfg := resolveConfig(opts...)
 	vlm := &ValueLocMap{cores: uint32(cfg.cores)}
 	est := uint32(cfg.pageSize / int(unsafe.Sizeof(entry{})))
-	if est < 1 {
-		est = 1
+	if est < 4 {
+		est = 4
 	}
 	vlm.bits = 1
 	c := uint32(2)
@@ -767,10 +767,21 @@ func (vlm *ValueLocMap) Set(keyA uint64, keyB uint64, timestamp uint64, blockID 
 						return t
 					}
 					t := e.timestamp
-					if ep != nil {
+					if ep == nil {
+						if e.next == 0 {
+							e.blockID = 0
+						} else {
+							f = e.next
+							ol.RLock()
+							en := &n.overflow[f>>b][f&lm]
+							*e = *en
+							en.blockID = 0
+							ol.RUnlock()
+						}
+					} else {
 						ep.next = e.next
+						e.blockID = 0
 					}
-					e.blockID = 0
 					u := atomic.AddUint32(&n.used, ^uint32(0))
 					if f != 0 {
 						ol.Lock()
