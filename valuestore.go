@@ -336,6 +336,7 @@ func OptReplicationIgnoreRecent(seconds int) func(*config) {
 }
 
 var ErrNotFound error = errors.New("not found")
+var ErrDisabled error = errors.New("disabled")
 
 // ValueLocMap is an interface used by ValueStore for tracking the mappings
 // from keys to the locations of their values. You can use OptValueLocMap to
@@ -364,14 +365,14 @@ type bulkSetMsg struct {
 // ValueStore instances are created with NewValueStore.
 type ValueStore struct {
 	closing                   uint32
-	freeableVMChan            chan *valuesMem
+	freeableVMChans           []chan *valuesMem
 	freeVMChan                chan *valuesMem
 	freeVWRChans              []chan *valueWriteReq
 	pendingVWRChans           []chan *valueWriteReq
 	vfVMChan                  chan *valuesMem
 	freeTOCBlockChan          chan []byte
 	pendingTOCBlockChan       chan []byte
-	tocWriterDoneChan         chan struct{}
+	flushedChan               chan struct{}
 	valueLocBlocks            []valueLocBlock
 	valueLocBlockIDer         uint64
 	path                      string
@@ -408,6 +409,10 @@ type valueWriteReq struct {
 	errChan   chan error
 }
 
+var enableValueWriteReq *valueWriteReq = &valueWriteReq{}
+var disableValueWriteReq *valueWriteReq = &valueWriteReq{}
+var flushValueWriteReq *valueWriteReq = &valueWriteReq{}
+
 type valueLocBlock interface {
 	timestamp() int64
 	read(keyA uint64, keyB uint64, timestamp uint64, offset uint32, length uint32, value []byte) (uint64, []byte, error)
@@ -415,8 +420,8 @@ type valueLocBlock interface {
 
 type valueStoreStats struct {
 	debug                   bool
-	freeableVMChanCap       int
-	freeableVMChanIn        int
+	freeableVMChansCap      int
+	freeableVMChansIn       int
 	freeVMChanCap           int
 	freeVMChanIn            int
 	freeVWRChans            int
@@ -501,22 +506,25 @@ func NewValueStore(opts ...func(*config)) *ValueStore {
 		msgConn:                 cfg.msgConn,
 		replicationIgnoreRecent: uint64(cfg.replicationIgnoreRecent) * uint64(time.Second),
 	}
-	vs.freeableVMChan = make(chan *valuesMem, vs.cores*vs.writePagesPerCore)
-	vs.freeVMChan = make(chan *valuesMem, vs.cores)
+	vs.freeableVMChans = make([]chan *valuesMem, vs.cores)
+	for i := 0; i < cap(vs.freeableVMChans); i++ {
+		vs.freeableVMChans[i] = make(chan *valuesMem, vs.cores)
+	}
+	vs.freeVMChan = make(chan *valuesMem, vs.cores*vs.writePagesPerCore)
 	vs.freeVWRChans = make([]chan *valueWriteReq, vs.cores)
 	vs.pendingVWRChans = make([]chan *valueWriteReq, vs.cores)
 	vs.vfVMChan = make(chan *valuesMem, vs.cores)
 	vs.freeTOCBlockChan = make(chan []byte, vs.cores*2)
 	vs.pendingTOCBlockChan = make(chan []byte, vs.cores)
-	vs.tocWriterDoneChan = make(chan struct{}, 1)
-	for i := 0; i < cap(vs.freeableVMChan); i++ {
+	vs.flushedChan = make(chan struct{}, 1)
+	for i := 0; i < cap(vs.freeVMChan); i++ {
 		vm := &valuesMem{
 			vs:     vs,
 			toc:    make([]byte, 0, vs.pageSize),
 			values: make([]byte, 0, vs.pageSize),
 		}
 		vm.id = vs.addValueLocBlock(vm)
-		vs.freeableVMChan <- vm
+		vs.freeVMChan <- vm
 	}
 	for i := 0; i < len(vs.freeVWRChans); i++ {
 		vs.freeVWRChans[i] = make(chan *valueWriteReq, vs.cores*2)
@@ -532,8 +540,8 @@ func NewValueStore(opts ...func(*config)) *ValueStore {
 	}
 	go vs.tocWriter()
 	go vs.vfWriter()
-	for i := 0; i < vs.cores; i++ {
-		go vs.memClearer()
+	for i := 0; i < len(vs.freeableVMChans); i++ {
+		go vs.memClearer(vs.freeableVMChans[i])
 	}
 	for i := 0; i < len(vs.pendingVWRChans); i++ {
 		go vs.memWriter(vs.pendingVWRChans[i])
@@ -559,27 +567,23 @@ func (vs *ValueStore) MaxValueSize() uint32 {
 	return vs.maxValueSize
 }
 
-// Close shuts down all background processing and the ValueStore will refuse
-// any additional writes; reads may still occur.
-func (vs *ValueStore) Close() {
-	atomic.StoreUint32(&vs.closing, 1)
-	vs.BackgroundStop()
-	if vs.inPullReplicationChan != nil {
-		vs.inPullReplicationChan <- nil
-		<-vs.inPullReplicationDoneChan
-	}
-	if vs.inBulkSetChan != nil {
-		vs.inBulkSetChan <- nil
-		<-vs.inBulkSetDoneChan
-	}
+func (vs *ValueStore) Disable() {
 	for _, c := range vs.pendingVWRChans {
-		c <- nil
+		c <- disableValueWriteReq
 	}
-	for i := 0; i < cap(vs.freeableVMChan); i++ {
-		<-vs.freeVMChan
+}
+
+func (vs *ValueStore) Enable() {
+	for _, c := range vs.pendingVWRChans {
+		c <- enableValueWriteReq
 	}
-	<-vs.tocWriterDoneChan
-	vs.msgConn.close()
+}
+
+func (vs *ValueStore) Flush() {
+	for _, c := range vs.pendingVWRChans {
+		c <- flushValueWriteReq
+	}
+	<-vs.flushedChan
 }
 
 // Lookup will return timestamp, length, err for keyA, keyB.
@@ -661,8 +665,10 @@ func (vs *ValueStore) GatherStats(debug bool) (count uint64, length uint64, debu
 	stats := &valueStoreStats{}
 	if debug {
 		stats.debug = debug
-		stats.freeableVMChanCap = cap(vs.freeableVMChan)
-		stats.freeableVMChanIn = len(vs.freeableVMChan)
+		for i := 0; i < len(vs.freeableVMChans); i++ {
+			stats.freeableVMChansCap += cap(vs.freeableVMChans[i])
+			stats.freeableVMChansIn += len(vs.freeableVMChans[i])
+		}
 		stats.freeVMChanCap = cap(vs.freeVMChan)
 		stats.freeVMChanIn = len(vs.freeVMChan)
 		stats.freeVWRChans = len(vs.freeVWRChans)
@@ -716,18 +722,18 @@ func (vs *ValueStore) addValueLocBlock(block valueLocBlock) uint32 {
 	return uint32(id)
 }
 
-func (vs *ValueStore) memClearer() {
+func (vs *ValueStore) memClearer(freeableVMChan chan *valuesMem) {
 	var tb []byte
 	var tbTS int64
 	var tbOffset int
 	for {
-		vm := <-vs.freeableVMChan
-		if vm == nil {
+		vm := <-freeableVMChan
+		if vm == flushValuesMem {
 			if tb != nil {
 				vs.pendingTOCBlockChan <- tb
 			}
 			vs.pendingTOCBlockChan <- nil
-			break
+			continue
 		}
 		vf := vs.valueLocBlock(vm.vfID)
 		if tb != nil && tbTS != vf.timestamp() {
@@ -774,17 +780,30 @@ func (vs *ValueStore) memClearer() {
 }
 
 func (vs *ValueStore) memWriter(pendingVWRChan chan *valueWriteReq) {
+	var enabled bool
 	var vm *valuesMem
 	var vmTOCOffset int
 	var vmMemOffset int
 	for {
 		vwr := <-pendingVWRChan
-		if vwr == nil {
+		if vwr == enableValueWriteReq {
+			enabled = true
+			continue
+		}
+		if vwr == disableValueWriteReq {
+			enabled = false
+			continue
+		}
+		if vwr == flushValueWriteReq {
 			if vm != nil && len(vm.toc) > 0 {
 				vs.vfVMChan <- vm
 			}
-			vs.vfVMChan <- nil
-			break
+			vs.vfVMChan <- flushValuesMem
+			continue
+		}
+		if !enabled {
+			vwr.errChan <- ErrDisabled
+			continue
 		}
 		length := len(vwr.value)
 		if length > int(vs.maxValueSize) {
@@ -835,21 +854,21 @@ func (vs *ValueStore) memWriter(pendingVWRChan chan *valueWriteReq) {
 
 func (vs *ValueStore) vfWriter() {
 	var vf *valuesFile
-	memWritersLeft := vs.cores
+	memWritersFlushLeft := vs.cores
 	var tocLen uint64
 	var valueLen uint64
 	for {
 		vm := <-vs.vfVMChan
-		if vm == nil {
-			memWritersLeft--
-			if memWritersLeft < 1 {
+		if vm == flushValuesMem {
+			memWritersFlushLeft--
+			if memWritersFlushLeft < 1 {
 				if vf != nil {
 					vf.close()
 				}
-				for i := 0; i < vs.cores; i++ {
-					vs.freeableVMChan <- nil
+				for i := 0; i < len(vs.freeableVMChans); i++ {
+					vs.freeableVMChans[i] <- flushValuesMem
 				}
-				break
+				memWritersFlushLeft = vs.cores
 			}
 			continue
 		}
@@ -879,32 +898,34 @@ func (vs *ValueStore) tocWriter() {
 	binary.BigEndian.PutUint32(head[28:], uint32(vs.checksumInterval))
 	term := make([]byte, 16)
 	copy(term[12:], "TERM")
-	memClearersLeft := vs.cores
 	for {
 		t := <-vs.pendingTOCBlockChan
 		if t == nil {
-			memClearersLeft--
-			if memClearersLeft < 1 {
-				if writerB != nil {
-					binary.BigEndian.PutUint64(term[4:], offsetB)
-					if _, err := writerB.Write(term); err != nil {
-						panic(err)
-					}
-					if err := writerB.Close(); err != nil {
-						panic(err)
-					}
+			if writerB != nil {
+				binary.BigEndian.PutUint64(term[4:], offsetB)
+				if _, err := writerB.Write(term); err != nil {
+					panic(err)
 				}
-				if writerA != nil {
-					binary.BigEndian.PutUint64(term[4:], offsetA)
-					if _, err := writerA.Write(term); err != nil {
-						panic(err)
-					}
-					if err := writerA.Close(); err != nil {
-						panic(err)
-					}
+				if err := writerB.Close(); err != nil {
+					panic(err)
 				}
-				break
+				writerB = nil
+				btsB = 0
+				offsetB = 0
 			}
+			if writerA != nil {
+				binary.BigEndian.PutUint64(term[4:], offsetA)
+				if _, err := writerA.Write(term); err != nil {
+					panic(err)
+				}
+				if err := writerA.Close(); err != nil {
+					panic(err)
+				}
+				writerA = nil
+				btsA = 0
+				offsetA = 0
+			}
+			vs.flushedChan <- struct{}{}
 			continue
 		}
 		if len(t) > 8 {
@@ -954,7 +975,6 @@ func (vs *ValueStore) tocWriter() {
 		}
 		vs.freeTOCBlockChan <- t[:0]
 	}
-	vs.tocWriterDoneChan <- struct{}{}
 }
 
 func (vs *ValueStore) recovery() {
@@ -1202,8 +1222,8 @@ func (vs *ValueStore) inBulkSet() {
 func (stats *valueStoreStats) String() string {
 	if stats.debug {
 		return brimtext.Align([][]string{
-			[]string{"freeableVMChanCap", fmt.Sprintf("%d", stats.freeableVMChanCap)},
-			[]string{"freeableVMChanIn", fmt.Sprintf("%d", stats.freeableVMChanIn)},
+			[]string{"freeableVMChansCap", fmt.Sprintf("%d", stats.freeableVMChansCap)},
+			[]string{"freeableVMChansIn", fmt.Sprintf("%d", stats.freeableVMChansIn)},
 			[]string{"freeVMChanCap", fmt.Sprintf("%d", stats.freeVMChanCap)},
 			[]string{"freeVMChanIn", fmt.Sprintf("%d", stats.freeVMChanIn)},
 			[]string{"freeVWRChans", fmt.Sprintf("%d", stats.freeVWRChans)},

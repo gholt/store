@@ -97,13 +97,15 @@ func main() {
 		wg.Add(1)
 		go func() {
 			opts.vs2 = brimstore.NewValueStore(vs2opts...)
-			opts.vs2.BackgroundStart()
+			opts.vs2.Enable()
+			//opts.vs2.BackgroundStart()
 			wg.Done()
 		}()
 		vsopts = append(vsopts, brimstore.OptMsgConn(brimstore.NewMsgConn(conn)))
 	}
 	opts.vs = brimstore.NewValueStore(vsopts...)
-	opts.vs.BackgroundStart()
+	opts.vs.Enable()
+	//opts.vs.BackgroundStart()
 	wg.Wait()
 	dur := time.Now().Sub(begin)
 	fmt.Println(dur, "to start ValuesStore")
@@ -129,11 +131,13 @@ func main() {
 	if opts.vs2 != nil {
 		wg.Add(1)
 		go func() {
-			opts.vs2.Close()
+			opts.vs2.Disable()
+			opts.vs2.Flush()
 			wg.Done()
 		}()
 	}
-	opts.vs.Close()
+	opts.vs.Disable()
+	opts.vs.Flush()
 	wg.Wait()
 	dur = time.Now().Sub(begin)
 	fmt.Println(dur, "to close value store(s)")

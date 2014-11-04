@@ -15,19 +15,20 @@ import (
 )
 
 type valuesFile struct {
-	vs           *ValueStore
-	id           uint32
-	bts          int64
-	writerFP     io.WriteCloser
-	atOffset     uint32
-	freeChan     chan *valuesFileWriteBuf
-	checksumChan chan *valuesFileWriteBuf
-	writeChan    chan *valuesFileWriteBuf
-	doneChan     chan struct{}
-	buf          *valuesFileWriteBuf
-	readerFPs    []brimutil.ChecksummedReader
-	readerLocks  []sync.Mutex
-	readerLens   [][]byte
+	vs                  *ValueStore
+	id                  uint32
+	bts                 int64
+	writerFP            io.WriteCloser
+	atOffset            uint32
+	freeChan            chan *valuesFileWriteBuf
+	checksumChan        chan *valuesFileWriteBuf
+	writeChan           chan *valuesFileWriteBuf
+	doneChan            chan struct{}
+	buf                 *valuesFileWriteBuf
+	freeableVMChanIndex int
+	readerFPs           []brimutil.ChecksummedReader
+	readerLocks         []sync.Mutex
+	readerLens          [][]byte
 }
 
 type valuesFileWriteBuf struct {
@@ -128,7 +129,11 @@ func (vf *valuesFile) write(vm *valuesMem) {
 	vm.vfID = vf.id
 	vm.vfOffset = atomic.LoadUint32(&vf.atOffset)
 	if len(vm.values) < 1 {
-		vf.vs.freeableVMChan <- vm
+		vf.vs.freeableVMChans[vf.freeableVMChanIndex] <- vm
+		vf.freeableVMChanIndex++
+		if vf.freeableVMChanIndex >= len(vf.vs.freeableVMChans) {
+			vf.freeableVMChanIndex = 0
+		}
 		return
 	}
 	left := len(vm.values)
@@ -145,7 +150,11 @@ func (vf *valuesFile) write(vm *valuesMem) {
 		left -= n
 	}
 	if vf.buf.offset == 0 {
-		vf.vs.freeableVMChan <- vm
+		vf.vs.freeableVMChans[vf.freeableVMChanIndex] <- vm
+		vf.freeableVMChanIndex++
+		if vf.freeableVMChanIndex >= len(vf.vs.freeableVMChans) {
+			vf.freeableVMChanIndex = 0
+		}
 	} else {
 		vf.buf.vms = append(vf.buf.vms, vm)
 	}
@@ -176,7 +185,11 @@ func (vf *valuesFile) close() {
 		panic(err)
 	}
 	for _, vm := range vf.buf.vms {
-		vf.vs.freeableVMChan <- vm
+		vf.vs.freeableVMChans[vf.freeableVMChanIndex] <- vm
+		vf.freeableVMChanIndex++
+		if vf.freeableVMChanIndex >= len(vf.vs.freeableVMChans) {
+			vf.freeableVMChanIndex = 0
+		}
 	}
 	vf.writerFP = nil
 	vf.freeChan = nil
@@ -221,7 +234,11 @@ func (vf *valuesFile) writer() {
 		}
 		if len(buf.vms) > 0 {
 			for _, vm := range buf.vms {
-				vf.vs.freeableVMChan <- vm
+				vf.vs.freeableVMChans[vf.freeableVMChanIndex] <- vm
+				vf.freeableVMChanIndex++
+				if vf.freeableVMChanIndex >= len(vf.vs.freeableVMChans) {
+					vf.freeableVMChanIndex = 0
+				}
 			}
 			buf.vms = buf.vms[:0]
 		}
