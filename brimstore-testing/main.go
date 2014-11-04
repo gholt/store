@@ -97,6 +97,7 @@ func main() {
 		wg.Add(1)
 		go func() {
 			opts.vs2 = brimstore.NewValueStore(vs2opts...)
+			fmt.Printf("vs2 is %p\n", opts.vs2)
 			opts.vs2.EnableWrites()
 			opts.vs2.EnableBackgroundTasks()
 			wg.Done()
@@ -104,6 +105,7 @@ func main() {
 		vsopts = append(vsopts, brimstore.OptMsgConn(brimstore.NewMsgConn(conn)))
 	}
 	opts.vs = brimstore.NewValueStore(vsopts...)
+	fmt.Printf("vs is %p\n", opts.vs)
 	opts.vs.EnableWrites()
 	opts.vs.EnableBackgroundTasks()
 	wg.Wait()

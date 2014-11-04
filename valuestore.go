@@ -1323,7 +1323,6 @@ func (vs *ValueStore) backgroundLauncher() {
 			}
 		}
 		nextRun = time.Now().Add(time.Duration(interval + interval*rand.NormFloat64()*0.1))
-		goroutines := vs.backgroundCores
 		if notification != nil {
 			if notification.enable {
 				enabled = true
@@ -1335,14 +1334,12 @@ func (vs *ValueStore) backgroundLauncher() {
 				notification.doneChan <- struct{}{}
 				continue
 			}
-			goroutines = notification.goroutines
-		}
-		if enabled {
 			atomic.StoreUint32(&vs.backgroundAbort, 0)
-			vs.background(goroutines)
-		}
-		if notification != nil {
+			vs.background(notification.goroutines)
 			notification.doneChan <- struct{}{}
+		} else if enabled {
+			atomic.StoreUint32(&vs.backgroundAbort, 0)
+			vs.background(vs.backgroundCores)
 		}
 	}
 }
@@ -1427,7 +1424,7 @@ func (vs *ValueStore) background(goroutines int) {
 		}
 	}
 	wg.Wait()
-	log.Println(time.Now().Sub(begin), "background tasks")
+	log.Printf("%p %s background tasks", vs, time.Now().Sub(begin))
 }
 
 const pullReplicationMsgHeaderBytes = 36
@@ -1455,10 +1452,7 @@ func (vs *ValueStore) newInPullReplicationMsg(r io.Reader, l uint64) (uint64, er
 		sn, err = r.Read(prm.body[n:])
 		n += sn
 	}
-	select {
-	case vs.inPullReplicationChan <- prm:
-	default:
-	}
+	vs.inPullReplicationChan <- prm
 	return l, nil
 }
 
@@ -1531,10 +1525,7 @@ func (vs *ValueStore) newInBulkSetMsg(r io.Reader, l uint64) (uint64, error) {
 		sn, err = r.Read(bsm.body[n:])
 		n += sn
 	}
-	select {
-	case vs.inBulkSetChan <- bsm:
-	default:
-	}
+	vs.inBulkSetChan <- bsm
 	return l, nil
 }
 

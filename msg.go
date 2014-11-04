@@ -6,7 +6,6 @@ import (
 	"net"
 	"os"
 	"sync"
-	"sync/atomic"
 	"time"
 )
 
@@ -55,7 +54,6 @@ type msg interface {
 }
 
 type MsgConn struct {
-	closing         uint32
 	conn            net.Conn
 	lock            sync.RWMutex
 	msgMap          *msgMap
@@ -87,20 +85,7 @@ func (mc *MsgConn) start() {
 }
 
 func (mc *MsgConn) send(m msg) {
-	if atomic.LoadUint32(&mc.closing) == 0 {
-		select {
-		case mc.writeChan <- m:
-		default:
-		}
-	}
-}
-
-func (mc *MsgConn) close() {
-	if atomic.LoadUint32(&mc.closing) == 0 {
-		atomic.StoreUint32(&mc.closing, 1)
-		mc.writeChan <- nil
-		<-mc.writingDoneChan
-	}
+	mc.writeChan <- m
 }
 
 func (mc *MsgConn) reading() {
@@ -134,16 +119,14 @@ func (mc *MsgConn) reading() {
 			l = (l << 8) | uint64(b[mc.typeBytes+i])
 		}
 		f := mc.msgMap.get(t)
-		if f != nil && atomic.LoadUint32(&mc.closing) == 0 {
+		if f != nil {
 			_, err = f(mc.conn, l)
 			if err != nil {
 				mc.logError.Print("error reading msg content", err)
 				return
 			}
 		} else {
-			if f == nil {
-				mc.logWarning.Printf("unknown msg type %d", t)
-			}
+			mc.logWarning.Printf("unknown msg type %d", t)
 			for l > 0 {
 				if err != nil {
 					mc.logError.Print("err reading msg content", err)
@@ -167,9 +150,6 @@ func (mc *MsgConn) writing() {
 		m := <-mc.writeChan
 		if m == nil {
 			break
-		}
-		if atomic.LoadUint32(&mc.closing) != 0 {
-			continue
 		}
 		t := m.msgType()
 		for i := mc.typeBytes - 1; i >= 0; i-- {

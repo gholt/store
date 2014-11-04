@@ -1020,7 +1020,7 @@ func (vlm *ValueLocMap) discardTombstones(tombstoneCutoff uint64, n *node) {
 			}
 			var p *entry
 			for {
-				if e.timestamp&1 != 0 {
+				if e.timestamp&1 != 0 && e.timestamp < tombstoneCutoff {
 					if p == nil {
 						if e.next == 0 {
 							e.blockID = 0
