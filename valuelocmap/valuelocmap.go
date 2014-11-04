@@ -243,6 +243,11 @@ func (vlm *ValueLocMap) split(n *node) {
 
 func (vlm *ValueLocMap) split2(n *node) {
 	n.lock.Lock()
+	u := atomic.LoadUint32(&n.used)
+	if u < n.splitCount {
+		n.lock.Unlock()
+		return
+	}
 	hm := n.highMask
 	an := &node{
 		highMask:           hm >> 1,
@@ -270,6 +275,7 @@ func (vlm *ValueLocMap) split2(n *node) {
 	n.entries = nil
 	n.entriesLocks = nil
 	n.overflow = nil
+	n.used = 0
 	b := vlm.bits
 	lm := vlm.lowMask
 	ao := an.overflow
@@ -457,8 +463,15 @@ func (vlm *ValueLocMap) merge(n *node) {
 
 func (vlm *ValueLocMap) merge2(n *node) {
 	n.lock.Lock()
+	if n.a == nil {
+		n.lock.Unlock()
+		return
+	}
 	an := n.a
 	bn := n.b
+	if atomic.LoadUint32(&an.used) < atomic.LoadUint32(&bn.used) {
+		an, bn = bn, an
+	}
 	an.lock.Lock()
 	bn.lock.Lock()
 	n.a = nil
@@ -722,17 +735,18 @@ func (vlm *ValueLocMap) Set(keyA uint64, keyB uint64, timestamp uint64, blockID 
 	n.lock.RLock()
 	for {
 		if n.a == nil {
-			if n.entries == nil {
-				n.lock.RUnlock()
-				n.lock.Lock()
-				if n.entries == nil {
-					n.entries = make([]entry, 1<<vlm.bits)
-					n.entriesLocks = make([]sync.RWMutex, vlm.entriesLockMask+1)
-				}
-				n.lock.Unlock()
-				n.lock.RLock()
+			if n.entries != nil {
+				break
 			}
-			break
+			n.lock.RUnlock()
+			n.lock.Lock()
+			if n.entries == nil {
+				n.entries = make([]entry, 1<<vlm.bits)
+				n.entriesLocks = make([]sync.RWMutex, vlm.entriesLockMask+1)
+			}
+			n.lock.Unlock()
+			n.lock.RLock()
+			continue
 		}
 		pn = n
 		if keyA&n.highMask == 0 {

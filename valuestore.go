@@ -1295,6 +1295,7 @@ func (stats *valueStoreStats) String() string {
 // function will not return until all background tasks have completed at least
 // one full pass.
 func (vs *ValueStore) BackgroundNow(goroutines int) {
+	atomic.StoreUint32(&vs.backgroundAbort, 1)
 	c := make(chan struct{}, 1)
 	vs.backgroundNotifyChan <- &backgroundNotification{
 		goroutines: goroutines,
@@ -1337,6 +1338,7 @@ func (vs *ValueStore) backgroundLauncher() {
 			goroutines = notification.goroutines
 		}
 		if enabled {
+			atomic.StoreUint32(&vs.backgroundAbort, 0)
 			vs.background(goroutines)
 		}
 		if notification != nil {
