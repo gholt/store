@@ -97,15 +97,15 @@ func main() {
 		wg.Add(1)
 		go func() {
 			opts.vs2 = brimstore.NewValueStore(vs2opts...)
-			opts.vs2.Enable()
-			//opts.vs2.BackgroundStart()
+			opts.vs2.EnableWrites()
+			opts.vs2.EnableBackgroundTasks()
 			wg.Done()
 		}()
 		vsopts = append(vsopts, brimstore.OptMsgConn(brimstore.NewMsgConn(conn)))
 	}
 	opts.vs = brimstore.NewValueStore(vsopts...)
-	opts.vs.Enable()
-	//opts.vs.BackgroundStart()
+	opts.vs.EnableWrites()
+	opts.vs.EnableBackgroundTasks()
 	wg.Wait()
 	dur := time.Now().Sub(begin)
 	fmt.Println(dur, "to start ValuesStore")
@@ -131,12 +131,14 @@ func main() {
 	if opts.vs2 != nil {
 		wg.Add(1)
 		go func() {
-			opts.vs2.Disable()
+			opts.vs2.DisableBackgroundTasks()
+			opts.vs2.DisableWrites()
 			opts.vs2.Flush()
 			wg.Done()
 		}()
 	}
-	opts.vs.Disable()
+	opts.vs.DisableBackgroundTasks()
+	opts.vs.DisableWrites()
 	opts.vs.Flush()
 	wg.Wait()
 	dur = time.Now().Sub(begin)
@@ -183,8 +185,17 @@ func memstat() {
 }
 
 func background() {
-	begin := time.Now()
 	wg := &sync.WaitGroup{}
+	if opts.vs2 != nil {
+		wg.Add(1)
+		go func() {
+			opts.vs2.DisableBackgroundTasks()
+			wg.Done()
+		}()
+	}
+	opts.vs.DisableBackgroundTasks()
+	wg.Wait()
+	begin := time.Now()
 	if opts.vs2 != nil {
 		wg.Add(1)
 		go func() {
@@ -196,6 +207,15 @@ func background() {
 	wg.Wait()
 	dur := time.Now().Sub(begin)
 	fmt.Printf("%s to run background tasks\n", dur)
+	if opts.vs2 != nil {
+		wg.Add(1)
+		go func() {
+			opts.vs2.EnableBackgroundTasks()
+			wg.Done()
+		}()
+	}
+	opts.vs.EnableBackgroundTasks()
+	wg.Wait()
 }
 
 func delete() {
@@ -229,6 +249,7 @@ func delete() {
 		}(i)
 	}
 	wg.Wait()
+	opts.vs.Flush()
 	dur := time.Now().Sub(begin)
 	fmt.Printf("%s %.0f/s to delete %d values (timestamp %d)\n", dur, float64(opts.Number)/(float64(dur)/float64(time.Second)), opts.Number, timestamp)
 	if superseded > 0 {
@@ -402,6 +423,7 @@ func write() {
 		}(i)
 	}
 	wg.Wait()
+	opts.vs.Flush()
 	dur := time.Now().Sub(begin)
 	fmt.Printf("%s %.0f/s %0.2fG/s to write %d values (timestamp %d)\n", dur, float64(opts.Number)/(float64(dur)/float64(time.Second)), float64(opts.Number*opts.Length)/(float64(dur)/float64(time.Second))/1024/1024/1024, opts.Number, timestamp)
 	if superseded > 0 {

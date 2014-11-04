@@ -364,7 +364,6 @@ type bulkSetMsg struct {
 
 // ValueStore instances are created with NewValueStore.
 type ValueStore struct {
-	closing                   uint32
 	freeableVMChans           []chan *valuesMem
 	freeVMChan                chan *valuesMem
 	freeVWRChans              []chan *valueWriteReq
@@ -396,8 +395,8 @@ type ValueStore struct {
 	inBulkSetChan             chan *bulkSetMsg
 	inBulkSetDoneChan         chan struct{}
 	backgroundNotifyChan      chan *backgroundNotification
-	backgroundDoneChan        chan struct{}
 	backgroundIteration       uint16
+	backgroundAbort           uint32
 	ktbfs                     []*ktBloomFilter
 }
 
@@ -457,6 +456,8 @@ type valueStoreStats struct {
 }
 
 type backgroundNotification struct {
+	enable     bool
+	disable    bool
 	goroutines int
 	doneChan   chan struct{}
 }
@@ -558,6 +559,8 @@ func NewValueStore(opts ...func(*config)) *ValueStore {
 		go vs.inBulkSet()
 		vs.msgConn.start()
 	}
+	vs.backgroundNotifyChan = make(chan *backgroundNotification, 1)
+	go vs.backgroundLauncher()
 	return vs
 }
 
@@ -567,16 +570,35 @@ func (vs *ValueStore) MaxValueSize() uint32 {
 	return vs.maxValueSize
 }
 
-func (vs *ValueStore) Disable() {
+func (vs *ValueStore) DisableWrites() {
 	for _, c := range vs.pendingVWRChans {
 		c <- disableValueWriteReq
 	}
 }
 
-func (vs *ValueStore) Enable() {
+func (vs *ValueStore) EnableWrites() {
 	for _, c := range vs.pendingVWRChans {
 		c <- enableValueWriteReq
 	}
+}
+
+func (vs *ValueStore) DisableBackgroundTasks() {
+	atomic.StoreUint32(&vs.backgroundAbort, 1)
+	c := make(chan struct{}, 1)
+	vs.backgroundNotifyChan <- &backgroundNotification{
+		disable:  true,
+		doneChan: c,
+	}
+	<-c
+}
+
+func (vs *ValueStore) EnableBackgroundTasks() {
+	c := make(chan struct{}, 1)
+	vs.backgroundNotifyChan <- &backgroundNotification{
+		enable:   true,
+		doneChan: c,
+	}
+	<-c
 }
 
 func (vs *ValueStore) Flush() {
@@ -731,6 +753,7 @@ func (vs *ValueStore) memClearer(freeableVMChan chan *valuesMem) {
 		if vm == flushValuesMem {
 			if tb != nil {
 				vs.pendingTOCBlockChan <- tb
+				tb = nil
 			}
 			vs.pendingTOCBlockChan <- nil
 			continue
@@ -797,6 +820,7 @@ func (vs *ValueStore) memWriter(pendingVWRChan chan *valueWriteReq) {
 		if vwr == flushValueWriteReq {
 			if vm != nil && len(vm.toc) > 0 {
 				vs.vfVMChan <- vm
+				vm = nil
 			}
 			vs.vfVMChan <- flushValuesMem
 			continue
@@ -854,22 +878,24 @@ func (vs *ValueStore) memWriter(pendingVWRChan chan *valueWriteReq) {
 
 func (vs *ValueStore) vfWriter() {
 	var vf *valuesFile
-	memWritersFlushLeft := vs.cores
+	memWritersFlushLeft := len(vs.pendingVWRChans)
 	var tocLen uint64
 	var valueLen uint64
 	for {
 		vm := <-vs.vfVMChan
 		if vm == flushValuesMem {
 			memWritersFlushLeft--
-			if memWritersFlushLeft < 1 {
-				if vf != nil {
-					vf.close()
-				}
-				for i := 0; i < len(vs.freeableVMChans); i++ {
-					vs.freeableVMChans[i] <- flushValuesMem
-				}
-				memWritersFlushLeft = vs.cores
+			if memWritersFlushLeft > 0 {
+				continue
 			}
+			if vf != nil {
+				vf.close()
+				vf = nil
+			}
+			for i := 0; i < len(vs.freeableVMChans); i++ {
+				vs.freeableVMChans[i] <- flushValuesMem
+			}
+			memWritersFlushLeft = len(vs.pendingVWRChans)
 			continue
 		}
 		if vf != nil && (tocLen+uint64(len(vm.toc)) >= uint64(vs.valuesFileSize) || valueLen+uint64(len(vm.values)) > uint64(vs.valuesFileSize)) {
@@ -888,6 +914,7 @@ func (vs *ValueStore) vfWriter() {
 }
 
 func (vs *ValueStore) tocWriter() {
+	memClearersFlushLeft := len(vs.freeableVMChans)
 	var btsA uint64
 	var writerA io.WriteCloser
 	var offsetA uint64
@@ -901,6 +928,10 @@ func (vs *ValueStore) tocWriter() {
 	for {
 		t := <-vs.pendingTOCBlockChan
 		if t == nil {
+			memClearersFlushLeft--
+			if memClearersFlushLeft > 0 {
+				continue
+			}
 			if writerB != nil {
 				binary.BigEndian.PutUint64(term[4:], offsetB)
 				if _, err := writerB.Write(term); err != nil {
@@ -926,6 +957,7 @@ func (vs *ValueStore) tocWriter() {
 				offsetA = 0
 			}
 			vs.flushedChan <- struct{}{}
+			memClearersFlushLeft = len(vs.freeableVMChans)
 			continue
 		}
 		if len(t) > 8 {
@@ -1169,9 +1201,6 @@ func (vs *ValueStore) inPullReplication() {
 		if prm == nil {
 			break
 		}
-		if atomic.LoadUint32(&vs.closing) != 0 {
-			continue
-		}
 		k = k[:0]
 		cutoff := prm.timestampCutoff()
 		ktbf := prm.ktBloomFilter()
@@ -1197,9 +1226,7 @@ func (vs *ValueStore) inPullReplication() {
 					break
 				}
 			}
-			if atomic.LoadUint32(&vs.closing) == 0 {
-				vs.msgConn.send(bsm)
-			}
+			vs.msgConn.send(bsm)
 		}
 	}
 	vs.inPullReplicationDoneChan <- struct{}{}
@@ -1210,9 +1237,6 @@ func (vs *ValueStore) inBulkSet() {
 		bsm := <-vs.inBulkSetChan
 		if bsm == nil {
 			break
-		}
-		if atomic.LoadUint32(&vs.closing) != 0 {
-			continue
 		}
 		bsm.valueStore(vs)
 	}
@@ -1265,87 +1289,60 @@ func (stats *valueStoreStats) String() string {
 	}
 }
 
-// BackgroundStart will start the execution of background tasks at configured
-// intervals. Multiple calls to BackgroundStart will cause no harm and tasks
-// can be temporarily suspended by calling BackgroundStop and BackgroundStart
-// as desired.
-func (vs *ValueStore) BackgroundStart() {
-	if vs.backgroundNotifyChan == nil && atomic.LoadUint32(&vs.closing) == 0 {
-		vs.backgroundDoneChan = make(chan struct{}, 1)
-		vs.backgroundNotifyChan = make(chan *backgroundNotification, 1)
-		go vs.backgroundLauncher()
-	}
-}
-
-// BackgroundStop will stop the execution of background tasks; use
-// BackgroundStart to restart them if desired. This can be useful when
-// importing large amounts of data where temporarily stopping the background
-// tasks and just restarting them after the import can greatly increase the
-// import speed.
-func (vs *ValueStore) BackgroundStop() {
-	if vs.backgroundNotifyChan != nil {
-		vs.backgroundNotifyChan <- nil
-		<-vs.backgroundDoneChan
-		vs.backgroundDoneChan = nil
-		vs.backgroundNotifyChan = nil
-	}
-}
-
 // BackgroundNow will immediately (rather than waiting for the next background
 // interval) execute any background tasks using up to the number of goroutines
 // indicated (0 will use the configured OptBackgroundCores value). This
 // function will not return until all background tasks have completed at least
 // one full pass.
 func (vs *ValueStore) BackgroundNow(goroutines int) {
-	if atomic.LoadUint32(&vs.closing) == 0 {
-		if vs.backgroundNotifyChan == nil {
-			vs.background(goroutines)
-		} else {
-			c := make(chan struct{}, 1)
-			vs.backgroundNotifyChan <- &backgroundNotification{goroutines, c}
-			<-c
-		}
+	c := make(chan struct{}, 1)
+	vs.backgroundNotifyChan <- &backgroundNotification{
+		goroutines: goroutines,
+		doneChan:   c,
 	}
+	<-c
 }
 
 func (vs *ValueStore) backgroundLauncher() {
+	var enabled bool
 	interval := float64(vs.backgroundInterval) * float64(time.Second)
 	nextRun := time.Now().Add(time.Duration(interval + interval*rand.NormFloat64()*0.1))
-WORK:
 	for {
 		var notification *backgroundNotification
 		sleep := nextRun.Sub(time.Now())
 		if sleep > 0 {
 			select {
 			case notification = <-vs.backgroundNotifyChan:
-				if notification == nil {
-					break WORK
-				}
 			case <-time.After(sleep):
 			}
 		} else {
 			select {
 			case notification = <-vs.backgroundNotifyChan:
-				if notification == nil {
-					break WORK
-				}
 			default:
 			}
-		}
-		if atomic.LoadUint32(&vs.closing) != 0 {
-			continue
 		}
 		nextRun = time.Now().Add(time.Duration(interval + interval*rand.NormFloat64()*0.1))
 		goroutines := vs.backgroundCores
 		if notification != nil {
+			if notification.enable {
+				enabled = true
+				notification.doneChan <- struct{}{}
+				continue
+			}
+			if notification.disable {
+				enabled = false
+				notification.doneChan <- struct{}{}
+				continue
+			}
 			goroutines = notification.goroutines
 		}
-		vs.background(goroutines)
-		if notification != nil && notification.doneChan != nil {
+		if enabled {
+			vs.background(goroutines)
+		}
+		if notification != nil {
 			notification.doneChan <- struct{}{}
 		}
 	}
-	vs.backgroundDoneChan <- struct{}{}
 }
 
 const _GLH_BLOOM_FILTER_N = 1000000
@@ -1380,7 +1377,7 @@ func (vs *ValueStore) background(goroutines int) {
 			go func(g int) {
 				ktbf := vs.ktbfs[g]
 				var pullSize uint64
-				for p := uint32(g); p < partitions && atomic.LoadUint32(&vs.closing) == 0; p += uint32(goroutines) {
+				for p := uint32(g); p < partitions && atomic.LoadUint32(&vs.backgroundAbort) == 0; p += uint32(goroutines) {
 					// Here I'm doing pull replication scans for every
 					// partition when eventually it should just do this for
 					// partitions we're in the ring for. Partitions we're not
@@ -1405,6 +1402,9 @@ func (vs *ValueStore) background(goroutines int) {
 								ktbf.add(keyA, keyB, timestamp)
 							}
 						})
+						if atomic.LoadUint32(&vs.backgroundAbort) != 0 {
+							break
+						}
 						if vs.msgConn == nil {
 							break
 						} else {
@@ -1453,11 +1453,9 @@ func (vs *ValueStore) newInPullReplicationMsg(r io.Reader, l uint64) (uint64, er
 		sn, err = r.Read(prm.body[n:])
 		n += sn
 	}
-	if atomic.LoadUint32(&vs.closing) == 0 {
-		select {
-		case vs.inPullReplicationChan <- prm:
-		default:
-		}
+	select {
+	case vs.inPullReplicationChan <- prm:
+	default:
 	}
 	return l, nil
 }
@@ -1531,11 +1529,9 @@ func (vs *ValueStore) newInBulkSetMsg(r io.Reader, l uint64) (uint64, error) {
 		sn, err = r.Read(bsm.body[n:])
 		n += sn
 	}
-	if atomic.LoadUint32(&vs.closing) == 0 {
-		select {
-		case vs.inBulkSetChan <- bsm:
-		default:
-		}
+	select {
+	case vs.inBulkSetChan <- bsm:
+	default:
 	}
 	return l, nil
 }
