@@ -33,10 +33,10 @@ func newKTBloomFilter(n uint64, p float64, salt uint16) *ktBloomFilter {
 	}
 }
 
-func newKTBloomFilterFromMsg(prm *pullReplicationMsg, headerExtra int) *ktBloomFilter {
-	n := binary.BigEndian.Uint64(prm.header[headerExtra:])
-	p := math.Float64frombits(binary.BigEndian.Uint64(prm.header[headerExtra+8:]))
-	salt := binary.BigEndian.Uint16(prm.header[headerExtra+16:])
+func newKTBloomFilterFromMsg(prm *pullReplicationMsg, headerOffset int) *ktBloomFilter {
+	n := binary.BigEndian.Uint64(prm.header[headerOffset:])
+	p := math.Float64frombits(binary.BigEndian.Uint64(prm.header[headerOffset+8:]))
+	salt := binary.BigEndian.Uint16(prm.header[headerOffset+16:])
 	m := -((float64(n) * math.Log(p)) / math.Pow(math.Log(2), 2))
 	return &ktBloomFilter{
 		n:       n,
@@ -49,12 +49,10 @@ func newKTBloomFilterFromMsg(prm *pullReplicationMsg, headerExtra int) *ktBloomF
 	}
 }
 
-func (ktbf *ktBloomFilter) toMsg(prm *pullReplicationMsg, headerExtra int) {
-	prm.header = make([]byte, ktBloomFilterHeaderBytes+headerExtra)
-	binary.BigEndian.PutUint64(prm.header[headerExtra:], ktbf.n)
-	binary.BigEndian.PutUint64(prm.header[headerExtra+8:], math.Float64bits(ktbf.p))
-	binary.BigEndian.PutUint16(prm.header[headerExtra+16:], uint16(ktbf.salt>>16))
-	prm.body = make([]byte, len(ktbf.bits))
+func (ktbf *ktBloomFilter) toMsg(prm *pullReplicationMsg, headerOffset int) {
+	binary.BigEndian.PutUint64(prm.header[headerOffset:], ktbf.n)
+	binary.BigEndian.PutUint64(prm.header[headerOffset+8:], math.Float64bits(ktbf.p))
+	binary.BigEndian.PutUint16(prm.header[headerOffset+16:], uint16(ktbf.salt>>16))
 	copy(prm.body, ktbf.bits)
 }
 

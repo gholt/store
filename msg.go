@@ -51,6 +51,7 @@ type msg interface {
 	msgType() msgType
 	msgLength() uint64
 	writeContent(io.Writer) (uint64, error)
+	done()
 }
 
 type MsgConn struct {
@@ -172,6 +173,7 @@ func (mc *MsgConn) writing() {
 			mc.logError.Print("err writing msg content", err)
 			break
 		}
+		m.done()
 	}
 	mc.writingDoneChan <- struct{}{}
 }

@@ -354,11 +354,13 @@ type ValueLocMap interface {
 }
 
 type pullReplicationMsg struct {
+	vs     *ValueStore
 	header []byte
 	body   []byte
 }
 
 type bulkSetMsg struct {
+	vs   *ValueStore
 	body []byte
 }
 
@@ -391,9 +393,11 @@ type ValueStore struct {
 	msgConn                   *MsgConn
 	replicationIgnoreRecent   uint64
 	inPullReplicationChan     chan *pullReplicationMsg
-	inPullReplicationDoneChan chan struct{}
+	freeInPullReplicationChan chan *pullReplicationMsg
+	outPullReplicationChan    chan *pullReplicationMsg
 	inBulkSetChan             chan *bulkSetMsg
-	inBulkSetDoneChan         chan struct{}
+	freeInBulkSetChan         chan *bulkSetMsg
+	outBulkSetChan            chan *bulkSetMsg
 	backgroundNotifyChan      chan *backgroundNotification
 	backgroundIteration       uint16
 	backgroundAbort           uint32
@@ -461,6 +465,11 @@ type backgroundNotification struct {
 	goroutines int
 	doneChan   chan struct{}
 }
+
+const _GLH_IN_PULL_REPLICATION_MSGS = 100
+const _GLH_OUT_PULL_REPLICATION_MSGS = 100
+const _GLH_IN_BULK_SET_MSGS = 100
+const _GLH_OUT_BULK_SET_MSGS = 100
 
 // NewValueStore creates a ValueStore for use in storing []byte values
 // referenced by 128 bit keys.
@@ -550,13 +559,35 @@ func NewValueStore(opts ...func(*config)) *ValueStore {
 	vs.recovery()
 	if vs.msgConn != nil {
 		vs.msgConn.msgMap.set(_MSG_PULL_REPLICATION, vs.newInPullReplicationMsg)
-		vs.msgConn.msgMap.set(_MSG_BULK_SET, vs.newInBulkSetMsg)
-		vs.inPullReplicationChan = make(chan *pullReplicationMsg, vs.cores)
-		vs.inPullReplicationDoneChan = make(chan struct{}, 1)
+		vs.inPullReplicationChan = make(chan *pullReplicationMsg, _GLH_IN_PULL_REPLICATION_MSGS)
+		vs.freeInPullReplicationChan = make(chan *pullReplicationMsg, _GLH_IN_PULL_REPLICATION_MSGS)
+		for i := 0; i < cap(vs.freeInPullReplicationChan); i++ {
+			vs.freeInPullReplicationChan <- &pullReplicationMsg{
+				vs:     vs,
+				header: make([]byte, ktBloomFilterHeaderBytes+pullReplicationMsgHeaderBytes),
+			}
+		}
 		go vs.inPullReplication()
-		vs.inBulkSetChan = make(chan *bulkSetMsg, vs.cores)
-		vs.inBulkSetDoneChan = make(chan struct{}, 1)
+		vs.outPullReplicationChan = make(chan *pullReplicationMsg, _GLH_OUT_PULL_REPLICATION_MSGS)
+		vs.ktbfs = []*ktBloomFilter{newKTBloomFilter(_GLH_BLOOM_FILTER_N, _GLH_BLOOM_FILTER_P, 0)}
+		for i := 0; i < cap(vs.outPullReplicationChan); i++ {
+			vs.outPullReplicationChan <- &pullReplicationMsg{
+				vs:     vs,
+				header: make([]byte, ktBloomFilterHeaderBytes+pullReplicationMsgHeaderBytes),
+				body:   make([]byte, len(vs.ktbfs[0].bits)),
+			}
+		}
+		vs.msgConn.msgMap.set(_MSG_BULK_SET, vs.newInBulkSetMsg)
+		vs.inBulkSetChan = make(chan *bulkSetMsg, _GLH_IN_BULK_SET_MSGS)
+		vs.freeInBulkSetChan = make(chan *bulkSetMsg, _GLH_IN_BULK_SET_MSGS)
+		for i := 0; i < cap(vs.freeInBulkSetChan); i++ {
+			vs.freeInBulkSetChan <- &bulkSetMsg{vs: vs}
+		}
 		go vs.inBulkSet()
+		vs.outBulkSetChan = make(chan *bulkSetMsg, _GLH_OUT_BULK_SET_MSGS)
+		for i := 0; i < cap(vs.outBulkSetChan); i++ {
+			vs.outBulkSetChan <- &bulkSetMsg{vs: vs}
+		}
 		vs.msgConn.start()
 	}
 	vs.backgroundNotifyChan = make(chan *backgroundNotification, 1)
@@ -1198,9 +1229,6 @@ func (vs *ValueStore) inPullReplication() {
 	v := make([]byte, vs.maxValueSize)
 	for {
 		prm := <-vs.inPullReplicationChan
-		if prm == nil {
-			break
-		}
 		k = k[:0]
 		cutoff := prm.timestampCutoff()
 		ktbf := prm.ktBloomFilter()
@@ -1209,8 +1237,9 @@ func (vs *ValueStore) inPullReplication() {
 				k = append(k, keyA, keyB)
 			}
 		})
+		vs.freeInPullReplicationChan <- prm
 		if len(k) > 0 {
-			bsm := vs.newOutBulkSetMsg()
+			bsm := <-vs.outBulkSetChan
 			var t uint64
 			var err error
 			for i := 0; i < len(k); i += 2 {
@@ -1229,18 +1258,14 @@ func (vs *ValueStore) inPullReplication() {
 			vs.msgConn.send(bsm)
 		}
 	}
-	vs.inPullReplicationDoneChan <- struct{}{}
 }
 
 func (vs *ValueStore) inBulkSet() {
 	for {
 		bsm := <-vs.inBulkSetChan
-		if bsm == nil {
-			break
-		}
 		bsm.valueStore(vs)
+		vs.freeInBulkSetChan <- bsm
 	}
-	vs.inBulkSetDoneChan <- struct{}{}
 }
 
 func (stats *valueStoreStats) String() string {
@@ -1361,16 +1386,12 @@ func (vs *ValueStore) background(goroutines int) {
 	ringID := uint64(0)
 	partitionPower := uint16(8)
 	partitions := uint32(1) << partitionPower
+	vs.vlm.DiscardTombstones(uint64(time.Now().UnixNano()) - vs.tombstoneAge)
 	wg := &sync.WaitGroup{}
-	wg.Add(1)
-	go func() {
-		vs.vlm.DiscardTombstones(uint64(time.Now().UnixNano()) - vs.tombstoneAge)
-		wg.Done()
-	}()
 	if vs.msgConn != nil {
 		wg.Add(goroutines)
 		for len(vs.ktbfs) < goroutines {
-			vs.ktbfs = append(vs.ktbfs, newKTBloomFilter(_GLH_BLOOM_FILTER_N, _GLH_BLOOM_FILTER_P, iteration))
+			vs.ktbfs = append(vs.ktbfs, newKTBloomFilter(_GLH_BLOOM_FILTER_N, _GLH_BLOOM_FILTER_P, 0))
 		}
 		for g := 0; g < goroutines; g++ {
 			go func(g int) {
@@ -1430,10 +1451,12 @@ func (vs *ValueStore) background(goroutines int) {
 const pullReplicationMsgHeaderBytes = 36
 
 func (vs *ValueStore) newInPullReplicationMsg(r io.Reader, l uint64) (uint64, error) {
-	prm := &pullReplicationMsg{
-		header: make([]byte, pullReplicationMsgHeaderBytes+ktBloomFilterHeaderBytes),
-		body:   make([]byte, l-pullReplicationMsgHeaderBytes-uint64(ktBloomFilterHeaderBytes)),
+	prm := <-vs.freeInPullReplicationChan
+	bl := l - pullReplicationMsgHeaderBytes - uint64(ktBloomFilterHeaderBytes)
+	if uint64(cap(prm.body)) < bl {
+		prm.body = make([]byte, bl)
 	}
+	prm.body = prm.body[:bl]
 	var n int
 	var sn int
 	var err error
@@ -1457,13 +1480,13 @@ func (vs *ValueStore) newInPullReplicationMsg(r io.Reader, l uint64) (uint64, er
 }
 
 func (vs *ValueStore) newOutPullReplicationMsg(ringID uint64, partition uint32, timestampCutoff uint64, rangeStart uint64, rangeStop uint64, ktbf *ktBloomFilter) *pullReplicationMsg {
-	prm := &pullReplicationMsg{}
-	ktbf.toMsg(prm, pullReplicationMsgHeaderBytes)
+	prm := <-vs.outPullReplicationChan
 	binary.BigEndian.PutUint64(prm.header, ringID)
 	binary.BigEndian.PutUint32(prm.header[8:], partition)
 	binary.BigEndian.PutUint64(prm.header[12:], timestampCutoff)
 	binary.BigEndian.PutUint64(prm.header[20:], rangeStart)
 	binary.BigEndian.PutUint64(prm.header[28:], rangeStop)
+	ktbf.toMsg(prm, pullReplicationMsgHeaderBytes)
 	return prm
 }
 
@@ -1513,8 +1536,16 @@ func (prm *pullReplicationMsg) writeContent(w io.Writer) (uint64, error) {
 	return uint64(n), err
 }
 
+func (prm *pullReplicationMsg) done() {
+	prm.vs.outPullReplicationChan <- prm
+}
+
 func (vs *ValueStore) newInBulkSetMsg(r io.Reader, l uint64) (uint64, error) {
-	bsm := &bulkSetMsg{body: make([]byte, l)}
+	bsm := <-vs.freeInBulkSetChan
+	if l > uint64(cap(bsm.body)) {
+		bsm.body = make([]byte, l)
+	}
+	bsm.body = bsm.body[:l]
 	var n int
 	var sn int
 	var err error
@@ -1530,7 +1561,9 @@ func (vs *ValueStore) newInBulkSetMsg(r io.Reader, l uint64) (uint64, error) {
 }
 
 func (vs *ValueStore) newOutBulkSetMsg() *bulkSetMsg {
-	return &bulkSetMsg{body: make([]byte, 0, 16*1024*1024)}
+	bsm := <-vs.outBulkSetChan
+	bsm.body = bsm.body[:0]
+	return bsm
 }
 
 func (bsm *bulkSetMsg) msgType() msgType {
@@ -1544,6 +1577,10 @@ func (bsm *bulkSetMsg) msgLength() uint64 {
 func (bsm *bulkSetMsg) writeContent(w io.Writer) (uint64, error) {
 	n, err := w.Write(bsm.body)
 	return uint64(n), err
+}
+
+func (bsm *bulkSetMsg) done() {
+	bsm.vs.outBulkSetChan <- bsm
 }
 
 func (bsm *bulkSetMsg) add(keyA uint64, keyB uint64, timestamp uint64, value []byte) bool {
