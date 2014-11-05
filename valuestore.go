@@ -476,8 +476,9 @@ const _GLH_OUT_BULK_SET_MSG_SIZE = 16 * 1024 * 1024
 // referenced by 128 bit keys.
 //
 // Note that a lot of buffering and multiple cores can be in use and therefore
-// Close should be called prior to the process exiting to ensure all processing
-// is done and the buffers are flushed.
+// DisableBackgroundTasks() DisableWrites() and Flush() should be called prior
+// to the process exiting to ensure all processing is done and the buffers are
+// flushed.
 //
 // You can provide Opt* functions for optional configuration items, such as
 // OptCores:
@@ -649,8 +650,6 @@ func (vs *ValueStore) Flush() {
 // not known at all whereas err == ErrNotFound with timestamp != 0 (also
 // timestamp & 1 == 1) indicates keyA, keyB was known and had a deletion marker
 // (aka tombstone).
-//
-// This may be called even after Close.
 func (vs *ValueStore) Lookup(keyA uint64, keyB uint64) (uint64, uint32, error) {
 	timestamp, id, _, length := vs.vlm.Get(keyA, keyB)
 	if id == 0 || timestamp&1 == 1 {
@@ -667,8 +666,6 @@ func (vs *ValueStore) Lookup(keyA uint64, keyB uint64) (uint64, uint32, error) {
 // not known at all whereas err == ErrNotFound with timestamp != 0 (also
 // timestamp & 1 == 1) indicates keyA, keyB was known and had a deletion marker
 // (aka tombstone).
-//
-// This may be called even after Close.
 func (vs *ValueStore) Read(keyA uint64, keyB uint64, value []byte) (uint64, []byte, error) {
 	timestamp, id, offset, length := vs.vlm.Get(keyA, keyB)
 	if id == 0 || timestamp&1 == 1 {
@@ -680,8 +677,6 @@ func (vs *ValueStore) Read(keyA uint64, keyB uint64, value []byte) (uint64, []by
 // Write stores timestamp & 0xfffffffffffffffe (lowest bit zeroed), value for
 // keyA, keyB or returns any error; a newer timestamp already in place is not
 // reported as an error.
-//
-// This may no longer be called after Close.
 func (vs *ValueStore) Write(keyA uint64, keyB uint64, timestamp uint64, value []byte) (uint64, error) {
 	i := int(keyA>>1) % len(vs.freeVWRChans)
 	vwr := <-vs.freeVWRChans[i]
@@ -699,8 +694,6 @@ func (vs *ValueStore) Write(keyA uint64, keyB uint64, timestamp uint64, value []
 
 // Delete stores timestamp | 1 for keyA, keyB or returns any error; a newer
 // timestamp already in place is not reported as an error.
-//
-// This may no longer be called after Close.
 func (vs *ValueStore) Delete(keyA uint64, keyB uint64, timestamp uint64) (uint64, error) {
 	i := int(keyA>>1) % len(vs.freeVWRChans)
 	vwr := <-vs.freeVWRChans[i]
@@ -716,8 +709,6 @@ func (vs *ValueStore) Delete(keyA uint64, keyB uint64, timestamp uint64) (uint64
 }
 
 // GatherStats returns overall information about the state of the ValueStore.
-//
-// This may be called even after Close.
 func (vs *ValueStore) GatherStats(debug bool) (count uint64, length uint64, debugInfo fmt.Stringer) {
 	stats := &valueStoreStats{}
 	if debug {
