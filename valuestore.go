@@ -470,6 +470,7 @@ const _GLH_IN_PULL_REPLICATION_MSGS = 100
 const _GLH_OUT_PULL_REPLICATION_MSGS = 100
 const _GLH_IN_BULK_SET_MSGS = 100
 const _GLH_OUT_BULK_SET_MSGS = 100
+const _GLH_OUT_BULK_SET_MSG_SIZE = 16 * 1024 * 1024
 
 // NewValueStore creates a ValueStore for use in storing []byte values
 // referenced by 128 bit keys.
@@ -586,7 +587,10 @@ func NewValueStore(opts ...func(*config)) *ValueStore {
 		go vs.inBulkSet()
 		vs.outBulkSetChan = make(chan *bulkSetMsg, _GLH_OUT_BULK_SET_MSGS)
 		for i := 0; i < cap(vs.outBulkSetChan); i++ {
-			vs.outBulkSetChan <- &bulkSetMsg{vs: vs}
+			vs.outBulkSetChan <- &bulkSetMsg{
+				vs:   vs,
+				body: make([]byte, _GLH_OUT_BULK_SET_MSG_SIZE),
+			}
 		}
 		vs.msgConn.start()
 	}
@@ -1239,7 +1243,7 @@ func (vs *ValueStore) inPullReplication() {
 		})
 		vs.freeInPullReplicationChan <- prm
 		if len(k) > 0 {
-			bsm := <-vs.outBulkSetChan
+			bsm := vs.newOutBulkSetMsg()
 			var t uint64
 			var err error
 			for i := 0; i < len(k); i += 2 {
@@ -1449,9 +1453,27 @@ func (vs *ValueStore) background(goroutines int) {
 }
 
 const pullReplicationMsgHeaderBytes = 36
+const _GLH_IN_PULL_REPLICATION_MSG_TIMEOUT = 1
+
+var toss []byte = make([]byte, 65536)
 
 func (vs *ValueStore) newInPullReplicationMsg(r io.Reader, l uint64) (uint64, error) {
-	prm := <-vs.freeInPullReplicationChan
+	var prm *pullReplicationMsg
+	select {
+	case prm = <-vs.freeInPullReplicationChan:
+	case <-time.After(_GLH_IN_PULL_REPLICATION_MSG_TIMEOUT * time.Second):
+		var n uint64
+		var sn int
+		var err error
+		for n < l {
+			sn, err = r.Read(toss)
+			n += uint64(sn)
+			if err != nil {
+				return n, err
+			}
+		}
+		return n, nil
+	}
 	bl := l - pullReplicationMsgHeaderBytes - uint64(ktBloomFilterHeaderBytes)
 	if uint64(cap(prm.body)) < bl {
 		prm.body = make([]byte, bl)
@@ -1540,8 +1562,25 @@ func (prm *pullReplicationMsg) done() {
 	prm.vs.outPullReplicationChan <- prm
 }
 
+const _GLH_IN_BULK_SET_MSG_TIMEOUT = 1
+
 func (vs *ValueStore) newInBulkSetMsg(r io.Reader, l uint64) (uint64, error) {
-	bsm := <-vs.freeInBulkSetChan
+	var bsm *bulkSetMsg
+	select {
+	case bsm = <-vs.freeInBulkSetChan:
+	case <-time.After(_GLH_IN_BULK_SET_MSG_TIMEOUT * time.Second):
+		var n uint64
+		var sn int
+		var err error
+		for n < l {
+			sn, err = r.Read(toss)
+			n += uint64(sn)
+			if err != nil {
+				return n, err
+			}
+		}
+		return n, nil
+	}
 	if l > uint64(cap(bsm.body)) {
 		bsm.body = make([]byte, l)
 	}
