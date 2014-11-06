@@ -144,7 +144,7 @@ type ValueLocMap struct {
 	entriesLockMask uint32
 	cores           uint32
 	splitCount      uint32
-	rootsShift      uint64
+	rootShift       uint64
 	roots           []node
 }
 
@@ -210,20 +210,19 @@ func NewValueLocMap(opts ...func(*config)) *ValueLocMap {
 		c <<= 1
 	}
 	vlm.lowMask = c - 1
-	vlm.rootsShift = 63
+	vlm.rootShift = 63
 	c = 2
 	for c < uint32(cfg.roots) {
-		vlm.rootsShift--
+		vlm.rootShift--
 		c <<= 1
 	}
 	vlm.entriesLockMask = c - 1
 	vlm.splitCount = uint32(float64(uint32(1<<vlm.bits)) * cfg.splitMultiplier)
 	vlm.roots = make([]node, c)
-	j := uint64(1<<(64-vlm.rootsShift)) - 1
 	for i := 0; i < len(vlm.roots); i++ {
-		vlm.roots[i].highMask = 1 << (vlm.rootsShift - 1)
-		vlm.roots[i].rangeStart = uint64(i) << vlm.rootsShift
-		vlm.roots[i].rangeStop = vlm.roots[i].rangeStart + j
+		vlm.roots[i].highMask = uint64(1) << (vlm.rootShift - 1)
+		vlm.roots[i].rangeStart = uint64(i) << vlm.rootShift
+		vlm.roots[i].rangeStop = uint64(1)<<vlm.rootShift - 1 + vlm.roots[i].rangeStart
 		vlm.roots[i].splitCount = uint32(float64(vlm.splitCount) + (rand.Float64()-.5)/5*float64(vlm.splitCount))
 		vlm.roots[i].mergeCount = uint32(rand.Float64() / 10 * float64(vlm.splitCount))
 	}
@@ -238,7 +237,7 @@ func (vlm *ValueLocMap) split(n *node) {
 	}
 	n.resizing = true
 	n.resizingLock.Unlock()
-	go vlm.split2(n)
+	vlm.split2(n)
 }
 
 func (vlm *ValueLocMap) split2(n *node) {
@@ -252,7 +251,7 @@ func (vlm *ValueLocMap) split2(n *node) {
 	an := &node{
 		highMask:           hm >> 1,
 		rangeStart:         n.rangeStart,
-		rangeStop:          n.rangeStop - hm,
+		rangeStop:          hm - 1 + n.rangeStart,
 		splitCount:         uint32(float64(vlm.splitCount) + (rand.Float64()-.5)/5*float64(vlm.splitCount)),
 		mergeCount:         uint32(rand.Float64() / 10 * float64(vlm.splitCount)),
 		entries:            n.entries,
@@ -263,7 +262,7 @@ func (vlm *ValueLocMap) split2(n *node) {
 	}
 	bn := &node{
 		highMask:     hm >> 1,
-		rangeStart:   n.rangeStart + hm,
+		rangeStart:   hm + n.rangeStart,
 		rangeStop:    n.rangeStop,
 		splitCount:   uint32(float64(vlm.splitCount) + (rand.Float64()-.5)/5*float64(vlm.splitCount)),
 		mergeCount:   uint32(rand.Float64() / 10 * float64(vlm.splitCount)),
@@ -282,115 +281,59 @@ func (vlm *ValueLocMap) split2(n *node) {
 	bes := bn.entries
 	bo := bn.overflow
 	boc := uint32(0)
-	// Move over all matching overflow entries that have an overflow entry
-	// pointing to them.
-	c := true
-	for c {
-		c = false
-		for _, aes := range ao {
-			for j := uint32(0); j <= lm; j++ {
-				ae := &aes[j]
-				if ae.blockID == 0 || ae.next == 0 {
-					continue
-				}
-				aen := &ao[ae.next>>b][ae.next&lm]
-				if aen.keyA&hm == 0 {
-					continue
-				}
-				be := &bes[uint32(aen.keyB)&lm]
-				if be.blockID == 0 {
-					*be = *aen
-					be.next = 0
-				} else {
-					if bn.overflowLowestFree != 0 {
-						be2 := &bo[bn.overflowLowestFree>>b][bn.overflowLowestFree&lm]
-						*be2 = *aen
-						be2.next = be.next
-						be.next = bn.overflowLowestFree
-						bn.overflowLowestFree++
-						if bn.overflowLowestFree&lm == 0 {
-							bn.overflowLowestFree = 0
-						}
-					} else {
-						bo = append(bo, make([]entry, 1<<b))
-						bn.overflow = bo
-						if boc == 0 {
-							be2 := &bo[0][1]
-							*be2 = *aen
-							be2.next = be.next
-							be.next = 1
-							bn.overflowLowestFree = 2
-						} else {
-							be2 := &bo[boc][0]
-							*be2 = *aen
-							be2.next = be.next
-							be.next = boc << b
-							bn.overflowLowestFree = boc<<b + 1
-						}
-						boc++
-					}
-				}
-				bn.used++
-				if ae.next < an.overflowLowestFree {
-					an.overflowLowestFree = ae.next
-				}
-				ae.next = aen.next
-				an.used--
-				c = true
-			}
-		}
-	}
-	// Now any matching overflow entries left are pointed to by their
-	// respective non-overflow entry. Move those.
 	aes := an.entries
+	// Move over all matching overflow entries.
 	for i := uint32(0); i <= lm; i++ {
 		ae := &aes[i]
-		if ae.blockID == 0 || ae.next == 0 {
+		if ae.blockID == 0 {
 			continue
 		}
-		aen := &ao[ae.next>>b][ae.next&lm]
-		if aen.keyA&hm == 0 {
-			continue
-		}
-		be := &bes[i]
-		if be.blockID == 0 {
-			*be = *aen
-			be.next = 0
-		} else {
-			if bn.overflowLowestFree != 0 {
-				be2 := &bo[bn.overflowLowestFree>>b][bn.overflowLowestFree&lm]
-				*be2 = *aen
-				be2.next = be.next
-				be.next = bn.overflowLowestFree
-				bn.overflowLowestFree++
-				if bn.overflowLowestFree&lm == 0 {
-					bn.overflowLowestFree = 0
-				}
-			} else {
-				bo = append(bo, make([]entry, 1<<b))
-				bn.overflow = bo
-				if boc == 0 {
-					be2 := &bo[0][1]
-					*be2 = *aen
-					be2.next = be.next
-					be.next = 1
-					bn.overflowLowestFree = 2
-				} else {
-					be2 := &bo[boc][0]
-					*be2 = *aen
-					be2.next = be.next
-					be.next = boc << b
-					bn.overflowLowestFree = boc<<b + 1
-				}
-				boc++
+		for ae.next != 0 {
+			aen := &ao[ae.next>>b][ae.next&lm]
+			if aen.keyA&hm == 0 {
+				ae = aen
+				continue
 			}
+			be := &bes[uint32(aen.keyB)&lm]
+			if be.blockID == 0 {
+				*be = *aen
+				be.next = 0
+			} else {
+				if bn.overflowLowestFree != 0 {
+					be2 := &bo[bn.overflowLowestFree>>b][bn.overflowLowestFree&lm]
+					*be2 = *aen
+					be2.next = be.next
+					be.next = bn.overflowLowestFree
+					bn.overflowLowestFree++
+					if bn.overflowLowestFree&lm == 0 {
+						bn.overflowLowestFree = 0
+					}
+				} else {
+					bo = append(bo, make([]entry, 1<<b))
+					bn.overflow = bo
+					if boc == 0 {
+						be2 := &bo[0][1]
+						*be2 = *aen
+						be2.next = be.next
+						be.next = 1
+						bn.overflowLowestFree = 2
+					} else {
+						be2 := &bo[boc][0]
+						*be2 = *aen
+						be2.next = be.next
+						be.next = boc << b
+						bn.overflowLowestFree = boc<<b + 1
+					}
+					boc++
+				}
+			}
+			bn.used++
+			if ae.next < an.overflowLowestFree {
+				an.overflowLowestFree = ae.next
+			}
+			ae.next = aen.next
+			an.used--
 		}
-		bn.used++
-		if ae.next < an.overflowLowestFree {
-			an.overflowLowestFree = ae.next
-		}
-		ae.next = aen.next
-		an.used--
 	}
 	// Now any matching entries left are non-overflow entries. Move those.
 	for i := uint32(0); i <= lm; i++ {
@@ -438,9 +381,7 @@ func (vlm *ValueLocMap) split2(n *node) {
 			if ae.next < an.overflowLowestFree {
 				an.overflowLowestFree = ae.next
 			}
-			aen := &ao[ae.next>>b][ae.next&lm]
-			*ae = *aen
-			aen.blockID = 0
+			*ae = ao[ae.next>>b][ae.next&lm]
 		}
 		an.used--
 	}
@@ -458,7 +399,7 @@ func (vlm *ValueLocMap) merge(n *node) {
 	}
 	n.resizing = true
 	n.resizingLock.Unlock()
-	go vlm.merge2(n)
+	vlm.merge2(n)
 }
 
 func (vlm *ValueLocMap) merge2(n *node) {
@@ -487,186 +428,66 @@ func (vlm *ValueLocMap) merge2(n *node) {
 	ao := an.overflow
 	aoc := uint32(len(ao))
 	bo := bn.overflow
-	// Move over all overflow entries that have an overflow entry pointing to
-	// them.
-	c := true
-	for c {
-		c = false
-		for _, bes := range bo {
-			for j := uint32(0); j <= lm; j++ {
-				be := &bes[j]
-				if be.blockID == 0 || be.next == 0 {
-					continue
-				}
-				ben := &bo[be.next>>b][be.next&lm]
-				ae := &aes[uint32(ben.keyB)&lm]
-				if ae.blockID == 0 {
-					*ae = *ben
-					ae.next = 0
-				} else {
-					if an.overflowLowestFree != 0 {
-						oA := an.overflowLowestFree >> b
-						oB := an.overflowLowestFree & lm
-						ae2 := &ao[oA][oB]
-						*ae2 = *ben
-						ae2.next = ae.next
-						ae.next = an.overflowLowestFree
-						an.overflowLowestFree = 0
-						for {
-							if oB == lm {
-								oA++
-								if oA == aoc {
-									break
-								}
-								oB = 0
-							} else {
-								oB++
-							}
-							if ao[oA][oB].blockID == 0 {
-								an.overflowLowestFree = oA<<b | oB
-								break
-							}
-						}
-					} else {
-						ao = append(ao, make([]entry, 1<<b))
-						an.overflow = ao
-						if aoc == 0 {
-							ae2 := &ao[0][1]
-							*ae2 = *ben
-							ae2.next = ae.next
-							ae.next = 1
-							an.overflowLowestFree = 2
-						} else {
-							ae2 := &ao[aoc][0]
-							*ae2 = *ben
-							ae2.next = ae.next
-							ae.next = aoc << b
-							an.overflowLowestFree = aoc<<b + 1
-						}
-						aoc++
-					}
-				}
-				an.used++
-				be.next = ben.next
-				ben.blockID = 0
-				c = true
-			}
-		}
-	}
-	// Now we just have overflow entries that are pointed to by their
-	// respective non-overflow entries. Move those.
 	bes := bn.entries
-	for i := uint32(0); i <= lm; i++ {
-		be := &bes[i]
-		if be.blockID == 0 || be.next == 0 {
-			continue
-		}
-		ben := &bo[be.next>>b][be.next&lm]
-		ae := &aes[i]
-		if ae.blockID == 0 {
-			*ae = *ben
-			ae.next = 0
-		} else {
-			if an.overflowLowestFree != 0 {
-				oA := an.overflowLowestFree >> b
-				oB := an.overflowLowestFree & lm
-				ae2 := &ao[oA][oB]
-				*ae2 = *ben
-				ae2.next = ae.next
-				ae.next = an.overflowLowestFree
-				an.overflowLowestFree = 0
-				for {
-					if oB == lm {
-						oA++
-						if oA == aoc {
-							break
-						}
-						oB = 0
-					} else {
-						oB++
-					}
-					if ao[oA][oB].blockID == 0 {
-						an.overflowLowestFree = oA<<b | oB
-						break
-					}
-				}
-			} else {
-				ao = append(ao, make([]entry, 1<<b))
-				an.overflow = ao
-				if aoc == 0 {
-					ae2 := &ao[0][1]
-					*ae2 = *ben
-					ae2.next = ae.next
-					ae.next = 1
-					an.overflowLowestFree = 2
-				} else {
-					ae2 := &ao[aoc][0]
-					*ae2 = *ben
-					ae2.next = ae.next
-					ae.next = aoc << b
-					an.overflowLowestFree = aoc<<b + 1
-				}
-				aoc++
-			}
-		}
-		an.used++
-		ben.blockID = 0
-	}
-	// Now we just have the non-overflow entries. Move those.
 	for i := uint32(0); i <= lm; i++ {
 		be := &bes[i]
 		if be.blockID == 0 {
 			continue
 		}
-		ae := &aes[i]
-		if ae.blockID == 0 {
-			*ae = *be
-			ae.next = 0
-		} else {
-			if an.overflowLowestFree != 0 {
-				oA := an.overflowLowestFree >> b
-				oB := an.overflowLowestFree & lm
-				ae2 := &ao[oA][oB]
-				*ae2 = *be
-				ae2.next = ae.next
-				ae.next = an.overflowLowestFree
-				an.overflowLowestFree = 0
-				for {
-					if oB == lm {
-						oA++
-						if oA == aoc {
+		for {
+			ae := &aes[uint32(be.keyB)&lm]
+			if ae.blockID == 0 {
+				*ae = *be
+				ae.next = 0
+			} else {
+				if an.overflowLowestFree != 0 {
+					oA := an.overflowLowestFree >> b
+					oB := an.overflowLowestFree & lm
+					ae2 := &ao[oA][oB]
+					*ae2 = *be
+					ae2.next = ae.next
+					ae.next = an.overflowLowestFree
+					an.overflowLowestFree = 0
+					for {
+						if oB == lm {
+							oA++
+							if oA == aoc {
+								break
+							}
+							oB = 0
+						} else {
+							oB++
+						}
+						if ao[oA][oB].blockID == 0 {
+							an.overflowLowestFree = oA<<b | oB
 							break
 						}
-						oB = 0
-					} else {
-						oB++
 					}
-					if ao[oA][oB].blockID == 0 {
-						an.overflowLowestFree = oA<<b | oB
-						break
-					}
-				}
-			} else {
-				ao = append(ao, make([]entry, 1<<b))
-				an.overflow = ao
-				if aoc == 0 {
-					ae2 := &ao[0][1]
-					*ae2 = *be
-					ae2.next = ae.next
-					ae.next = 1
-					an.overflowLowestFree = 2
 				} else {
-					ae2 := &ao[aoc][0]
-					*ae2 = *be
-					ae2.next = ae.next
-					ae.next = aoc << b
-					an.overflowLowestFree = aoc<<b + 1
+					ao = append(ao, make([]entry, 1<<b))
+					an.overflow = ao
+					if aoc == 0 {
+						ae2 := &ao[0][1]
+						*ae2 = *be
+						ae2.next = ae.next
+						ae.next = 1
+						an.overflowLowestFree = 2
+					} else {
+						ae2 := &ao[aoc][0]
+						*ae2 = *be
+						ae2.next = ae.next
+						ae.next = aoc << b
+						an.overflowLowestFree = aoc<<b + 1
+					}
+					aoc++
 				}
-				aoc++
 			}
+			an.used++
+			if be.next == 0 {
+				break
+			}
+			be = &bo[be.next>>b][be.next&lm]
 		}
-		an.used++
-		be.blockID = 0
 	}
 	bn.used = 0
 	bn.lock.Unlock()
@@ -678,7 +499,7 @@ func (vlm *ValueLocMap) merge2(n *node) {
 }
 
 func (vlm *ValueLocMap) Get(keyA uint64, keyB uint64) (uint64, uint32, uint32, uint32) {
-	n := &vlm.roots[keyA>>vlm.rootsShift]
+	n := &vlm.roots[keyA>>vlm.rootShift]
 	n.lock.RLock()
 	for {
 		if n.a == nil {
@@ -704,10 +525,11 @@ func (vlm *ValueLocMap) Get(keyA uint64, keyB uint64) (uint64, uint32, uint32, u
 	ol := &n.overflowLock
 	e := &n.entries[i]
 	l.RLock()
+	if e.blockID == 0 {
+		l.RUnlock()
+		return 0, 0, 0, 0
+	}
 	for {
-		if e.blockID == 0 {
-			break
-		}
 		if e.keyA == keyA && e.keyB == keyB {
 			rt := e.timestamp
 			rb := e.blockID
@@ -730,7 +552,7 @@ func (vlm *ValueLocMap) Get(keyA uint64, keyB uint64) (uint64, uint32, uint32, u
 }
 
 func (vlm *ValueLocMap) Set(keyA uint64, keyB uint64, timestamp uint64, blockID uint32, offset uint32, length uint32, evenIfSameTimestamp bool) uint64 {
-	n := &vlm.roots[keyA>>vlm.rootsShift]
+	n := &vlm.roots[keyA>>vlm.rootShift]
 	var pn *node
 	n.lock.RLock()
 	for {
@@ -931,19 +753,23 @@ func (vlm *ValueLocMap) gatherStats(s *stats, n *node, depth int) {
 	} else if n.used == 0 {
 		if s.statsDebug {
 			s.allocedEntries += uint64(len(n.entries))
+			n.overflowLock.RLock()
 			for _, o := range n.overflow {
 				s.allocedEntries += uint64(len(o))
 				s.allocedInOverflow += uint64(len(o))
 			}
+			n.overflowLock.RUnlock()
 		}
 		n.lock.RUnlock()
 	} else {
 		if s.statsDebug {
 			s.allocedEntries += uint64(len(n.entries))
+			n.overflowLock.RLock()
 			for _, o := range n.overflow {
 				s.allocedEntries += uint64(len(o))
 				s.allocedInOverflow += uint64(len(o))
 			}
+			n.overflowLock.RUnlock()
 		}
 		b := vlm.bits
 		lm := vlm.lowMask
@@ -952,6 +778,7 @@ func (vlm *ValueLocMap) gatherStats(s *stats, n *node, depth int) {
 		for i := uint32(0); i <= lm; i++ {
 			e := &es[i]
 			l := &n.entriesLocks[i&vlm.entriesLockMask]
+			o := false
 			l.RLock()
 			if e.blockID == 0 {
 				l.RUnlock()
@@ -960,6 +787,9 @@ func (vlm *ValueLocMap) gatherStats(s *stats, n *node, depth int) {
 			for {
 				if s.statsDebug {
 					s.usedEntries++
+					if o {
+						s.usedInOverflow++
+					}
 					if e.timestamp&1 == 0 {
 						s.active++
 						s.length += uint64(e.length)
@@ -976,6 +806,7 @@ func (vlm *ValueLocMap) gatherStats(s *stats, n *node, depth int) {
 				ol.RLock()
 				e = &n.overflow[e.next>>b][e.next&lm]
 				ol.RUnlock()
+				o = true
 			}
 			l.RUnlock()
 		}
