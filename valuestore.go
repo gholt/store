@@ -518,6 +518,7 @@ func NewValueStore(opts ...func(*config)) *ValueStore {
 		checksumInterval:        uint32(cfg.checksumInterval),
 		msgConn:                 cfg.msgConn,
 		replicationIgnoreRecent: uint64(cfg.replicationIgnoreRecent) * uint64(time.Second),
+		backgroundIteration:     uint16(rand.New(rand.NewSource(time.Now().UnixNano())).Uint32()),
 	}
 	vs.freeableVMChans = make([]chan *valuesMem, vs.cores)
 	for i := 0; i < cap(vs.freeableVMChans); i++ {
@@ -1378,6 +1379,7 @@ func (vs *ValueStore) background() {
 		vs.backgroundIteration++
 	}
 	iteration := vs.backgroundIteration
+	fmt.Println("GLH", iteration)
 	ringID := uint64(0)
 	partitionPower := uint16(8)
 	partitions := uint32(1) << partitionPower
