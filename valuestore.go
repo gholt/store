@@ -15,7 +15,6 @@
 //  Replication
 //      blockID = 0 setting due to replication of handoffs
 //  Compaction
-//  Tombstone cleaning
 package brimstore
 
 import (
@@ -48,7 +47,7 @@ type config struct {
 	pathtoc                 string
 	vlm                     ValueLocMap
 	cores                   int
-	backgroundCores         int
+	backgroundWorkers       int
 	backgroundInterval      int
 	maxValueSize            int
 	pageSize                int
@@ -72,10 +71,10 @@ func resolveConfig(opts ...func(*config)) *config {
 			cfg.cores = val
 		}
 	}
-	cfg.backgroundCores = 1
-	if env := os.Getenv("BRIMSTORE_BACKGROUNDCORES"); env != "" {
+	cfg.backgroundWorkers = cfg.cores
+	if env := os.Getenv("BRIMSTORE_BACKGROUNDWORKERS"); env != "" {
 		if val, err := strconv.Atoi(env); err == nil {
-			cfg.backgroundCores = val
+			cfg.backgroundWorkers = val
 		}
 	}
 	cfg.backgroundInterval = 60
@@ -144,8 +143,8 @@ func resolveConfig(opts ...func(*config)) *config {
 	if cfg.cores < 1 {
 		cfg.cores = 1
 	}
-	if cfg.backgroundCores < 1 {
-		cfg.backgroundCores = 1
+	if cfg.backgroundWorkers < 1 {
+		cfg.backgroundWorkers = 1
 	}
 	if cfg.backgroundInterval < 1 {
 		cfg.backgroundInterval = 1
@@ -239,11 +238,12 @@ func OptCores(cores int) func(*config) {
 	}
 }
 
-// OptBackgroundCores indicates how many cores may be used for background
-// tasks. Defaults to env BRIMSTORE_BACKGROUNDCORES or 1.
-func OptBackgroundCores(cores int) func(*config) {
+// OptBackgroundWorkers indicates how many goroutines may be used for
+// background tasks. Defaults to env BRIMSTORE_BACKGROUNDWORKERS or
+// BRIMSTORE_CORES.
+func OptBackgroundWorkers(workers int) func(*config) {
 	return func(cfg *config) {
-		cfg.backgroundCores = cores
+		cfg.backgroundWorkers = workers
 	}
 }
 
@@ -380,7 +380,7 @@ type ValueStore struct {
 	pathtoc                   string
 	vlm                       ValueLocMap
 	cores                     int
-	backgroundCores           int
+	backgroundWorkers         int
 	backgroundInterval        int
 	maxValueSize              uint32
 	pageSize                  uint32
@@ -443,7 +443,7 @@ type valueStoreStats struct {
 	path                    string
 	pathtoc                 string
 	cores                   int
-	backgroundCores         int
+	backgroundWorkers       int
 	backgroundInterval      int
 	maxValueSize            uint32
 	pageSize                uint32
@@ -460,16 +460,17 @@ type valueStoreStats struct {
 }
 
 type backgroundNotification struct {
-	enable     bool
-	disable    bool
-	goroutines int
-	doneChan   chan struct{}
+	enable   bool
+	disable  bool
+	doneChan chan struct{}
 }
 
-const _GLH_IN_PULL_REPLICATION_MSGS = 100
-const _GLH_OUT_PULL_REPLICATION_MSGS = 100
-const _GLH_IN_BULK_SET_MSGS = 100
-const _GLH_OUT_BULK_SET_MSGS = 100
+const _GLH_IN_PULL_REPLICATION_MSGS = 128
+const _GLH_IN_PULL_REPLICATION_HANDLERS = 40
+const _GLH_OUT_PULL_REPLICATION_MSGS = 128
+const _GLH_IN_BULK_SET_MSGS = 128
+const _GLH_IN_BULK_SET_HANDLERS = 40
+const _GLH_OUT_BULK_SET_MSGS = 128
 const _GLH_OUT_BULK_SET_MSG_SIZE = 16 * 1024 * 1024
 
 // NewValueStore creates a ValueStore for use in storing []byte values
@@ -505,7 +506,7 @@ func NewValueStore(opts ...func(*config)) *ValueStore {
 		pathtoc:                 cfg.pathtoc,
 		vlm:                     vlm,
 		cores:                   cfg.cores,
-		backgroundCores:         cfg.backgroundCores,
+		backgroundWorkers:       cfg.backgroundWorkers,
 		backgroundInterval:      cfg.backgroundInterval,
 		maxValueSize:            uint32(cfg.maxValueSize),
 		pageSize:                uint32(cfg.pageSize),
@@ -569,7 +570,9 @@ func NewValueStore(opts ...func(*config)) *ValueStore {
 				header: make([]byte, ktBloomFilterHeaderBytes+pullReplicationMsgHeaderBytes),
 			}
 		}
-		go vs.inPullReplication()
+		for i := 0; i < _GLH_IN_PULL_REPLICATION_HANDLERS; i++ {
+			go vs.inPullReplication()
+		}
 		vs.outPullReplicationChan = make(chan *pullReplicationMsg, _GLH_OUT_PULL_REPLICATION_MSGS)
 		vs.ktbfs = []*ktBloomFilter{newKTBloomFilter(_GLH_BLOOM_FILTER_N, _GLH_BLOOM_FILTER_P, 0)}
 		for i := 0; i < cap(vs.outPullReplicationChan); i++ {
@@ -585,7 +588,9 @@ func NewValueStore(opts ...func(*config)) *ValueStore {
 		for i := 0; i < cap(vs.freeInBulkSetChan); i++ {
 			vs.freeInBulkSetChan <- &bulkSetMsg{vs: vs}
 		}
-		go vs.inBulkSet()
+		for i := 0; i < _GLH_IN_BULK_SET_HANDLERS; i++ {
+			go vs.inBulkSet()
+		}
 		vs.outBulkSetChan = make(chan *bulkSetMsg, _GLH_OUT_BULK_SET_MSGS)
 		for i := 0; i < cap(vs.outBulkSetChan); i++ {
 			vs.outBulkSetChan <- &bulkSetMsg{
@@ -739,7 +744,7 @@ func (vs *ValueStore) GatherStats(debug bool) (count uint64, length uint64, debu
 		stats.path = vs.path
 		stats.pathtoc = vs.pathtoc
 		stats.cores = vs.cores
-		stats.backgroundCores = vs.backgroundCores
+		stats.backgroundWorkers = vs.backgroundWorkers
 		stats.backgroundInterval = vs.backgroundInterval
 		stats.maxValueSize = vs.maxValueSize
 		stats.pageSize = vs.pageSize
@@ -1220,6 +1225,8 @@ func (vs *ValueStore) recovery() {
 }
 
 func (vs *ValueStore) inPullReplication() {
+	// TODO: Needs cap on what gets added to k or maybe cap based on length so
+	// bsm doesn't overfill, or something.
 	k := make([]uint64, 2*1024*1024)
 	v := make([]byte, vs.maxValueSize)
 	for {
@@ -1286,7 +1293,7 @@ func (stats *valueStoreStats) String() string {
 			[]string{"path", stats.path},
 			[]string{"pathtoc", stats.pathtoc},
 			[]string{"cores", fmt.Sprintf("%d", stats.cores)},
-			[]string{"backgroundCores", fmt.Sprintf("%d", stats.backgroundCores)},
+			[]string{"backgroundWorkers", fmt.Sprintf("%d", stats.backgroundWorkers)},
 			[]string{"backgroundInterval", fmt.Sprintf("%d", stats.backgroundInterval)},
 			[]string{"maxValueSize", fmt.Sprintf("%d", stats.maxValueSize)},
 			[]string{"pageSize", fmt.Sprintf("%d", stats.pageSize)},
@@ -1309,18 +1316,14 @@ func (stats *valueStoreStats) String() string {
 	}
 }
 
-// BackgroundNow will immediately (rather than waiting for the next background
-// interval) execute any background tasks using up to the number of goroutines
-// indicated (0 will use the configured OptBackgroundCores value). This
-// function will not return until all background tasks have completed at least
-// one full pass.
-func (vs *ValueStore) BackgroundNow(goroutines int) {
+// BackgroundNow will immediately execute any background tasks rather than
+// waiting for the next background interval. If the background tasks are
+// currently executing, they will be stopped and restarted so that a call to
+// this function ensures one complete pass occurs.
+func (vs *ValueStore) BackgroundNow() {
 	atomic.StoreUint32(&vs.backgroundAbort, 1)
 	c := make(chan struct{}, 1)
-	vs.backgroundNotifyChan <- &backgroundNotification{
-		goroutines: goroutines,
-		doneChan:   c,
-	}
+	vs.backgroundNotifyChan <- &backgroundNotification{doneChan: c}
 	<-c
 }
 
@@ -1355,11 +1358,11 @@ func (vs *ValueStore) backgroundLauncher() {
 				continue
 			}
 			atomic.StoreUint32(&vs.backgroundAbort, 0)
-			vs.background(notification.goroutines)
+			vs.background()
 			notification.doneChan <- struct{}{}
 		} else if enabled {
 			atomic.StoreUint32(&vs.backgroundAbort, 0)
-			vs.background(vs.backgroundCores)
+			vs.background()
 		}
 	}
 }
@@ -1367,11 +1370,8 @@ func (vs *ValueStore) backgroundLauncher() {
 const _GLH_BLOOM_FILTER_N = 1000000
 const _GLH_BLOOM_FILTER_P = 0.001
 
-func (vs *ValueStore) background(goroutines int) {
+func (vs *ValueStore) background() {
 	begin := time.Now()
-	if goroutines < 1 {
-		goroutines = vs.backgroundCores
-	}
 	if vs.backgroundIteration == math.MaxUint16 {
 		vs.backgroundIteration = 0
 	} else {
@@ -1384,15 +1384,15 @@ func (vs *ValueStore) background(goroutines int) {
 	vs.vlm.DiscardTombstones(uint64(time.Now().UnixNano()) - vs.tombstoneAge)
 	wg := &sync.WaitGroup{}
 	if vs.msgConn != nil {
-		wg.Add(goroutines)
-		for len(vs.ktbfs) < goroutines {
+		wg.Add(vs.backgroundWorkers)
+		for len(vs.ktbfs) < vs.backgroundWorkers {
 			vs.ktbfs = append(vs.ktbfs, newKTBloomFilter(_GLH_BLOOM_FILTER_N, _GLH_BLOOM_FILTER_P, 0))
 		}
-		for g := 0; g < goroutines; g++ {
+		for g := 0; g < vs.backgroundWorkers; g++ {
 			go func(g int) {
 				ktbf := vs.ktbfs[g]
 				var pullSize uint64
-				for p := uint32(g); p < partitions && atomic.LoadUint32(&vs.backgroundAbort) == 0; p += uint32(goroutines) {
+				for p := uint32(g); p < partitions && atomic.LoadUint32(&vs.backgroundAbort) == 0; p += uint32(vs.backgroundWorkers) {
 					// Here I'm doing pull replication scans for every
 					// partition when eventually it should just do this for
 					// partitions we're in the ring for. Partitions we're not
@@ -1400,7 +1400,7 @@ func (vs *ValueStore) background(goroutines int) {
 					// etc.) we should just send out what data we have and the
 					// remove it locally.
 					start := uint64(p) << uint64(64-partitionPower)
-					stop := start + ((uint64(1) << (64 - partitionPower)) - 1)
+					stop := start + (uint64(1)<<(64-partitionPower) - 1)
 					if pullSize == 0 {
 						pullSize = uint64(1) << (64 - partitionPower)
 						for vs.vlm.ScanCount(start, start+(pullSize-1), _GLH_BLOOM_FILTER_N) >= _GLH_BLOOM_FILTER_N {
@@ -1426,11 +1426,8 @@ func (vs *ValueStore) background(goroutines int) {
 							vs.msgConn.send(vs.newOutPullReplicationMsg(ringID, p, cutoff, substart, substop, ktbf))
 						}
 						substart += pullSize
-						if substart < start {
-							break
-						}
 						substop += pullSize
-						if substop >= stop || substop < substart {
+						if substop > stop {
 							break
 						}
 					}
@@ -1444,7 +1441,7 @@ func (vs *ValueStore) background(goroutines int) {
 }
 
 const pullReplicationMsgHeaderBytes = 36
-const _GLH_IN_PULL_REPLICATION_MSG_TIMEOUT = 1
+const _GLH_IN_PULL_REPLICATION_MSG_TIMEOUT = 300
 
 var toss []byte = make([]byte, 65536)
 
@@ -1553,7 +1550,7 @@ func (prm *pullReplicationMsg) done() {
 	prm.vs.outPullReplicationChan <- prm
 }
 
-const _GLH_IN_BULK_SET_MSG_TIMEOUT = 1
+const _GLH_IN_BULK_SET_MSG_TIMEOUT = 300
 
 func (vs *ValueStore) newInBulkSetMsg(r io.Reader, l uint64) (uint64, error) {
 	var bsm *bulkSetMsg

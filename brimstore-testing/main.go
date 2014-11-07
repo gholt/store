@@ -98,17 +98,21 @@ func main() {
 		go func() {
 			opts.vs2 = brimstore.NewValueStore(vs2opts...)
 			fmt.Printf("vs2 is %p\n", opts.vs2)
-			opts.vs2.EnableWrites()
-			opts.vs2.EnableBackgroundTasks()
 			wg.Done()
 		}()
 		vsopts = append(vsopts, brimstore.OptMsgConn(brimstore.NewMsgConn(conn)))
 	}
 	opts.vs = brimstore.NewValueStore(vsopts...)
 	fmt.Printf("vs is %p\n", opts.vs)
-	opts.vs.EnableWrites()
-	opts.vs.EnableBackgroundTasks()
 	wg.Wait()
+	if opts.vs2 != nil {
+		opts.vs2.EnableWrites()
+	}
+	opts.vs.EnableWrites()
+	if opts.vs2 != nil {
+		opts.vs2.EnableBackgroundTasks()
+	}
+	opts.vs.EnableBackgroundTasks()
 	dur := time.Now().Sub(begin)
 	fmt.Println(dur, "to start ValuesStore")
 	memstat()
@@ -201,11 +205,11 @@ func background() {
 	if opts.vs2 != nil {
 		wg.Add(1)
 		go func() {
-			opts.vs2.BackgroundNow(opts.Cores)
+			opts.vs2.BackgroundNow()
 			wg.Done()
 		}()
 	}
-	opts.vs.BackgroundNow(opts.Cores)
+	opts.vs.BackgroundNow()
 	wg.Wait()
 	dur := time.Now().Sub(begin)
 	fmt.Printf("%s to run background tasks\n", dur)

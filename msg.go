@@ -6,7 +6,6 @@ import (
 	"net"
 	"os"
 	"sync"
-	"time"
 )
 
 type FlushWriter interface {
@@ -103,7 +102,6 @@ func (mc *MsgConn) reading() {
 				}
 				return
 			}
-			mc.conn.SetReadDeadline(time.Now().Add(5 * time.Second))
 			sn, err = mc.conn.Read(b[n:])
 			n += sn
 		}
@@ -133,7 +131,6 @@ func (mc *MsgConn) reading() {
 					mc.logError.Print("err reading msg content", err)
 					return
 				}
-				mc.conn.SetReadDeadline(time.Now().Add(5 * time.Second))
 				if l >= uint64(len(d)) {
 					sn, err = mc.conn.Read(d)
 				} else {
@@ -162,7 +159,6 @@ func (mc *MsgConn) writing() {
 			b[mc.typeBytes+i] = byte(l)
 			l >>= 8
 		}
-		mc.conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
 		_, err := mc.conn.Write(b)
 		if err != nil {
 			mc.logError.Print("err writing msg", err)
