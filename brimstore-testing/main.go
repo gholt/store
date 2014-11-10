@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
+	"log"
 	"net"
 	"os"
 	"runtime"
+	"runtime/pprof"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -27,19 +29,24 @@ type optsStruct struct {
 	Timestamp     uint64 `long:"timestamp" description:"Timestamp value. Default: current time"`
 	TombstoneAge  int    `long:"tombstone-age" description:"Seconds to keep tombstones. Default: 4 hours"`
 	Positional    struct {
-		Tests []string `name:"tests" description:"background delete lookup read run write"`
+		Tests []string `name:"tests" description:"background blockprof cpuprof delete lookup read run write"`
 	} `positional-args:"yes"`
-	keyspace []byte
-	buffers  [][]byte
-	st       runtime.MemStats
-	vs       *brimstore.ValueStore
-	vs2      *brimstore.ValueStore
+	blockprofi int
+	blockproff *os.File
+	cpuprofi   int
+	cpuproff   *os.File
+	keyspace   []byte
+	buffers    [][]byte
+	st         runtime.MemStats
+	vs         *brimstore.ValueStore
+	rvs        *brimstore.ValueStore
 }
 
 var opts optsStruct
 var parser = flags.NewParser(&opts, flags.Default)
 
 func main() {
+	log.Print("init:")
 	args := os.Args[1:]
 	if len(args) == 0 {
 		args = append(args, "-h")
@@ -50,13 +57,15 @@ func main() {
 	for _, arg := range opts.Positional.Tests {
 		switch arg {
 		case "background":
+		case "blockprof":
+		case "cpuprof":
 		case "delete":
 		case "lookup":
 		case "read":
 		case "run":
 		case "write":
 		default:
-			fmt.Fprintf(os.Stderr, "Unknown test named %#v.\n", arg)
+			log.Printf("unknown test named %#v", arg)
 			os.Exit(1)
 		}
 	}
@@ -78,11 +87,8 @@ func main() {
 	for i := 0; i < opts.Clients; i++ {
 		opts.buffers[i] = make([]byte, 4*1024*1024)
 	}
-	fmt.Println(opts.Cores, "cores")
-	fmt.Println(opts.Clients, "clients")
-	fmt.Println(opts.Number, "values")
-	fmt.Println(opts.Length, "value length")
 	memstat()
+	log.Print("start:")
 	begin := time.Now()
 	vsopts := brimstore.OptList(brimstore.OptCores(opts.Cores))
 	if opts.TombstoneAge > 0 {
@@ -94,32 +100,66 @@ func main() {
 		vs2opts := brimstore.OptList(vsopts...)
 		vs2opts = append(vs2opts, brimstore.OptPath("replicated"))
 		vs2opts = append(vs2opts, brimstore.OptMsgConn(brimstore.NewMsgConn(conn2)))
+		vs2opts = append(vs2opts, brimstore.OptName("ReplicatedValueStore"))
 		wg.Add(1)
 		go func() {
-			opts.vs2 = brimstore.NewValueStore(vs2opts...)
-			fmt.Printf("vs2 is %p\n", opts.vs2)
+			opts.rvs = brimstore.NewValueStore(vs2opts...)
 			wg.Done()
 		}()
 		vsopts = append(vsopts, brimstore.OptMsgConn(brimstore.NewMsgConn(conn)))
 	}
 	opts.vs = brimstore.NewValueStore(vsopts...)
-	fmt.Printf("vs is %p\n", opts.vs)
 	wg.Wait()
-	if opts.vs2 != nil {
-		opts.vs2.EnableWrites()
+	if opts.rvs != nil {
+		opts.rvs.EnableWrites()
 	}
 	opts.vs.EnableWrites()
-	if opts.vs2 != nil {
-		opts.vs2.EnableBackgroundTasks()
+	if opts.rvs != nil {
+		opts.rvs.EnableBackgroundTasks()
 	}
 	opts.vs.EnableBackgroundTasks()
 	dur := time.Now().Sub(begin)
-	fmt.Println(dur, "to start ValuesStore")
+	log.Println(dur, "to start")
 	memstat()
 	for _, arg := range opts.Positional.Tests {
 		switch arg {
 		case "background":
 			background()
+		case "blockprof":
+			if opts.blockproff != nil {
+				log.Print("blockprof: off")
+				runtime.SetBlockProfileRate(0)
+				pprof.Lookup("block").WriteTo(opts.blockproff, 1)
+				opts.blockproff.Close()
+				opts.blockproff = nil
+			} else {
+				log.Print("blockprof: on")
+				var err error
+				opts.blockproff, err = os.Create(fmt.Sprintf("blockprof%d", opts.blockprofi))
+				opts.blockprofi++
+				if err != nil {
+					log.Print(err)
+					os.Exit(1)
+				}
+				runtime.SetBlockProfileRate(1)
+			}
+		case "cpuprof":
+			if opts.cpuproff != nil {
+				log.Print("cpuprof: off")
+				pprof.StopCPUProfile()
+				opts.cpuproff.Close()
+				opts.cpuproff = nil
+			} else {
+				log.Print("cpuprof: on")
+				var err error
+				opts.cpuproff, err = os.Create(fmt.Sprintf("cpuprof%d", opts.cpuprofi))
+				opts.cpuprofi++
+				if err != nil {
+					log.Print(err)
+					os.Exit(1)
+				}
+				pprof.StartCPUProfile(opts.cpuproff)
+			}
 		case "delete":
 			delete()
 		case "lookup":
@@ -133,13 +173,14 @@ func main() {
 		}
 		memstat()
 	}
+	log.Print("close:")
 	begin = time.Now()
-	if opts.vs2 != nil {
+	if opts.rvs != nil {
 		wg.Add(1)
 		go func() {
-			opts.vs2.DisableBackgroundTasks()
-			opts.vs2.DisableWrites()
-			opts.vs2.Flush()
+			opts.rvs.DisableBackgroundTasks()
+			opts.rvs.DisableWrites()
+			opts.rvs.Flush()
 			wg.Done()
 		}()
 	}
@@ -148,38 +189,50 @@ func main() {
 	opts.vs.Flush()
 	wg.Wait()
 	dur = time.Now().Sub(begin)
-	fmt.Println(dur, "to close value store(s)")
+	log.Println(dur, "to close")
 	memstat()
+	log.Print("gather stats:")
 	begin = time.Now()
 	var statsCount2 uint64
 	var statsLength2 uint64
 	var stats2 fmt.Stringer
-	if opts.vs2 != nil {
+	if opts.rvs != nil {
 		wg.Add(1)
 		go func() {
-			statsCount2, statsLength2, stats2 = opts.vs2.GatherStats(opts.ExtendedStats)
+			statsCount2, statsLength2, stats2 = opts.rvs.GatherStats(opts.ExtendedStats)
 			wg.Done()
 		}()
 	}
 	statsCount, statsLength, stats := opts.vs.GatherStats(opts.ExtendedStats)
 	wg.Wait()
 	dur = time.Now().Sub(begin)
-	fmt.Println(dur, "to gather stats")
+	log.Println(dur, "to gather stats")
 	if opts.ExtendedStats {
-		fmt.Println(stats.String())
+		log.Print("ValueStore: stats:\n", stats.String())
 	} else {
-		fmt.Println(statsCount, "ValueCount")
-		fmt.Println(statsLength, "ValuesLength")
+		log.Println("ValueStore: count", statsCount)
+		log.Println("ValueStore: length", statsLength)
 	}
-	if opts.vs2 != nil {
+	if opts.rvs != nil {
 		if opts.ExtendedStats {
-			fmt.Println(stats2.String())
+			log.Print("ReplicatedValueStore: stats:\n", stats2.String())
 		} else {
-			fmt.Println(statsCount2, "ValueCount")
-			fmt.Println(statsLength2, "ValuesLength")
+			log.Println("ReplicatedValueStore: count", statsCount2)
+			log.Println("ReplicatedValueStore: length", statsLength2)
 		}
 	}
 	memstat()
+	if opts.blockproff != nil {
+		runtime.SetBlockProfileRate(0)
+		pprof.Lookup("block").WriteTo(opts.blockproff, 0)
+		opts.blockproff.Close()
+		opts.blockproff = nil
+	}
+	if opts.cpuproff != nil {
+		pprof.StopCPUProfile()
+		opts.cpuproff.Close()
+		opts.cpuproff = nil
+	}
 }
 
 func memstat() {
@@ -187,44 +240,54 @@ func memstat() {
 	runtime.ReadMemStats(&opts.st)
 	deltaAlloc := opts.st.TotalAlloc - lastAlloc
 	lastAlloc = opts.st.TotalAlloc
-	fmt.Printf("%0.2fG total alloc, %0.2fG delta\n\n", float64(opts.st.TotalAlloc)/1024/1024/1024, float64(deltaAlloc)/1024/1024/1024)
+	log.Printf("%0.2fG total alloc, %0.2fG delta", float64(opts.st.TotalAlloc)/1024/1024/1024, float64(deltaAlloc)/1024/1024/1024)
 }
 
 func background() {
+	log.Print("disabling background tasks:")
+	begin := time.Now()
 	wg := &sync.WaitGroup{}
-	if opts.vs2 != nil {
+	if opts.rvs != nil {
 		wg.Add(1)
 		go func() {
-			opts.vs2.DisableBackgroundTasks()
+			opts.rvs.DisableBackgroundTasks()
 			wg.Done()
 		}()
 	}
 	opts.vs.DisableBackgroundTasks()
 	wg.Wait()
-	begin := time.Now()
-	if opts.vs2 != nil {
+	dur := time.Now().Sub(begin)
+	log.Println(dur, "to disable background tasks")
+	log.Print("background tasks:")
+	begin = time.Now()
+	if opts.rvs != nil {
 		wg.Add(1)
 		go func() {
-			opts.vs2.BackgroundNow()
+			opts.rvs.BackgroundNow()
 			wg.Done()
 		}()
 	}
 	opts.vs.BackgroundNow()
 	wg.Wait()
-	dur := time.Now().Sub(begin)
-	fmt.Printf("%s to run background tasks\n", dur)
-	if opts.vs2 != nil {
+	dur = time.Now().Sub(begin)
+	log.Println(dur, "to run background tasks")
+	log.Print("re-enabling background tasks:")
+	begin = time.Now()
+	if opts.rvs != nil {
 		wg.Add(1)
 		go func() {
-			opts.vs2.EnableBackgroundTasks()
+			opts.rvs.EnableBackgroundTasks()
 			wg.Done()
 		}()
 	}
 	opts.vs.EnableBackgroundTasks()
 	wg.Wait()
+	dur = time.Now().Sub(begin)
+	log.Println(dur, "to re-enable background tasks")
 }
 
 func delete() {
+	log.Print("delete:")
 	var superseded uint64
 	timestamp := opts.Timestamp | 1
 	begin := time.Now()
@@ -257,13 +320,14 @@ func delete() {
 	wg.Wait()
 	opts.vs.Flush()
 	dur := time.Now().Sub(begin)
-	fmt.Printf("%s %.0f/s to delete %d values (timestamp %d)\n", dur, float64(opts.Number)/(float64(dur)/float64(time.Second)), opts.Number, timestamp)
+	log.Printf("%s %.0f/s to delete %d values (timestamp %d)", dur, float64(opts.Number)/(float64(dur)/float64(time.Second)), opts.Number, timestamp)
 	if superseded > 0 {
-		fmt.Println(superseded, "SUPERCEDED!")
+		log.Println(superseded, "SUPERCEDED!")
 	}
 }
 
 func lookup() {
+	log.Print("lookup:")
 	var missing uint64
 	var deleted uint64
 	begin := time.Now()
@@ -304,16 +368,17 @@ func lookup() {
 	}
 	wg.Wait()
 	dur := time.Now().Sub(begin)
-	fmt.Printf("%s %.0f/s to lookup %d values\n", dur, float64(opts.Number)/(float64(dur)/float64(time.Second)), opts.Number)
+	log.Printf("%s %.0f/s to lookup %d values", dur, float64(opts.Number)/(float64(dur)/float64(time.Second)), opts.Number)
 	if missing > 0 {
-		fmt.Println(missing, "MISSING!")
+		log.Println(missing, "MISSING!")
 	}
 	if deleted > 0 {
-		fmt.Println(deleted, "DELETED!")
+		log.Println(deleted, "DELETED!")
 	}
 }
 
 func read() {
+	log.Print("read:")
 	var valuesLength uint64
 	var missing uint64
 	var deleted uint64
@@ -372,16 +437,17 @@ func read() {
 	}
 	wg.Wait()
 	dur := time.Now().Sub(begin)
-	fmt.Printf("%s %.0f/s %0.2fG/s to read %d values\n", dur, float64(opts.Number)/(float64(dur)/float64(time.Second)), float64(valuesLength)/(float64(dur)/float64(time.Second))/1024/1024/1024, opts.Number)
+	log.Printf("%s %.0f/s %0.2fG/s to read %d values", dur, float64(opts.Number)/(float64(dur)/float64(time.Second)), float64(valuesLength)/(float64(dur)/float64(time.Second))/1024/1024/1024, opts.Number)
 	if missing > 0 {
-		fmt.Println(missing, "MISSING!")
+		log.Println(missing, "MISSING!")
 	}
 	if deleted > 0 {
-		fmt.Println(deleted, "DELETED!")
+		log.Println(deleted, "DELETED!")
 	}
 }
 
 func write() {
+	log.Print("write:")
 	var superseded uint64
 	timestamp := opts.Timestamp & 0xfffffffffffffffe
 	if timestamp == 0 {
@@ -415,7 +481,7 @@ func write() {
 			for o := 0; o < len(keys); o += 16 {
 				scr.Read(randomness)
 				// test putting all keys in a certain range:
-				// if oldTimestamp, err := opts.vs.Write(binary.BigEndian.Uint64(keys[o:]) & 0x000fffffffffffff, binary.BigEndian.Uint64(keys[o+8:]), timestamp, value); err != nil {
+				// if oldTimestamp, err := opts.vs.Write(binary.BigEndian.Uint64(keys[o:]) & 0x000fffffffffffff, binary.BigEndian.Uint64(keys[o+8:]), timestamp, value); err != nil {}
 				if oldTimestamp, err := opts.vs.Write(binary.BigEndian.Uint64(keys[o:]), binary.BigEndian.Uint64(keys[o+8:]), timestamp, value); err != nil {
 					panic(err)
 				} else if oldTimestamp > timestamp {
@@ -431,12 +497,16 @@ func write() {
 	wg.Wait()
 	opts.vs.Flush()
 	dur := time.Now().Sub(begin)
-	fmt.Printf("%s %.0f/s %0.2fG/s to write %d values (timestamp %d)\n", dur, float64(opts.Number)/(float64(dur)/float64(time.Second)), float64(opts.Number*opts.Length)/(float64(dur)/float64(time.Second))/1024/1024/1024, opts.Number, timestamp)
+	log.Printf("%s %.0f/s %0.2fG/s to write %d values (timestamp %d)", dur, float64(opts.Number)/(float64(dur)/float64(time.Second)), float64(opts.Number*opts.Length)/(float64(dur)/float64(time.Second))/1024/1024/1024, opts.Number, timestamp)
 	if superseded > 0 {
-		fmt.Println(superseded, "SUPERCEDED!")
+		log.Println(superseded, "SUPERCEDED!")
 	}
 }
 
 func run() {
+	log.Print("run:")
+	begin := time.Now()
 	<-time.After(1 * time.Minute)
+	dur := time.Now().Sub(begin)
+	log.Println(dur, "to run")
 }

@@ -955,7 +955,7 @@ func (vlm *ValueLocMap) scanCount(start uint64, stop uint64, max uint64, n *node
 	}
 }
 
-func (vlm *ValueLocMap) ScanCallback(start uint64, stop uint64, callback func(keyA uint64, keyB uint64, timestamp uint64)) {
+func (vlm *ValueLocMap) ScanCallback(start uint64, stop uint64, callback func(keyA uint64, keyB uint64, timestamp uint64, length uint32)) {
 	for i := 0; i < len(vlm.roots); i++ {
 		n := &vlm.roots[i]
 		n.lock.RLock() // Will be released by scanCallback
@@ -964,7 +964,7 @@ func (vlm *ValueLocMap) ScanCallback(start uint64, stop uint64, callback func(ke
 }
 
 // Will call n.lock.RUnlock()
-func (vlm *ValueLocMap) scanCallback(start uint64, stop uint64, callback func(keyA uint64, keyB uint64, timestamp uint64), n *node) {
+func (vlm *ValueLocMap) scanCallback(start uint64, stop uint64, callback func(keyA uint64, keyB uint64, timestamp uint64, length uint32), n *node) {
 	if start > n.rangeStop || stop < n.rangeStart {
 		n.lock.RUnlock()
 		return
@@ -995,7 +995,7 @@ func (vlm *ValueLocMap) scanCallback(start uint64, stop uint64, callback func(ke
 				continue
 			}
 			for {
-				callback(e.keyA, e.keyB, e.timestamp)
+				callback(e.keyA, e.keyB, e.timestamp, e.length)
 				if e.next == 0 {
 					break
 				}
@@ -1021,7 +1021,7 @@ func (vlm *ValueLocMap) scanCallback(start uint64, stop uint64, callback func(ke
 			}
 			for {
 				if e.keyA >= start && e.keyA <= stop {
-					callback(e.keyA, e.keyB, e.timestamp)
+					callback(e.keyA, e.keyB, e.timestamp, e.length)
 				}
 				if e.next == 0 {
 					break

@@ -43,6 +43,7 @@ import (
 )
 
 type config struct {
+	name                    string
 	path                    string
 	pathtoc                 string
 	vlm                     ValueLocMap
@@ -63,6 +64,10 @@ type config struct {
 
 func resolveConfig(opts ...func(*config)) *config {
 	cfg := &config{}
+	cfg.name = os.Getenv("BRIMSTORE_NAME")
+	if cfg.name == "" {
+		cfg.name = "ValueStore"
+	}
 	cfg.path = os.Getenv("BRIMSTORE_PATH")
 	cfg.pathtoc = os.Getenv("BRIMSTORE_PATHTOC")
 	cfg.cores = runtime.GOMAXPROCS(0)
@@ -199,6 +204,14 @@ func resolveConfig(opts ...func(*config)) *config {
 // append more options to the list before using it with NewValueStore(list...).
 func OptList(opts ...func(*config)) []func(*config) {
 	return opts
+}
+
+// OptName sets the name of the ValueStore for logging purposes. Defaults to
+// env BRIMSTORE_NAME or "ValueStore".
+func OptName(name string) func(*config) {
+	return func(cfg *config) {
+		cfg.name = name
+	}
 }
 
 // OptPath sets the path where values files will be written; tocvalues files
@@ -350,7 +363,7 @@ type ValueLocMap interface {
 	GatherStats(debug bool) (count uint64, length uint64, debugInfo fmt.Stringer)
 	DiscardTombstones(tombstoneCutoff uint64)
 	ScanCount(start uint64, stop uint64, max uint64) uint64
-	ScanCallback(start uint64, stop uint64, callback func(keyA uint64, keyB uint64, timestamp uint64))
+	ScanCallback(start uint64, stop uint64, callback func(keyA uint64, keyB uint64, timestamp uint64, length uint32))
 }
 
 type pullReplicationMsg struct {
@@ -366,6 +379,7 @@ type bulkSetMsg struct {
 
 // ValueStore instances are created with NewValueStore.
 type ValueStore struct {
+	name                      string
 	freeableVMChans           []chan *valuesMem
 	freeVMChan                chan *valuesMem
 	freeVWRChans              []chan *valueWriteReq
@@ -501,6 +515,7 @@ func NewValueStore(opts ...func(*config)) *ValueStore {
 		vlm = valuelocmap.NewValueLocMap()
 	}
 	vs := &ValueStore{
+		name:                    cfg.name,
 		valueLocBlocks:          make([]valueLocBlock, math.MaxUint16),
 		path:                    cfg.path,
 		pathtoc:                 cfg.pathtoc,
@@ -1097,17 +1112,17 @@ func (vs *ValueStore) recovery() {
 		}
 		bts := int64(0)
 		if bts, err = strconv.ParseInt(names[i][:len(names[i])-len(".valuestoc")], 10, 64); err != nil {
-			log.Printf("bad timestamp name: %#v\n", names[i])
+			log.Printf("%s: bad timestamp name: %#v\n", vs.name, names[i])
 			continue
 		}
 		if bts == 0 {
-			log.Printf("bad timestamp name: %#v\n", names[i])
+			log.Printf("%s: bad timestamp name: %#v\n", vs.name, names[i])
 			continue
 		}
 		vf := newValuesFile(vs, bts)
 		fp, err := os.Open(path.Join(vs.pathtoc, names[i]))
 		if err != nil {
-			log.Printf("error opening %s: %s\n", names[i], err)
+			log.Printf("%s: error opening %s: %s\n", vs.name, names[i], err)
 			continue
 		}
 		buf := make([]byte, vs.checksumInterval+4)
@@ -1119,7 +1134,7 @@ func (vs *ValueStore) recovery() {
 			n, err := io.ReadFull(fp, buf)
 			if n < 4 {
 				if err != io.EOF && err != io.ErrUnexpectedEOF {
-					log.Printf("error reading %s: %s\n", names[i], err)
+					log.Printf("%s: error reading %s: %s\n", vs.name, names[i], err)
 				}
 				break
 			}
@@ -1130,11 +1145,11 @@ func (vs *ValueStore) recovery() {
 				i := 0
 				if first {
 					if !bytes.Equal(buf[:28], []byte("BRIMSTORE VALUETOC v0       ")) {
-						log.Printf("bad header: %s\n", names[i])
+						log.Printf("%s: bad header: %s\n", vs.name, names[i])
 						break
 					}
 					if binary.BigEndian.Uint32(buf[28:]) != vs.checksumInterval {
-						log.Printf("bad header checksum interval: %s\n", names[i])
+						log.Printf("%s: bad header checksum interval: %s\n", vs.name, names[i])
 						break
 					}
 					i += 32
@@ -1142,11 +1157,11 @@ func (vs *ValueStore) recovery() {
 				}
 				if n < int(vs.checksumInterval) {
 					if binary.BigEndian.Uint32(buf[n-16:]) != 0 {
-						log.Printf("bad terminator size marker: %s\n", names[i])
+						log.Printf("%s: bad terminator size marker: %s\n", vs.name, names[i])
 						break
 					}
 					if !bytes.Equal(buf[n-4:n], []byte("TERM")) {
-						log.Printf("bad terminator: %s\n", names[i])
+						log.Printf("%s: bad terminator: %s\n", vs.name, names[i])
 						break
 					}
 					n -= 16
@@ -1199,16 +1214,16 @@ func (vs *ValueStore) recovery() {
 				}
 			}
 			if err != nil && err != io.EOF && err != io.ErrUnexpectedEOF {
-				log.Printf("error reading %s: %s\n", names[i], err)
+				log.Printf("%s: error reading %s: %s\n", vs.name, names[i], err)
 				break
 			}
 		}
 		fp.Close()
 		if !terminated {
-			log.Printf("early end of file: %s\n", names[i])
+			log.Printf("%s: early end of file: %s\n", vs.name, names[i])
 		}
 		if checksumFailures > 0 {
-			log.Printf("%d checksum failures for %s\n", checksumFailures, names[i])
+			log.Printf("%s: %d checksum failures for %s\n", vs.name, checksumFailures, names[i])
 		}
 	}
 	if wix > 0 {
@@ -1221,13 +1236,11 @@ func (vs *ValueStore) recovery() {
 	if fromDiskCount > 0 {
 		dur := time.Now().Sub(start)
 		valueCount, valueLength, _ := vs.GatherStats(false)
-		log.Printf("%d key locations loaded in %s, %.0f/s; %d caused change; %d resulting locations referencing %d bytes.\n", fromDiskCount, dur, float64(fromDiskCount)/(float64(dur)/float64(time.Second)), count, valueCount, valueLength)
+		log.Printf("%s: %d key locations loaded in %s, %.0f/s; %d caused change; %d resulting locations referencing %d bytes.\n", vs.name, fromDiskCount, dur, float64(fromDiskCount)/(float64(dur)/float64(time.Second)), count, valueCount, valueLength)
 	}
 }
 
 func (vs *ValueStore) inPullReplication() {
-	// TODO: Needs cap on what gets added to k or maybe cap based on length so
-	// bsm doesn't overfill, or something.
 	k := make([]uint64, 2*1024*1024)
 	v := make([]byte, vs.maxValueSize)
 	for {
@@ -1235,9 +1248,12 @@ func (vs *ValueStore) inPullReplication() {
 		k = k[:0]
 		cutoff := prm.timestampCutoff()
 		ktbf := prm.ktBloomFilter()
-		vs.vlm.ScanCallback(prm.rangeStart(), prm.rangeStop(), func(keyA uint64, keyB uint64, timestamp uint64) {
-			if timestamp < cutoff && !ktbf.mayHave(keyA, keyB, timestamp) {
+		l := int64(_GLH_OUT_BULK_SET_MSG_SIZE)
+		vs.vlm.ScanCallback(prm.rangeStart(), prm.rangeStop(), func(keyA uint64, keyB uint64, timestamp uint64, length uint32) {
+			if l > 0 && timestamp < cutoff && !ktbf.mayHave(keyA, keyB, timestamp) {
 				k = append(k, keyA, keyB)
+				// bsm: keyA:8, keyB:8, timestamp:8, length:4, value:n
+				l -= 28 + int64(length)
 			}
 		})
 		vs.freeInPullReplicationChan <- prm
@@ -1372,74 +1388,67 @@ const _GLH_BLOOM_FILTER_N = 1000000
 const _GLH_BLOOM_FILTER_P = 0.001
 
 func (vs *ValueStore) background() {
-	begin := time.Now()
 	if vs.backgroundIteration == math.MaxUint16 {
 		vs.backgroundIteration = 0
 	} else {
 		vs.backgroundIteration++
 	}
 	iteration := vs.backgroundIteration
-	fmt.Println("GLH", iteration)
+	begin := time.Now()
 	ringID := uint64(0)
 	partitionPower := uint16(8)
 	partitions := uint32(1) << partitionPower
 	vs.vlm.DiscardTombstones(uint64(time.Now().UnixNano()) - vs.tombstoneAge)
 	wg := &sync.WaitGroup{}
-	if vs.msgConn != nil {
-		wg.Add(vs.backgroundWorkers)
-		for len(vs.ktbfs) < vs.backgroundWorkers {
-			vs.ktbfs = append(vs.ktbfs, newKTBloomFilter(_GLH_BLOOM_FILTER_N, _GLH_BLOOM_FILTER_P, 0))
-		}
-		for g := 0; g < vs.backgroundWorkers; g++ {
-			go func(g int) {
-				ktbf := vs.ktbfs[g]
-				var pullSize uint64
-				for p := uint32(g); p < partitions && atomic.LoadUint32(&vs.backgroundAbort) == 0; p += uint32(vs.backgroundWorkers) {
-					// Here I'm doing pull replication scans for every
-					// partition when eventually it should just do this for
-					// partitions we're in the ring for. Partitions we're not
-					// in the ring for (handoffs, old data from ring changes,
-					// etc.) we should just send out what data we have and the
-					// remove it locally.
-					start := uint64(p) << uint64(64-partitionPower)
-					stop := start + (uint64(1)<<(64-partitionPower) - 1)
-					if pullSize == 0 {
-						pullSize = uint64(1) << (64 - partitionPower)
-						for vs.vlm.ScanCount(start, start+(pullSize-1), _GLH_BLOOM_FILTER_N) >= _GLH_BLOOM_FILTER_N {
-							pullSize /= 2
-						}
-					}
-					cutoff := uint64(time.Now().UnixNano()) - vs.replicationIgnoreRecent
-					substart := start
-					substop := start + (pullSize - 1)
-					for {
-						ktbf.reset(iteration)
-						vs.vlm.ScanCallback(substart, substop, func(keyA uint64, keyB uint64, timestamp uint64) {
-							if timestamp < cutoff {
-								ktbf.add(keyA, keyB, timestamp)
-							}
-						})
-						if atomic.LoadUint32(&vs.backgroundAbort) != 0 {
-							break
-						}
-						if vs.msgConn == nil {
-							break
-						} else {
-							vs.msgConn.send(vs.newOutPullReplicationMsg(ringID, p, cutoff, substart, substop, ktbf))
-						}
-						substart += pullSize
-						substop += pullSize
-						if substop > stop {
-							break
-						}
+	wg.Add(vs.backgroundWorkers)
+	for len(vs.ktbfs) < vs.backgroundWorkers {
+		vs.ktbfs = append(vs.ktbfs, newKTBloomFilter(_GLH_BLOOM_FILTER_N, _GLH_BLOOM_FILTER_P, 0))
+	}
+	for g := 0; g < vs.backgroundWorkers; g++ {
+		go func(g int) {
+			ktbf := vs.ktbfs[g]
+			var pullSize uint64
+			for p := uint32(g); p < partitions && atomic.LoadUint32(&vs.backgroundAbort) == 0; p += uint32(vs.backgroundWorkers) {
+				// Here I'm doing pull replication scans for every
+				// partition when eventually it should just do this for
+				// partitions we're in the ring for. Partitions we're not
+				// in the ring for (handoffs, old data from ring changes,
+				// etc.) we should just send out what data we have and the
+				// remove it locally.
+				start := uint64(p) << uint64(64-partitionPower)
+				stop := start + (uint64(1)<<(64-partitionPower) - 1)
+				if pullSize == 0 {
+					pullSize = uint64(1) << (64 - partitionPower)
+					for vs.vlm.ScanCount(start, start+(pullSize-1), _GLH_BLOOM_FILTER_N) >= _GLH_BLOOM_FILTER_N {
+						pullSize /= 2
 					}
 				}
-				wg.Done()
-			}(g)
-		}
+				cutoff := uint64(time.Now().UnixNano()) - vs.replicationIgnoreRecent
+				substart := start
+				substop := start + (pullSize - 1)
+				for {
+					ktbf.reset(iteration)
+					vs.vlm.ScanCallback(substart, substop, func(keyA uint64, keyB uint64, timestamp uint64, length uint32) {
+						if timestamp < cutoff {
+							ktbf.add(keyA, keyB, timestamp)
+						}
+					})
+					if atomic.LoadUint32(&vs.backgroundAbort) != 0 {
+						break
+					}
+					vs.msgConn.send(vs.newOutPullReplicationMsg(ringID, p, cutoff, substart, substop, ktbf))
+					substart += pullSize
+					substop += pullSize
+					if substop > stop || substop < stop {
+						break
+					}
+				}
+			}
+			wg.Done()
+		}(g)
 	}
 	wg.Wait()
-	log.Printf("%p %s background tasks", vs, time.Now().Sub(begin))
+	log.Printf("%s: GLH background tasks %d %s", vs.name, iteration, time.Now().Sub(begin))
 }
 
 const pullReplicationMsgHeaderBytes = 36
