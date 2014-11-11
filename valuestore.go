@@ -74,7 +74,6 @@ type config struct {
 	valuesFileReaders       int
 	checksumInterval        int
 	ring                    Ring
-	msgConn                 MsgConn
 	replicationIgnoreRecent int
 }
 
@@ -408,13 +407,6 @@ func OptRing(r Ring) func(*config) {
 	}
 }
 
-// TODO
-func OptMsgConn(mc MsgConn) func(*config) {
-	return func(cfg *config) {
-		cfg.msgConn = mc
-	}
-}
-
 // OptReplicationIgnoreRecent indicates how many seconds old a value should be
 // before it is included in replication processing. Defaults to env
 // VALUESTORE_REPLICATIONIGNORERECENT or 60.
@@ -448,34 +440,22 @@ type Ring interface {
 	PartitionPower() uint16
 	NodeID() uint64
 	Responsible(partition uint32) bool
-}
-
-// TODO
-type MsgConn interface {
-	SetHandler(t MsgType, h MsgUnmarshaller)
-	Start()
-	SendToNode(nodeID uint64, msg Msg) bool
-	SendToOtherReplicas(ringID uint64, partition uint32, msg Msg) bool
+	MsgType(name string) uint64
+	SetMsgHandler(msgType uint64, h MsgUnmarshaller)
+	MsgToNode(nodeID uint64, msg Msg) bool
+	MsgToOtherReplicas(ringID uint64, partition uint32, msg Msg) bool
 }
 
 // TODO
 type Msg interface {
-	MsgType() MsgType
+	MsgType() uint64
 	MsgLength() uint64
 	WriteContent(io.Writer) (uint64, error)
 	Done()
 }
 
 // TODO
-type MsgType uint64
-
-// TODO
 type MsgUnmarshaller func(io.Reader, uint64) (uint64, error)
-
-const (
-	_MSG_PULL_REPLICATION MsgType = iota
-	_MSG_BULK_SET
-)
 
 type pullReplicationMsg struct {
 	vs     *ValueStore
@@ -521,7 +501,8 @@ type ValueStore struct {
 	valuesFileReaders         int
 	checksumInterval          uint32
 	ring                      Ring
-	msgConn                   MsgConn
+	msgTypePullReplication    uint64
+	msgTypeBulkSet            uint64
 	replicationIgnoreRecent   uint64
 	inPullReplicationChan     chan *pullReplicationMsg
 	freeInPullReplicationChan chan *pullReplicationMsg
@@ -585,7 +566,6 @@ type valueStoreStats struct {
 	valuesFileReaders       int
 	checksumInterval        uint32
 	replicationIgnoreRecent int
-	msgSendDrops            uint32
 	vlmCount                uint64
 	vlmLength               uint64
 	vlmDebugInfo            fmt.Stringer
@@ -633,29 +613,28 @@ func NewValueStore(opts ...func(*config)) *ValueStore {
 		vlm = valuelocmap.NewValueLocMap()
 	}
 	vs := &ValueStore{
-		logCritical:             cfg.logCritical,
-		logError:                cfg.logError,
-		logWarning:              cfg.logWarning,
-		logInfo:                 cfg.logInfo,
-		logDebug:                cfg.logDebug,
-		rand:                    cfg.rand,
-		valueLocBlocks:          make([]valueLocBlock, math.MaxUint16),
-		path:                    cfg.path,
-		pathtoc:                 cfg.pathtoc,
-		vlm:                     vlm,
-		workers:                 cfg.workers,
-		backgroundWorkers:       cfg.backgroundWorkers,
-		backgroundInterval:      cfg.backgroundInterval,
-		maxValueSize:            uint32(cfg.maxValueSize),
-		pageSize:                uint32(cfg.pageSize),
-		minValueAlloc:           cfg.minValueAlloc,
-		writePagesPerWorker:     cfg.writePagesPerWorker,
-		tombstoneAge:            uint64(cfg.tombstoneAge) * uint64(time.Second),
-		valuesFileSize:          uint32(cfg.valuesFileSize),
-		valuesFileReaders:       cfg.valuesFileReaders,
-		checksumInterval:        uint32(cfg.checksumInterval),
-		ring:                    cfg.ring,
-		msgConn:                 cfg.msgConn,
+		logCritical:         cfg.logCritical,
+		logError:            cfg.logError,
+		logWarning:          cfg.logWarning,
+		logInfo:             cfg.logInfo,
+		logDebug:            cfg.logDebug,
+		rand:                cfg.rand,
+		valueLocBlocks:      make([]valueLocBlock, math.MaxUint16),
+		path:                cfg.path,
+		pathtoc:             cfg.pathtoc,
+		vlm:                 vlm,
+		workers:             cfg.workers,
+		backgroundWorkers:   cfg.backgroundWorkers,
+		backgroundInterval:  cfg.backgroundInterval,
+		maxValueSize:        uint32(cfg.maxValueSize),
+		pageSize:            uint32(cfg.pageSize),
+		minValueAlloc:       cfg.minValueAlloc,
+		writePagesPerWorker: cfg.writePagesPerWorker,
+		tombstoneAge:        uint64(cfg.tombstoneAge) * uint64(time.Second),
+		valuesFileSize:      uint32(cfg.valuesFileSize),
+		valuesFileReaders:   cfg.valuesFileReaders,
+		checksumInterval:    uint32(cfg.checksumInterval),
+		ring:                cfg.ring,
 		replicationIgnoreRecent: uint64(cfg.replicationIgnoreRecent) * uint64(time.Second),
 		backgroundIteration:     uint16(cfg.rand.Uint32()),
 	}
@@ -700,8 +679,9 @@ func NewValueStore(opts ...func(*config)) *ValueStore {
 		go vs.memWriter(vs.pendingVWRChans[i])
 	}
 	vs.recovery()
-	if vs.msgConn != nil {
-		vs.msgConn.SetHandler(_MSG_PULL_REPLICATION, vs.newInPullReplicationMsg)
+	if vs.ring != nil {
+		vs.msgTypePullReplication = vs.ring.MsgType("PullReplication")
+		vs.ring.SetMsgHandler(vs.msgTypePullReplication, vs.newInPullReplicationMsg)
 		vs.inPullReplicationChan = make(chan *pullReplicationMsg, _GLH_IN_PULL_REPLICATION_MSGS)
 		vs.freeInPullReplicationChan = make(chan *pullReplicationMsg, _GLH_IN_PULL_REPLICATION_MSGS)
 		for i := 0; i < cap(vs.freeInPullReplicationChan); i++ {
@@ -722,7 +702,8 @@ func NewValueStore(opts ...func(*config)) *ValueStore {
 				body:   make([]byte, len(vs.ktbfs[0].bits)),
 			}
 		}
-		vs.msgConn.SetHandler(_MSG_BULK_SET, vs.newInBulkSetMsg)
+		vs.msgTypeBulkSet = vs.ring.MsgType("BulkSet")
+		vs.ring.SetMsgHandler(vs.msgTypeBulkSet, vs.newInBulkSetMsg)
 		vs.inBulkSetChan = make(chan *bulkSetMsg, _GLH_IN_BULK_SET_MSGS)
 		vs.freeInBulkSetChan = make(chan *bulkSetMsg, _GLH_IN_BULK_SET_MSGS)
 		for i := 0; i < cap(vs.freeInBulkSetChan); i++ {
@@ -738,7 +719,6 @@ func NewValueStore(opts ...func(*config)) *ValueStore {
 				body: make([]byte, _GLH_OUT_BULK_SET_MSG_SIZE),
 			}
 		}
-		vs.msgConn.Start()
 	}
 	vs.backgroundNotifyChan = make(chan *backgroundNotification, 1)
 	go vs.backgroundLauncher()
@@ -904,11 +884,6 @@ func (vs *ValueStore) GatherStats(debug bool) (uint64, uint64, fmt.Stringer) {
 		stats.valuesFileReaders = vs.valuesFileReaders
 		stats.checksumInterval = vs.checksumInterval
 		stats.replicationIgnoreRecent = int(vs.replicationIgnoreRecent / uint64(time.Second))
-		/* TODO
-		if vs.msgConn != nil {
-			stats.msgSendDrops = vs.msgConn.sendDrops
-		}
-		*/
 		stats.vlmCount, stats.vlmLength, stats.vlmDebugInfo = vs.vlm.GatherStats(true)
 	} else {
 		stats.vlmCount, stats.vlmLength, stats.vlmDebugInfo = vs.vlm.GatherStats(false)
@@ -1414,7 +1389,7 @@ func (vs *ValueStore) inPullReplication() {
 				}
 			}
 			// TODO
-			vs.msgConn.SendToNode(nodeID, bsm)
+			vs.ring.MsgToNode(nodeID, bsm)
 		}
 	}
 }
@@ -1461,7 +1436,6 @@ func (stats *valueStoreStats) String() string {
 			[]string{"valuesFileReaders", fmt.Sprintf("%d", stats.valuesFileReaders)},
 			[]string{"checksumInterval", fmt.Sprintf("%d", stats.checksumInterval)},
 			[]string{"replicationIgnoreRecent", fmt.Sprintf("%d", stats.replicationIgnoreRecent)},
-			[]string{"msgSendDrops", fmt.Sprintf("%d", stats.msgSendDrops)},
 			[]string{"vlmCount", fmt.Sprintf("%d", stats.vlmCount)},
 			[]string{"vlmLength", fmt.Sprintf("%d", stats.vlmLength)},
 			[]string{"vlmDebugInfo", stats.vlmDebugInfo.String()},
@@ -1571,7 +1545,7 @@ func (vs *ValueStore) backgroundPullReplication() {
 			if atomic.LoadUint32(&vs.backgroundAbort) != 0 {
 				break
 			}
-			vs.msgConn.SendToOtherReplicas(ringID, p, vs.newOutPullReplicationMsg(ringID, p, cutoff, substart, substop, ktbf))
+			vs.ring.MsgToOtherReplicas(ringID, p, vs.newOutPullReplicationMsg(ringID, p, cutoff, substart, substop, ktbf))
 			substart += pullSize
 			substop += pullSize
 			if substop > stop || substop < stop {
@@ -1668,8 +1642,8 @@ func (vs *ValueStore) newOutPullReplicationMsg(ringID uint64, partition uint32, 
 	return prm
 }
 
-func (prm *pullReplicationMsg) MsgType() MsgType {
-	return _MSG_PULL_REPLICATION
+func (prm *pullReplicationMsg) MsgType() uint64 {
+	return prm.vs.msgTypePullReplication
 }
 
 func (prm *pullReplicationMsg) MsgLength() uint64 {
@@ -1765,8 +1739,8 @@ func (vs *ValueStore) newOutBulkSetMsg() *bulkSetMsg {
 	return bsm
 }
 
-func (bsm *bulkSetMsg) MsgType() MsgType {
-	return _MSG_BULK_SET
+func (bsm *bulkSetMsg) MsgType() uint64 {
+	return bsm.vs.msgTypeBulkSet
 }
 
 func (bsm *bulkSetMsg) MsgLength() uint64 {
