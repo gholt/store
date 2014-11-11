@@ -43,7 +43,11 @@ import (
 )
 
 type config struct {
-	name                    string
+	logCritical             *log.Logger
+	logError                *log.Logger
+	logWarning              *log.Logger
+	logInfo                 *log.Logger
+	logDebug                *log.Logger
 	path                    string
 	pathtoc                 string
 	vlm                     ValueLocMap
@@ -64,10 +68,6 @@ type config struct {
 
 func resolveConfig(opts ...func(*config)) *config {
 	cfg := &config{}
-	cfg.name = os.Getenv("BRIMSTORE_NAME")
-	if cfg.name == "" {
-		cfg.name = "ValueStore"
-	}
 	cfg.path = os.Getenv("BRIMSTORE_PATH")
 	cfg.pathtoc = os.Getenv("BRIMSTORE_PATHTOC")
 	cfg.cores = runtime.GOMAXPROCS(0)
@@ -139,6 +139,21 @@ func resolveConfig(opts ...func(*config)) *config {
 	for _, opt := range opts {
 		opt(cfg)
 	}
+	if cfg.logCritical == nil {
+		cfg.logCritical = log.New(os.Stderr, "ValueStore ", log.LstdFlags)
+	}
+	if cfg.logError == nil {
+		cfg.logError = log.New(os.Stderr, "ValueStore ", log.LstdFlags)
+	}
+	if cfg.logWarning == nil {
+		cfg.logWarning = log.New(os.Stderr, "ValueStore ", log.LstdFlags)
+	}
+	if cfg.logInfo == nil {
+		cfg.logInfo = log.New(os.Stdout, "ValueStore ", log.LstdFlags)
+	}
+	if cfg.logDebug == nil {
+		cfg.logDebug = log.New(os.Stderr, "ValueStore ", log.LstdFlags)
+	}
 	if cfg.path == "" {
 		cfg.path = "."
 	}
@@ -206,11 +221,43 @@ func OptList(opts ...func(*config)) []func(*config) {
 	return opts
 }
 
-// OptName sets the name of the ValueStore for logging purposes. Defaults to
-// env BRIMSTORE_NAME or "ValueStore".
-func OptName(name string) func(*config) {
+// OptLogCritical sets the log.Logger to use for critical messages. Defaults
+// logging to os.Stderr.
+func OptLogCritical(l *log.Logger) func(*config) {
 	return func(cfg *config) {
-		cfg.name = name
+		cfg.logCritical = l
+	}
+}
+
+// OptLogError sets the log.Logger to use for error messages. Defaults logging
+// to os.Stderr.
+func OptLogError(l *log.Logger) func(*config) {
+	return func(cfg *config) {
+		cfg.logError = l
+	}
+}
+
+// OptLogWarning sets the log.Logger to use for warning messages. Defaults
+// logging to os.Stderr.
+func OptLogWarning(l *log.Logger) func(*config) {
+	return func(cfg *config) {
+		cfg.logWarning = l
+	}
+}
+
+// OptLogInfo sets the log.Logger to use for info messages. Defaults logging to
+// os.Stdout.
+func OptLogInfo(l *log.Logger) func(*config) {
+	return func(cfg *config) {
+		cfg.logInfo = l
+	}
+}
+
+// OptLogDebug sets the log.Logger to use for debug messages. Defaults logging
+// to os.Stderr.
+func OptLogDebug(l *log.Logger) func(*config) {
+	return func(cfg *config) {
+		cfg.logDebug = l
 	}
 }
 
@@ -379,7 +426,11 @@ type bulkSetMsg struct {
 
 // ValueStore instances are created with NewValueStore.
 type ValueStore struct {
-	name                      string
+	logCritical               *log.Logger
+	logError                  *log.Logger
+	logWarning                *log.Logger
+	logInfo                   *log.Logger
+	logDebug                  *log.Logger
 	freeableVMChans           []chan *valuesMem
 	freeVMChan                chan *valuesMem
 	freeVWRChans              []chan *valueWriteReq
@@ -515,7 +566,11 @@ func NewValueStore(opts ...func(*config)) *ValueStore {
 		vlm = valuelocmap.NewValueLocMap()
 	}
 	vs := &ValueStore{
-		name:                    cfg.name,
+		logCritical:             cfg.logCritical,
+		logError:                cfg.logError,
+		logWarning:              cfg.logWarning,
+		logInfo:                 cfg.logInfo,
+		logDebug:                cfg.logDebug,
 		valueLocBlocks:          make([]valueLocBlock, math.MaxUint16),
 		path:                    cfg.path,
 		pathtoc:                 cfg.pathtoc,
@@ -1112,17 +1167,17 @@ func (vs *ValueStore) recovery() {
 		}
 		bts := int64(0)
 		if bts, err = strconv.ParseInt(names[i][:len(names[i])-len(".valuestoc")], 10, 64); err != nil {
-			log.Printf("%s: bad timestamp name: %#v\n", vs.name, names[i])
+			vs.logError.Printf("bad timestamp name: %#v\n", names[i])
 			continue
 		}
 		if bts == 0 {
-			log.Printf("%s: bad timestamp name: %#v\n", vs.name, names[i])
+			vs.logError.Printf("bad timestamp name: %#v\n", names[i])
 			continue
 		}
 		vf := newValuesFile(vs, bts)
 		fp, err := os.Open(path.Join(vs.pathtoc, names[i]))
 		if err != nil {
-			log.Printf("%s: error opening %s: %s\n", vs.name, names[i], err)
+			vs.logError.Printf("error opening %s: %s\n", names[i], err)
 			continue
 		}
 		buf := make([]byte, vs.checksumInterval+4)
@@ -1134,7 +1189,7 @@ func (vs *ValueStore) recovery() {
 			n, err := io.ReadFull(fp, buf)
 			if n < 4 {
 				if err != io.EOF && err != io.ErrUnexpectedEOF {
-					log.Printf("%s: error reading %s: %s\n", vs.name, names[i], err)
+					vs.logError.Printf("error reading %s: %s\n", names[i], err)
 				}
 				break
 			}
@@ -1145,11 +1200,11 @@ func (vs *ValueStore) recovery() {
 				i := 0
 				if first {
 					if !bytes.Equal(buf[:28], []byte("BRIMSTORE VALUETOC v0       ")) {
-						log.Printf("%s: bad header: %s\n", vs.name, names[i])
+						vs.logError.Printf("bad header: %s\n", names[i])
 						break
 					}
 					if binary.BigEndian.Uint32(buf[28:]) != vs.checksumInterval {
-						log.Printf("%s: bad header checksum interval: %s\n", vs.name, names[i])
+						vs.logError.Printf("bad header checksum interval: %s\n", names[i])
 						break
 					}
 					i += 32
@@ -1157,11 +1212,11 @@ func (vs *ValueStore) recovery() {
 				}
 				if n < int(vs.checksumInterval) {
 					if binary.BigEndian.Uint32(buf[n-16:]) != 0 {
-						log.Printf("%s: bad terminator size marker: %s\n", vs.name, names[i])
+						vs.logError.Printf("bad terminator size marker: %s\n", names[i])
 						break
 					}
 					if !bytes.Equal(buf[n-4:n], []byte("TERM")) {
-						log.Printf("%s: bad terminator: %s\n", vs.name, names[i])
+						vs.logError.Printf("bad terminator: %s\n", names[i])
 						break
 					}
 					n -= 16
@@ -1214,16 +1269,16 @@ func (vs *ValueStore) recovery() {
 				}
 			}
 			if err != nil && err != io.EOF && err != io.ErrUnexpectedEOF {
-				log.Printf("%s: error reading %s: %s\n", vs.name, names[i], err)
+				vs.logError.Printf("error reading %s: %s\n", names[i], err)
 				break
 			}
 		}
 		fp.Close()
 		if !terminated {
-			log.Printf("%s: early end of file: %s\n", vs.name, names[i])
+			vs.logError.Printf("early end of file: %s\n", names[i])
 		}
 		if checksumFailures > 0 {
-			log.Printf("%s: %d checksum failures for %s\n", vs.name, checksumFailures, names[i])
+			vs.logWarning.Printf("%d checksum failures for %s\n", checksumFailures, names[i])
 		}
 	}
 	if wix > 0 {
@@ -1236,7 +1291,7 @@ func (vs *ValueStore) recovery() {
 	if fromDiskCount > 0 {
 		dur := time.Now().Sub(start)
 		valueCount, valueLength, _ := vs.GatherStats(false)
-		log.Printf("%s: %d key locations loaded in %s, %.0f/s; %d caused change; %d resulting locations referencing %d bytes.\n", vs.name, fromDiskCount, dur, float64(fromDiskCount)/(float64(dur)/float64(time.Second)), count, valueCount, valueLength)
+		vs.logInfo.Printf("%d key locations loaded in %s, %.0f/s; %d caused change; %d resulting locations referencing %d bytes.\n", fromDiskCount, dur, float64(fromDiskCount)/(float64(dur)/float64(time.Second)), count, valueCount, valueLength)
 	}
 }
 
@@ -1448,7 +1503,7 @@ func (vs *ValueStore) background() {
 		}(g)
 	}
 	wg.Wait()
-	log.Printf("%s: GLH background tasks %d %s", vs.name, iteration, time.Now().Sub(begin))
+	vs.logDebug.Printf("background tasks took %s", time.Now().Sub(begin))
 }
 
 const pullReplicationMsgHeaderBytes = 36
