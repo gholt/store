@@ -1,4 +1,4 @@
-package brimstore
+package valuestore
 
 import (
 	"encoding/binary"

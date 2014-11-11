@@ -1,4 +1,4 @@
-// Package brimstore provides a disk-backed data structure for use in storing
+// Package valuestore provides a disk-backed data structure for use in storing
 // []byte values referenced by 128 bit keys with options for replication.
 //
 // It can handle billions of keys (as memory allows) and full concurrent access
@@ -15,7 +15,7 @@
 //  Replication
 //      blockID = 0 setting due to replication of handoffs
 //  Compaction
-package brimstore
+package valuestore
 
 import (
 	"bytes"
@@ -70,70 +70,70 @@ type config struct {
 
 func resolveConfig(opts ...func(*config)) *config {
 	cfg := &config{}
-	cfg.path = os.Getenv("BRIMSTORE_PATH")
-	cfg.pathtoc = os.Getenv("BRIMSTORE_PATHTOC")
+	cfg.path = os.Getenv("VALUESTORE_PATH")
+	cfg.pathtoc = os.Getenv("VALUESTORE_PATHTOC")
 	cfg.cores = runtime.GOMAXPROCS(0)
-	if env := os.Getenv("BRIMSTORE_CORES"); env != "" {
+	if env := os.Getenv("VALUESTORE_CORES"); env != "" {
 		if val, err := strconv.Atoi(env); err == nil {
 			cfg.cores = val
 		}
 	}
 	cfg.backgroundWorkers = cfg.cores
-	if env := os.Getenv("BRIMSTORE_BACKGROUNDWORKERS"); env != "" {
+	if env := os.Getenv("VALUESTORE_BACKGROUNDWORKERS"); env != "" {
 		if val, err := strconv.Atoi(env); err == nil {
 			cfg.backgroundWorkers = val
 		}
 	}
 	cfg.backgroundInterval = 60
-	if env := os.Getenv("BRIMSTORE_BACKGROUNDINTERVAL"); env != "" {
+	if env := os.Getenv("VALUESTORE_BACKGROUNDINTERVAL"); env != "" {
 		if val, err := strconv.Atoi(env); err == nil {
 			cfg.backgroundInterval = val
 		}
 	}
 	cfg.maxValueSize = 4 * 1024 * 1024
-	if env := os.Getenv("BRIMSTORE_MAXVALUESIZE"); env != "" {
+	if env := os.Getenv("VALUESTORE_MAXVALUESIZE"); env != "" {
 		if val, err := strconv.Atoi(env); err == nil {
 			cfg.maxValueSize = val
 		}
 	}
 	cfg.pageSize = 4 * 1024 * 1024
-	if env := os.Getenv("BRIMSTORE_PAGESIZE"); env != "" {
+	if env := os.Getenv("VALUESTORE_PAGESIZE"); env != "" {
 		if val, err := strconv.Atoi(env); err == nil {
 			cfg.pageSize = val
 		}
 	}
 	cfg.writePagesPerCore = 3
-	if env := os.Getenv("BRIMSTORE_WRITEPAGESPERCORE"); env != "" {
+	if env := os.Getenv("VALUESTORE_WRITEPAGESPERCORE"); env != "" {
 		if val, err := strconv.Atoi(env); err == nil {
 			cfg.writePagesPerCore = val
 		}
 	}
 	cfg.tombstoneAge = 4 * 60 * 60
-	if env := os.Getenv("BRIMSTORE_TOMBSTONEAGE"); env != "" {
+	if env := os.Getenv("VALUESTORE_TOMBSTONEAGE"); env != "" {
 		if val, err := strconv.Atoi(env); err == nil {
 			cfg.tombstoneAge = val
 		}
 	}
 	cfg.valuesFileSize = math.MaxUint32
-	if env := os.Getenv("BRIMSTORE_VALUESFILESIZE"); env != "" {
+	if env := os.Getenv("VALUESTORE_VALUESFILESIZE"); env != "" {
 		if val, err := strconv.Atoi(env); err == nil {
 			cfg.valuesFileSize = val
 		}
 	}
 	cfg.valuesFileReaders = cfg.cores
-	if env := os.Getenv("BRIMSTORE_VALUESFILEREADERS"); env != "" {
+	if env := os.Getenv("VALUESTORE_VALUESFILEREADERS"); env != "" {
 		if val, err := strconv.Atoi(env); err == nil {
 			cfg.valuesFileReaders = val
 		}
 	}
 	cfg.checksumInterval = 65532
-	if env := os.Getenv("BRIMSTORE_CHECKSUMINTERVAL"); env != "" {
+	if env := os.Getenv("VALUESTORE_CHECKSUMINTERVAL"); env != "" {
 		if val, err := strconv.Atoi(env); err == nil {
 			cfg.checksumInterval = val
 		}
 	}
 	cfg.replicationIgnoreRecent = 60
-	if env := os.Getenv("BRIMSTORE_REPLICATIONIGNORERECENT"); env != "" {
+	if env := os.Getenv("VALUESTORE_REPLICATIONIGNORERECENT"); env != "" {
 		if val, err := strconv.Atoi(env); err == nil {
 			cfg.replicationIgnoreRecent = val
 		}
@@ -273,7 +273,7 @@ func OptRand(r *rand.Rand) func(*config) {
 
 // OptPath sets the path where values files will be written; tocvalues files
 // will also be written here unless overridden with OptPathTOC. Defaults to env
-// BRIMSTORE_PATH or the current working directory.
+// VALUESTORE_PATH or the current working directory.
 func OptPath(dirpath string) func(*config) {
 	return func(cfg *config) {
 		cfg.path = dirpath
@@ -281,7 +281,7 @@ func OptPath(dirpath string) func(*config) {
 }
 
 // OptPathTOC sets the path where tocvalues files will be written. Defaults to
-// env BRIMSTORE_PATHTOC or the OptPath value.
+// env VALUESTORE_PATHTOC or the OptPath value.
 func OptPathTOC(dirpath string) func(*config) {
 	return func(cfg *config) {
 		cfg.pathtoc = dirpath
@@ -301,7 +301,7 @@ func OptValueLocMap(vlm ValueLocMap) func(*config) {
 // incoming writes and batching them to disk, background tasks, etc.). This
 // won't exactly limit the number of cores in use (not an easy thing to do in
 // Go except globally with GOMAXPROCS) but it is more of a relative resource
-// usage level. Defaults to env BRIMSTORE_CORES, or GOMAXPROCS.
+// usage level. Defaults to env VALUESTORE_CORES, or GOMAXPROCS.
 func OptCores(cores int) func(*config) {
 	return func(cfg *config) {
 		cfg.cores = cores
@@ -309,8 +309,8 @@ func OptCores(cores int) func(*config) {
 }
 
 // OptBackgroundWorkers indicates how many goroutines may be used for
-// background tasks. Defaults to env BRIMSTORE_BACKGROUNDWORKERS or
-// BRIMSTORE_CORES.
+// background tasks. Defaults to env VALUESTORE_BACKGROUNDWORKERS or
+// VALUESTORE_CORES.
 func OptBackgroundWorkers(workers int) func(*config) {
 	return func(cfg *config) {
 		cfg.backgroundWorkers = workers
@@ -325,7 +325,7 @@ func OptBackgroundWorkers(workers int) func(*config) {
 // resources doing nearly nothing. Normally, you'd want your tasks to be
 // running constantly so that replication and cleanup are as fast as possible
 // and the load constant. The default of 60 seconds is almost always fine.
-// Defaults to env BRIMSTORE_BACKGROUNDINTERVAL or 60.
+// Defaults to env VALUESTORE_BACKGROUNDINTERVAL or 60.
 func OptBackgroundInterval(seconds int) func(*config) {
 	return func(cfg *config) {
 		cfg.backgroundInterval = seconds
@@ -333,7 +333,7 @@ func OptBackgroundInterval(seconds int) func(*config) {
 }
 
 // OptMaxValueSize indicates the maximum number of bytes any given value may
-// be. Defaults to env BRIMSTORE_MAXVALUESIZE or 4,194,304.
+// be. Defaults to env VALUESTORE_MAXVALUESIZE or 4,194,304.
 func OptMaxValueSize(bytes int) func(*config) {
 	return func(cfg *config) {
 		cfg.maxValueSize = bytes
@@ -341,7 +341,7 @@ func OptMaxValueSize(bytes int) func(*config) {
 }
 
 // OptPageSize controls the size of each chunk of memory allocated. Defaults to
-// env BRIMSTORE_PAGESIZE or 4,194,304.
+// env VALUESTORE_PAGESIZE or 4,194,304.
 func OptPageSize(bytes int) func(*config) {
 	return func(cfg *config) {
 		cfg.pageSize = bytes
@@ -349,7 +349,7 @@ func OptPageSize(bytes int) func(*config) {
 }
 
 // OptWritePagesPerCore controls how many pages are created per core for
-// caching recently written values. Defaults to env BRIMSTORE_WRITEPAGESPERCORE
+// caching recently written values. Defaults to env VALUESTORE_WRITEPAGESPERCORE
 // or 3.
 func OptWritePagesPerCore(number int) func(*config) {
 	return func(cfg *config) {
@@ -358,7 +358,7 @@ func OptWritePagesPerCore(number int) func(*config) {
 }
 
 // OptTombstoneAge indicates how many seconds old a deletion marker may be
-// before it is permanently removed. Defaults to env BRIMSTORE_TOMBSTONEAGE or
+// before it is permanently removed. Defaults to env VALUESTORE_TOMBSTONEAGE or
 // 14,400 (4 hours).
 func OptTombstoneAge(seconds int) func(*config) {
 	return func(cfg *config) {
@@ -367,7 +367,7 @@ func OptTombstoneAge(seconds int) func(*config) {
 }
 
 // OptValuesFileSize indicates how large a values file can be before closing it
-// and opening a new one. Defaults to env BRIMSTORE_VALUESFILESIZE or
+// and opening a new one. Defaults to env VALUESTORE_VALUESFILESIZE or
 // 4,294,967,295.
 func OptValuesFileSize(bytes int) func(*config) {
 	return func(cfg *config) {
@@ -376,7 +376,7 @@ func OptValuesFileSize(bytes int) func(*config) {
 }
 
 // OptValuesFileReaders indicates how many open file descriptors are allowed per
-// values file for reading. Defaults to env BRIMSTORE_VALUESFILEREADERS or the
+// values file for reading. Defaults to env VALUESTORE_VALUESFILEREADERS or the
 // configured number of cores.
 func OptValuesFileReaders(bytes int) func(*config) {
 	return func(cfg *config) {
@@ -385,7 +385,7 @@ func OptValuesFileReaders(bytes int) func(*config) {
 }
 
 // OptChecksumInterval indicates how many bytes are output to a file before a
-// 4-byte checksum is also output. Defaults to env BRIMSTORE_CHECKSUMINTERVAL
+// 4-byte checksum is also output. Defaults to env VALUESTORE_CHECKSUMINTERVAL
 // or 65532.
 func OptChecksumInterval(bytes int) func(*config) {
 	return func(cfg *config) {
@@ -598,16 +598,16 @@ const _GLH_OUT_BULK_SET_MSG_SIZE = 16 * 1024 * 1024
 // You can provide Opt* functions for optional configuration items, such as
 // OptCores:
 //
-//  vsWithDefaults := brimstore.NewValueStore()
-//  vsWithOptions := brimstore.NewValueStore(
-//      brimstore.OptCores(10),
-//      brimstore.OptPageSize(8388608),
+//  vsWithDefaults := valuestore.NewValueStore()
+//  vsWithOptions := valuestore.NewValueStore(
+//      valuestore.OptCores(10),
+//      valuestore.OptPageSize(8388608),
 //  )
-//  opts := brimstore.OptList()
+//  opts := valuestore.OptList()
 //  if commandLineOptionForCores {
-//      opts = append(opts, brimstore.OptCores(commandLineOptionValue))
+//      opts = append(opts, valuestore.OptCores(commandLineOptionValue))
 //  }
-//  vsWithOptionsBuiltUp := brimstore.NewValueStore(opts...)
+//  vsWithOptionsBuiltUp := valuestore.NewValueStore(opts...)
 func NewValueStore(opts ...func(*config)) *ValueStore {
 	cfg := resolveConfig(opts...)
 	vlm := cfg.vlm
@@ -1079,7 +1079,7 @@ func (vs *ValueStore) tocWriter() {
 	var btsB uint64
 	var writerB io.WriteCloser
 	var offsetB uint64
-	head := []byte("BRIMSTORE VALUETOC v0           ")
+	head := []byte("VALUESTORETOC v0                ")
 	binary.BigEndian.PutUint32(head[28:], uint32(vs.checksumInterval))
 	term := make([]byte, 16)
 	copy(term[12:], "TERM")
@@ -1255,7 +1255,7 @@ func (vs *ValueStore) recovery() {
 			} else {
 				i := 0
 				if first {
-					if !bytes.Equal(buf[:28], []byte("BRIMSTORE VALUETOC v0       ")) {
+					if !bytes.Equal(buf[:28], []byte("VALUESTORETOC v0            ")) {
 						vs.logError.Printf("bad header: %s\n", names[i])
 						break
 					}

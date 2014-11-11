@@ -1,4 +1,4 @@
-package brimstore
+package valuestore
 
 import (
 	"encoding/binary"
@@ -72,7 +72,7 @@ func createValuesFile(vs *ValueStore) *valuesFile {
 	vf.writeChan = make(chan *valuesFileWriteBuf, vs.cores)
 	vf.doneChan = make(chan struct{})
 	vf.buf = <-vf.freeChan
-	head := []byte("BRIMSTORE VALUE v0              ")
+	head := []byte("VALUESTORE v0                   ")
 	binary.BigEndian.PutUint32(head[28:], vs.checksumInterval)
 	vf.buf.offset = uint32(copy(vf.buf.buf, head))
 	atomic.StoreUint32(&vf.atOffset, vf.buf.offset)
