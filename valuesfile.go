@@ -64,12 +64,12 @@ func createValuesFile(vs *ValueStore) *valuesFile {
 		panic(err)
 	}
 	vf.writerFP = fp
-	vf.freeChan = make(chan *valuesFileWriteBuf, vs.cores)
-	for i := 0; i < vs.cores; i++ {
+	vf.freeChan = make(chan *valuesFileWriteBuf, vs.workers)
+	for i := 0; i < vs.workers; i++ {
 		vf.freeChan <- &valuesFileWriteBuf{buf: make([]byte, vs.checksumInterval+4)}
 	}
-	vf.checksumChan = make(chan *valuesFileWriteBuf, vs.cores)
-	vf.writeChan = make(chan *valuesFileWriteBuf, vs.cores)
+	vf.checksumChan = make(chan *valuesFileWriteBuf, vs.workers)
+	vf.writeChan = make(chan *valuesFileWriteBuf, vs.workers)
 	vf.doneChan = make(chan struct{})
 	vf.buf = <-vf.freeChan
 	head := []byte("VALUESTORE v0                   ")
@@ -77,7 +77,7 @@ func createValuesFile(vs *ValueStore) *valuesFile {
 	vf.buf.offset = uint32(copy(vf.buf.buf, head))
 	atomic.StoreUint32(&vf.atOffset, vf.buf.offset)
 	go vf.writer()
-	for i := 0; i < vs.cores; i++ {
+	for i := 0; i < vs.workers; i++ {
 		go vf.checksummer()
 	}
 	vf.readerFPs = make([]brimutil.ChecksummedReader, vs.valuesFileReaders)

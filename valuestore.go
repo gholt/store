@@ -52,7 +52,7 @@ type config struct {
 	path                    string
 	pathtoc                 string
 	vlm                     ValueLocMap
-	cores                   int
+	workers                 int
 	backgroundWorkers       int
 	backgroundInterval      int
 	maxValueSize            int
@@ -72,13 +72,13 @@ func resolveConfig(opts ...func(*config)) *config {
 	cfg := &config{}
 	cfg.path = os.Getenv("VALUESTORE_PATH")
 	cfg.pathtoc = os.Getenv("VALUESTORE_PATHTOC")
-	cfg.cores = runtime.GOMAXPROCS(0)
-	if env := os.Getenv("VALUESTORE_CORES"); env != "" {
+	cfg.workers = runtime.GOMAXPROCS(0)
+	if env := os.Getenv("VALUESTORE_WORKERS"); env != "" {
 		if val, err := strconv.Atoi(env); err == nil {
-			cfg.cores = val
+			cfg.workers = val
 		}
 	}
-	cfg.backgroundWorkers = cfg.cores
+	cfg.backgroundWorkers = cfg.workers
 	if env := os.Getenv("VALUESTORE_BACKGROUNDWORKERS"); env != "" {
 		if val, err := strconv.Atoi(env); err == nil {
 			cfg.backgroundWorkers = val
@@ -120,7 +120,7 @@ func resolveConfig(opts ...func(*config)) *config {
 			cfg.valuesFileSize = val
 		}
 	}
-	cfg.valuesFileReaders = cfg.cores
+	cfg.valuesFileReaders = cfg.workers
 	if env := os.Getenv("VALUESTORE_VALUESFILEREADERS"); env != "" {
 		if val, err := strconv.Atoi(env); err == nil {
 			cfg.valuesFileReaders = val
@@ -162,8 +162,8 @@ func resolveConfig(opts ...func(*config)) *config {
 	if cfg.pathtoc == "" {
 		cfg.pathtoc = cfg.path
 	}
-	if cfg.cores < 1 {
-		cfg.cores = 1
+	if cfg.workers < 1 {
+		cfg.workers = 1
 	}
 	if cfg.backgroundWorkers < 1 {
 		cfg.backgroundWorkers = 1
@@ -297,20 +297,18 @@ func OptValueLocMap(vlm ValueLocMap) func(*config) {
 	}
 }
 
-// OptCores indicates how many cores may be used for various tasks (processing
-// incoming writes and batching them to disk, background tasks, etc.). This
-// won't exactly limit the number of cores in use (not an easy thing to do in
-// Go except globally with GOMAXPROCS) but it is more of a relative resource
-// usage level. Defaults to env VALUESTORE_CORES, or GOMAXPROCS.
-func OptCores(cores int) func(*config) {
+// OptWorkers indicates how many goroutines may be used for various tasks
+// (processing incoming writes and batching them to disk, background tasks,
+// etc.). Defaults to env VALUESTORE_WORKERS, or GOMAXPROCS.
+func OptWorkers(count int) func(*config) {
 	return func(cfg *config) {
-		cfg.cores = cores
+		cfg.workers = count
 	}
 }
 
 // OptBackgroundWorkers indicates how many goroutines may be used for
 // background tasks. Defaults to env VALUESTORE_BACKGROUNDWORKERS or
-// VALUESTORE_CORES.
+// VALUESTORE_WORKERS.
 func OptBackgroundWorkers(workers int) func(*config) {
 	return func(cfg *config) {
 		cfg.backgroundWorkers = workers
@@ -375,9 +373,9 @@ func OptValuesFileSize(bytes int) func(*config) {
 	}
 }
 
-// OptValuesFileReaders indicates how many open file descriptors are allowed per
-// values file for reading. Defaults to env VALUESTORE_VALUESFILEREADERS or the
-// configured number of cores.
+// OptValuesFileReaders indicates how many open file descriptors are allowed
+// per values file for reading. Defaults to env VALUESTORE_VALUESFILEREADERS or
+// the configured number of workers.
 func OptValuesFileReaders(bytes int) func(*config) {
 	return func(cfg *config) {
 		cfg.valuesFileReaders = bytes
@@ -491,7 +489,7 @@ type ValueStore struct {
 	path                      string
 	pathtoc                   string
 	vlm                       ValueLocMap
-	cores                     int
+	workers                   int
 	backgroundWorkers         int
 	backgroundInterval        int
 	maxValueSize              uint32
@@ -555,7 +553,7 @@ type valueStoreStats struct {
 	maxValueLocBlockID      uint64
 	path                    string
 	pathtoc                 string
-	cores                   int
+	workers                 int
 	backgroundWorkers       int
 	backgroundInterval      int
 	maxValueSize            uint32
@@ -596,16 +594,16 @@ const _GLH_OUT_BULK_SET_MSG_SIZE = 16 * 1024 * 1024
 // flushed.
 //
 // You can provide Opt* functions for optional configuration items, such as
-// OptCores:
+// OptWorkers:
 //
 //  vsWithDefaults := valuestore.NewValueStore()
 //  vsWithOptions := valuestore.NewValueStore(
-//      valuestore.OptCores(10),
+//      valuestore.OptWorkers(10),
 //      valuestore.OptPageSize(8388608),
 //  )
 //  opts := valuestore.OptList()
-//  if commandLineOptionForCores {
-//      opts = append(opts, valuestore.OptCores(commandLineOptionValue))
+//  if commandLineOptionForWorkers {
+//      opts = append(opts, valuestore.OptWorkers(commandLineOptionValue))
 //  }
 //  vsWithOptionsBuiltUp := valuestore.NewValueStore(opts...)
 func NewValueStore(opts ...func(*config)) *ValueStore {
@@ -625,7 +623,7 @@ func NewValueStore(opts ...func(*config)) *ValueStore {
 		path:                    cfg.path,
 		pathtoc:                 cfg.pathtoc,
 		vlm:                     vlm,
-		cores:                   cfg.cores,
+		workers:                 cfg.workers,
 		backgroundWorkers:       cfg.backgroundWorkers,
 		backgroundInterval:      cfg.backgroundInterval,
 		maxValueSize:            uint32(cfg.maxValueSize),
@@ -641,16 +639,16 @@ func NewValueStore(opts ...func(*config)) *ValueStore {
 		replicationIgnoreRecent: uint64(cfg.replicationIgnoreRecent) * uint64(time.Second),
 		backgroundIteration:     uint16(cfg.rand.Uint32()),
 	}
-	vs.freeableVMChans = make([]chan *valuesMem, vs.cores)
+	vs.freeableVMChans = make([]chan *valuesMem, vs.workers)
 	for i := 0; i < cap(vs.freeableVMChans); i++ {
-		vs.freeableVMChans[i] = make(chan *valuesMem, vs.cores)
+		vs.freeableVMChans[i] = make(chan *valuesMem, vs.workers)
 	}
-	vs.freeVMChan = make(chan *valuesMem, vs.cores*vs.writePagesPerCore)
-	vs.freeVWRChans = make([]chan *valueWriteReq, vs.cores)
-	vs.pendingVWRChans = make([]chan *valueWriteReq, vs.cores)
-	vs.vfVMChan = make(chan *valuesMem, vs.cores)
-	vs.freeTOCBlockChan = make(chan []byte, vs.cores*2)
-	vs.pendingTOCBlockChan = make(chan []byte, vs.cores)
+	vs.freeVMChan = make(chan *valuesMem, vs.workers*vs.writePagesPerCore)
+	vs.freeVWRChans = make([]chan *valueWriteReq, vs.workers)
+	vs.pendingVWRChans = make([]chan *valueWriteReq, vs.workers)
+	vs.vfVMChan = make(chan *valuesMem, vs.workers)
+	vs.freeTOCBlockChan = make(chan []byte, vs.workers*2)
+	vs.pendingTOCBlockChan = make(chan []byte, vs.workers)
 	vs.flushedChan = make(chan struct{}, 1)
 	for i := 0; i < cap(vs.freeVMChan); i++ {
 		vm := &valuesMem{
@@ -662,8 +660,8 @@ func NewValueStore(opts ...func(*config)) *ValueStore {
 		vs.freeVMChan <- vm
 	}
 	for i := 0; i < len(vs.freeVWRChans); i++ {
-		vs.freeVWRChans[i] = make(chan *valueWriteReq, vs.cores*2)
-		for j := 0; j < vs.cores*2; j++ {
+		vs.freeVWRChans[i] = make(chan *valueWriteReq, vs.workers*2)
+		for j := 0; j < vs.workers*2; j++ {
 			vs.freeVWRChans[i] <- &valueWriteReq{errChan: make(chan error, 1)}
 		}
 	}
@@ -836,7 +834,7 @@ func (vs *ValueStore) Delete(keyA uint64, keyB uint64, timestamp uint64) (uint64
 }
 
 // GatherStats returns overall information about the state of the ValueStore.
-func (vs *ValueStore) GatherStats(debug bool) (count uint64, length uint64, debugInfo fmt.Stringer) {
+func (vs *ValueStore) GatherStats(debug bool) (uint64, uint64, fmt.Stringer) {
 	stats := &valueStoreStats{}
 	if debug {
 		stats.debug = debug
@@ -865,7 +863,7 @@ func (vs *ValueStore) GatherStats(debug bool) (count uint64, length uint64, debu
 		stats.maxValueLocBlockID = atomic.LoadUint64(&vs.valueLocBlockIDer)
 		stats.path = vs.path
 		stats.pathtoc = vs.pathtoc
-		stats.cores = vs.cores
+		stats.workers = vs.workers
 		stats.backgroundWorkers = vs.backgroundWorkers
 		stats.backgroundInterval = vs.backgroundInterval
 		stats.maxValueSize = vs.maxValueSize
@@ -1153,7 +1151,7 @@ func (vs *ValueStore) tocWriter() {
 				if err != nil {
 					panic(err)
 				}
-				writerA = brimutil.NewMultiCoreChecksummedWriter(fp, int(vs.checksumInterval), murmur3.New32, vs.cores)
+				writerA = brimutil.NewMultiCoreChecksummedWriter(fp, int(vs.checksumInterval), murmur3.New32, vs.workers)
 				if _, err := writerA.Write(head); err != nil {
 					panic(err)
 				}
@@ -1188,7 +1186,7 @@ func (vs *ValueStore) recovery() {
 		offset    uint32
 		length    uint32
 	}
-	pendingChan := make(chan []writeReq, vs.cores)
+	pendingChan := make(chan []writeReq, vs.workers)
 	freeChan := make(chan []writeReq, cap(pendingChan)*2)
 	for i := 0; i < cap(freeChan); i++ {
 		freeChan <- make([]writeReq, 0, 65536)
@@ -1422,7 +1420,7 @@ func (stats *valueStoreStats) String() string {
 			[]string{"maxValueLocBlockID", fmt.Sprintf("%d", stats.maxValueLocBlockID)},
 			[]string{"path", stats.path},
 			[]string{"pathtoc", stats.pathtoc},
-			[]string{"cores", fmt.Sprintf("%d", stats.cores)},
+			[]string{"workers", fmt.Sprintf("%d", stats.workers)},
 			[]string{"backgroundWorkers", fmt.Sprintf("%d", stats.backgroundWorkers)},
 			[]string{"backgroundInterval", fmt.Sprintf("%d", stats.backgroundInterval)},
 			[]string{"maxValueSize", fmt.Sprintf("%d", stats.maxValueSize)},
