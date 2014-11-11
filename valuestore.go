@@ -516,6 +516,7 @@ type valueStoreStats struct {
 	valuesFileReaders       int
 	checksumInterval        uint32
 	replicationIgnoreRecent int
+	msgSendDrops            uint32
 	vlmCount                uint64
 	vlmLength               uint64
 	vlmDebugInfo            fmt.Stringer
@@ -823,6 +824,9 @@ func (vs *ValueStore) GatherStats(debug bool) (count uint64, length uint64, debu
 		stats.valuesFileReaders = vs.valuesFileReaders
 		stats.checksumInterval = vs.checksumInterval
 		stats.replicationIgnoreRecent = int(vs.replicationIgnoreRecent / uint64(time.Second))
+		if vs.msgConn != nil {
+			stats.msgSendDrops = vs.msgConn.sendDrops
+		}
 		stats.vlmCount, stats.vlmLength, stats.vlmDebugInfo = vs.vlm.GatherStats(true)
 	} else {
 		stats.vlmCount, stats.vlmLength, stats.vlmDebugInfo = vs.vlm.GatherStats(false)
@@ -1373,6 +1377,7 @@ func (stats *valueStoreStats) String() string {
 			[]string{"valuesFileReaders", fmt.Sprintf("%d", stats.valuesFileReaders)},
 			[]string{"checksumInterval", fmt.Sprintf("%d", stats.checksumInterval)},
 			[]string{"replicationIgnoreRecent", fmt.Sprintf("%d", stats.replicationIgnoreRecent)},
+			[]string{"msgSendDrops", fmt.Sprintf("%d", stats.msgSendDrops)},
 			[]string{"vlmCount", fmt.Sprintf("%d", stats.vlmCount)},
 			[]string{"vlmLength", fmt.Sprintf("%d", stats.vlmLength)},
 			[]string{"vlmDebugInfo", stats.vlmDebugInfo.String()},

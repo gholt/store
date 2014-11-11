@@ -6,6 +6,8 @@ import (
 	"net"
 	"os"
 	"sync"
+	"sync/atomic"
+	"time"
 )
 
 type FlushWriter interface {
@@ -63,6 +65,7 @@ type MsgConn struct {
 	lengthBytes     int
 	writeChan       chan msg
 	writingDoneChan chan struct{}
+	sendDrops       uint32
 }
 
 func NewMsgConn(c net.Conn) *MsgConn {
@@ -84,8 +87,16 @@ func (mc *MsgConn) start() {
 	go mc.writing()
 }
 
-func (mc *MsgConn) send(m msg) {
-	mc.writeChan <- m
+const _GLH_SEND_MSG_TIMEOUT = 1
+
+func (mc *MsgConn) send(m msg) bool {
+	select {
+	case mc.writeChan <- m:
+		return true
+	case <-time.After(_GLH_SEND_MSG_TIMEOUT * time.Second):
+		atomic.AddUint32(&mc.sendDrops, 1)
+		return false
+	}
 }
 
 func (mc *MsgConn) reading() {
