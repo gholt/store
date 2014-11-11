@@ -7,9 +7,19 @@
 // recently written data being buffered first and batched to disk later.
 //
 // This has been written with SSDs in mind, but spinning drives should work as
-// well, though storing valuestoc files (Table Of Contents, key location
+// well; though storing valuestoc files (Table Of Contents, key location
 // information) on a separate disk from values files is recommended in that
 // case.
+//
+// Each key is two 64bit values, known as keyA and keyB uint64 values. These
+// are usually created by a hashing function of the key name, but that duty is
+// left outside this package.
+//
+// Each modification is marked with a uint64 timestamp that is equivalent to
+// uint64(time.Now().UnixNano()). However, the last bit is used to indicate
+// deletion versus an actual value. This is important to allow deletions of
+// specific values at any time, without having the possibility of deleting any
+// newer values (e.g. expiring values).
 //
 // TODO: List probably not comprehensive:
 //  Replication
@@ -58,7 +68,7 @@ type config struct {
 	maxValueSize            int
 	pageSize                int
 	minValueAlloc           int
-	writePagesPerCore       int
+	writePagesPerWorker     int
 	tombstoneAge            int
 	valuesFileSize          int
 	valuesFileReaders       int
@@ -102,10 +112,10 @@ func resolveConfig(opts ...func(*config)) *config {
 			cfg.pageSize = val
 		}
 	}
-	cfg.writePagesPerCore = 3
-	if env := os.Getenv("VALUESTORE_WRITEPAGESPERCORE"); env != "" {
+	cfg.writePagesPerWorker = 3
+	if env := os.Getenv("VALUESTORE_WRITEPAGESPERWORKER"); env != "" {
 		if val, err := strconv.Atoi(env); err == nil {
-			cfg.writePagesPerCore = val
+			cfg.writePagesPerWorker = val
 		}
 	}
 	cfg.tombstoneAge = 4 * 60 * 60
@@ -196,8 +206,8 @@ func resolveConfig(opts ...func(*config)) *config {
 	// checksumInterval in size, again so that each page written will at least
 	// flush the previous page's data.
 	cfg.minValueAlloc = cfg.checksumInterval/(cfg.pageSize/32+1) + 1
-	if cfg.writePagesPerCore < 2 {
-		cfg.writePagesPerCore = 2
+	if cfg.writePagesPerWorker < 2 {
+		cfg.writePagesPerWorker = 2
 	}
 	if cfg.tombstoneAge < 0 {
 		cfg.tombstoneAge = 0
@@ -255,8 +265,8 @@ func OptLogInfo(l *log.Logger) func(*config) {
 	}
 }
 
-// OptLogDebug sets the log.Logger to use for debug messages. Defaults logging
-// to os.Stderr.
+// OptLogDebug sets the log.Logger to use for debug messages. Defaults not
+// logging debug messages.
 func OptLogDebug(l *log.Logger) func(*config) {
 	return func(cfg *config) {
 		cfg.logDebug = l
@@ -290,7 +300,7 @@ func OptPathTOC(dirpath string) func(*config) {
 
 // OptValueLocMap allows overriding the default ValueLocMap, an interface used
 // by ValueStore for tracking the mappings from keys to the locations of their
-// values.
+// values. Defaults to github.com/gholt/valuelocmap.NewValueLocMap().
 func OptValueLocMap(vlm ValueLocMap) func(*config) {
 	return func(cfg *config) {
 		cfg.vlm = vlm
@@ -299,7 +309,7 @@ func OptValueLocMap(vlm ValueLocMap) func(*config) {
 
 // OptWorkers indicates how many goroutines may be used for various tasks
 // (processing incoming writes and batching them to disk, background tasks,
-// etc.). Defaults to env VALUESTORE_WORKERS, or GOMAXPROCS.
+// etc.). Defaults to env VALUESTORE_WORKERS or GOMAXPROCS.
 func OptWorkers(count int) func(*config) {
 	return func(cfg *config) {
 		cfg.workers = count
@@ -346,12 +356,12 @@ func OptPageSize(bytes int) func(*config) {
 	}
 }
 
-// OptWritePagesPerCore controls how many pages are created per core for
-// caching recently written values. Defaults to env VALUESTORE_WRITEPAGESPERCORE
-// or 3.
-func OptWritePagesPerCore(number int) func(*config) {
+// OptWritePagesPerWorker controls how many pages are created per worker for
+// caching recently written values. Defaults to env
+// VALUESTORE_WRITEPAGESPERWORKER or 3.
+func OptWritePagesPerWorker(number int) func(*config) {
 	return func(cfg *config) {
-		cfg.writePagesPerCore = number
+		cfg.writePagesPerWorker = number
 	}
 }
 
@@ -391,18 +401,23 @@ func OptChecksumInterval(bytes int) func(*config) {
 	}
 }
 
+// TODO
 func OptRing(r Ring) func(*config) {
 	return func(cfg *config) {
 		cfg.ring = r
 	}
 }
 
+// TODO
 func OptMsgConn(mc MsgConn) func(*config) {
 	return func(cfg *config) {
 		cfg.msgConn = mc
 	}
 }
 
+// OptReplicationIgnoreRecent indicates how many seconds old a value should be
+// before it is included in replication processing. Defaults to env
+// VALUESTORE_REPLICATIONIGNORERECENT or 60.
 func OptReplicationIgnoreRecent(seconds int) func(*config) {
 	return func(cfg *config) {
 		cfg.replicationIgnoreRecent = seconds
@@ -417,7 +432,7 @@ var ErrDisabled error = errors.New("disabled")
 // specify your own ValueLocMap implemention instead of the default.
 //
 // For documentation of each of these functions, see the default implementation
-// in valuelocmap.ValueLocMap.
+// in github.com/gholt/valuelocmap.
 type ValueLocMap interface {
 	Get(keyA uint64, keyB uint64) (timestamp uint64, blockID uint32, offset uint32, length uint32)
 	Set(keyA uint64, keyB uint64, timestamp uint64, blockID uint32, offset uint32, length uint32, evenIfSameTimestamp bool) (previousTimestamp uint64)
@@ -427,6 +442,7 @@ type ValueLocMap interface {
 	ScanCallback(start uint64, stop uint64, callback func(keyA uint64, keyB uint64, timestamp uint64, length uint32))
 }
 
+// TODO
 type Ring interface {
 	ID() uint64
 	PartitionPower() uint16
@@ -434,6 +450,7 @@ type Ring interface {
 	Responsible(partition uint32) bool
 }
 
+// TODO
 type MsgConn interface {
 	SetHandler(t MsgType, h MsgUnmarshaller)
 	Start()
@@ -441,6 +458,7 @@ type MsgConn interface {
 	SendToOtherReplicas(ringID uint64, partition uint32, msg Msg) bool
 }
 
+// TODO
 type Msg interface {
 	MsgType() MsgType
 	MsgLength() uint64
@@ -448,8 +466,10 @@ type Msg interface {
 	Done()
 }
 
+// TODO
 type MsgType uint64
 
+// TODO
 type MsgUnmarshaller func(io.Reader, uint64) (uint64, error)
 
 const (
@@ -495,7 +515,7 @@ type ValueStore struct {
 	maxValueSize              uint32
 	pageSize                  uint32
 	minValueAlloc             int
-	writePagesPerCore         int
+	writePagesPerWorker       int
 	tombstoneAge              uint64
 	valuesFileSize            uint32
 	valuesFileReaders         int
@@ -559,7 +579,7 @@ type valueStoreStats struct {
 	maxValueSize            uint32
 	pageSize                uint32
 	minValueAlloc           int
-	writePagesPerCore       int
+	writePagesPerWorker     int
 	tombstoneAge            int
 	valuesFileSize          uint32
 	valuesFileReaders       int
@@ -629,7 +649,7 @@ func NewValueStore(opts ...func(*config)) *ValueStore {
 		maxValueSize:            uint32(cfg.maxValueSize),
 		pageSize:                uint32(cfg.pageSize),
 		minValueAlloc:           cfg.minValueAlloc,
-		writePagesPerCore:       cfg.writePagesPerCore,
+		writePagesPerWorker:     cfg.writePagesPerWorker,
 		tombstoneAge:            uint64(cfg.tombstoneAge) * uint64(time.Second),
 		valuesFileSize:          uint32(cfg.valuesFileSize),
 		valuesFileReaders:       cfg.valuesFileReaders,
@@ -643,7 +663,7 @@ func NewValueStore(opts ...func(*config)) *ValueStore {
 	for i := 0; i < cap(vs.freeableVMChans); i++ {
 		vs.freeableVMChans[i] = make(chan *valuesMem, vs.workers)
 	}
-	vs.freeVMChan = make(chan *valuesMem, vs.workers*vs.writePagesPerCore)
+	vs.freeVMChan = make(chan *valuesMem, vs.workers*vs.writePagesPerWorker)
 	vs.freeVWRChans = make([]chan *valueWriteReq, vs.workers)
 	vs.pendingVWRChans = make([]chan *valueWriteReq, vs.workers)
 	vs.vfVMChan = make(chan *valuesMem, vs.workers)
@@ -731,18 +751,23 @@ func (vs *ValueStore) MaxValueSize() uint32 {
 	return vs.maxValueSize
 }
 
+// DisableWrites will cause any incoming Write or Delete requests to respond
+// with ErrDisabled until EnableWrites is called.
 func (vs *ValueStore) DisableWrites() {
 	for _, c := range vs.pendingVWRChans {
 		c <- disableValueWriteReq
 	}
 }
 
+// EnableWrites will resume accepting incoming Write and Delete requests.
 func (vs *ValueStore) EnableWrites() {
 	for _, c := range vs.pendingVWRChans {
 		c <- enableValueWriteReq
 	}
 }
 
+// DisableBackgroundTasks will abort any running background tasks and suspend
+// relaunching them until EnableBackgroundTasks is called.
 func (vs *ValueStore) DisableBackgroundTasks() {
 	atomic.StoreUint32(&vs.backgroundAbort, 1)
 	c := make(chan struct{}, 1)
@@ -753,6 +778,8 @@ func (vs *ValueStore) DisableBackgroundTasks() {
 	<-c
 }
 
+// EnableBackgroundTasks will resume launching background tasks at configured
+// intervals.
 func (vs *ValueStore) EnableBackgroundTasks() {
 	c := make(chan struct{}, 1)
 	vs.backgroundNotifyChan <- &backgroundNotification{
@@ -762,6 +789,8 @@ func (vs *ValueStore) EnableBackgroundTasks() {
 	<-c
 }
 
+// Flush will ensure buffered data (at the time of the call) is written to
+// disk.
 func (vs *ValueStore) Flush() {
 	for _, c := range vs.pendingVWRChans {
 		c <- flushValueWriteReq
@@ -869,7 +898,7 @@ func (vs *ValueStore) GatherStats(debug bool) (uint64, uint64, fmt.Stringer) {
 		stats.maxValueSize = vs.maxValueSize
 		stats.pageSize = vs.pageSize
 		stats.minValueAlloc = vs.minValueAlloc
-		stats.writePagesPerCore = vs.writePagesPerCore
+		stats.writePagesPerWorker = vs.writePagesPerWorker
 		stats.tombstoneAge = int(vs.tombstoneAge / uint64(time.Second))
 		stats.valuesFileSize = vs.valuesFileSize
 		stats.valuesFileReaders = vs.valuesFileReaders
@@ -1426,7 +1455,7 @@ func (stats *valueStoreStats) String() string {
 			[]string{"maxValueSize", fmt.Sprintf("%d", stats.maxValueSize)},
 			[]string{"pageSize", fmt.Sprintf("%d", stats.pageSize)},
 			[]string{"minValueAlloc", fmt.Sprintf("%d", stats.minValueAlloc)},
-			[]string{"writePagesPerCore", fmt.Sprintf("%d", stats.writePagesPerCore)},
+			[]string{"writePagesPerWorker", fmt.Sprintf("%d", stats.writePagesPerWorker)},
 			[]string{"tombstoneAge", fmt.Sprintf("%d", stats.tombstoneAge)},
 			[]string{"valuesFileSize", fmt.Sprintf("%d", stats.valuesFileSize)},
 			[]string{"valuesFileReaders", fmt.Sprintf("%d", stats.valuesFileReaders)},
