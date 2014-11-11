@@ -104,7 +104,6 @@ func main() {
 		vs2opts = append(vs2opts, brimstore.OptLogError(log.New(os.Stderr, "ReplicatedValueStore ", log.LstdFlags)))
 		vs2opts = append(vs2opts, brimstore.OptLogWarning(log.New(os.Stderr, "ReplicatedValueStore ", log.LstdFlags)))
 		vs2opts = append(vs2opts, brimstore.OptLogInfo(log.New(os.Stdout, "ReplicatedValueStore ", log.LstdFlags)))
-		vs2opts = append(vs2opts, brimstore.OptLogDebug(log.New(os.Stderr, "ReplicatedValueStore ", log.LstdFlags)))
 		wg.Add(1)
 		go func() {
 			opts.rvs = brimstore.NewValueStore(vs2opts...)

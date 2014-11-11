@@ -151,9 +151,6 @@ func resolveConfig(opts ...func(*config)) *config {
 	if cfg.logInfo == nil {
 		cfg.logInfo = log.New(os.Stdout, "ValueStore ", log.LstdFlags)
 	}
-	if cfg.logDebug == nil {
-		cfg.logDebug = log.New(os.Stderr, "ValueStore ", log.LstdFlags)
-	}
 	if cfg.path == "" {
 		cfg.path = "."
 	}
@@ -1503,7 +1500,9 @@ func (vs *ValueStore) background() {
 		}(g)
 	}
 	wg.Wait()
-	vs.logDebug.Printf("background tasks took %s", time.Now().Sub(begin))
+	if vs.logDebug != nil {
+		vs.logDebug.Printf("background tasks took %s", time.Now().Sub(begin))
+	}
 }
 
 const pullReplicationMsgHeaderBytes = 36
