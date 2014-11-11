@@ -99,8 +99,10 @@ func main() {
 	if opts.Replicate {
 		conn, conn2 := net.Pipe()
 		vs2opts := brimstore.OptList(vsopts...)
+		vsopts = append(vsopts, brimstore.OptRing(&ring{1}))
+		vs2opts = append(vs2opts, brimstore.OptRing(&ring{2}))
 		vs2opts = append(vs2opts, brimstore.OptPath("replicated"))
-		vs2opts = append(vs2opts, brimstore.OptMsgConn(brimstore.NewPipeMsgConn(conn2)))
+		vs2opts = append(vs2opts, brimstore.OptMsgConn(NewPipeMsgConn(conn2)))
 		vs2opts = append(vs2opts, brimstore.OptLogCritical(log.New(os.Stderr, "ReplicatedValueStore ", log.LstdFlags)))
 		vs2opts = append(vs2opts, brimstore.OptLogError(log.New(os.Stderr, "ReplicatedValueStore ", log.LstdFlags)))
 		vs2opts = append(vs2opts, brimstore.OptLogWarning(log.New(os.Stderr, "ReplicatedValueStore ", log.LstdFlags)))
@@ -113,7 +115,7 @@ func main() {
 			opts.rvs = brimstore.NewValueStore(vs2opts...)
 			wg.Done()
 		}()
-		vsopts = append(vsopts, brimstore.OptMsgConn(brimstore.NewPipeMsgConn(conn)))
+		vsopts = append(vsopts, brimstore.OptMsgConn(NewPipeMsgConn(conn)))
 	}
 	if opts.Debug {
 		vsopts = append(vsopts, brimstore.OptLogDebug(log.New(os.Stderr, "ValueStore ", log.LstdFlags)))

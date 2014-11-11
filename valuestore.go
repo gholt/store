@@ -432,6 +432,7 @@ type ValueLocMap interface {
 type Ring interface {
 	ID() uint64
 	PartitionPower() uint16
+	NodeID() uint64
 	Responsible(partition uint32) bool
 }
 
@@ -441,6 +442,22 @@ type MsgConn interface {
 	SendToNode(nodeID uint64, msg Msg) bool
 	SendToOtherReplicas(ringID uint64, partition uint32, msg Msg) bool
 }
+
+type Msg interface {
+	MsgType() MsgType
+	MsgLength() uint64
+	WriteContent(io.Writer) (uint64, error)
+	Done()
+}
+
+type MsgType uint64
+
+type MsgUnmarshaller func(io.Reader, uint64) (uint64, error)
+
+const (
+	_MSG_PULL_REPLICATION MsgType = iota
+	_MSG_BULK_SET
+)
 
 type pullReplicationMsg struct {
 	vs     *ValueStore
@@ -1350,6 +1367,7 @@ func (vs *ValueStore) inPullReplication() {
 				l -= 28 + int64(length)
 			}
 		})
+		nodeID := prm.nodeID()
 		vs.freeInPullReplicationChan <- prm
 		if len(k) > 0 {
 			bsm := vs.newOutBulkSetMsg()
@@ -1369,7 +1387,7 @@ func (vs *ValueStore) inPullReplication() {
 				}
 			}
 			// TODO
-			vs.msgConn.SendToNode(0, bsm)
+			vs.msgConn.SendToNode(nodeID, bsm)
 		}
 	}
 }
@@ -1484,22 +1502,25 @@ const _GLH_BLOOM_FILTER_N = 1000000
 const _GLH_BLOOM_FILTER_P = 0.001
 
 func (vs *ValueStore) background() {
-	if vs.ring == nil {
-		return
-	}
+	begin := time.Now()
 	if vs.backgroundIteration == math.MaxUint16 {
 		vs.backgroundIteration = 0
 	} else {
 		vs.backgroundIteration++
 	}
-	iteration := vs.backgroundIteration
-	begin := time.Now()
+	vs.vlm.DiscardTombstones(uint64(time.Now().UnixNano()) - vs.tombstoneAge)
+	if vs.ring != nil {
+		vs.backgroundPullReplication()
+	}
+	if vs.logDebug != nil {
+		vs.logDebug.Printf("background tasks took %s", time.Now().Sub(begin))
+	}
+}
+
+func (vs *ValueStore) backgroundPullReplication() {
 	ringID := vs.ring.ID()
 	partitionPower := vs.ring.PartitionPower()
 	partitions := uint32(1) << partitionPower
-	vs.vlm.DiscardTombstones(uint64(time.Now().UnixNano()) - vs.tombstoneAge)
-	wg := &sync.WaitGroup{}
-	wg.Add(vs.backgroundWorkers)
 	for len(vs.ktbfs) < vs.backgroundWorkers {
 		vs.ktbfs = append(vs.ktbfs, newKTBloomFilter(_GLH_BLOOM_FILTER_N, _GLH_BLOOM_FILTER_P, 0))
 	}
@@ -1514,7 +1535,7 @@ func (vs *ValueStore) background() {
 		substart := start
 		substop := start + (pullSize - 1)
 		for {
-			ktbf.reset(iteration)
+			ktbf.reset(vs.backgroundIteration)
 			vs.vlm.ScanCallback(substart, substop, func(keyA uint64, keyB uint64, timestamp uint64, length uint32) {
 				if timestamp < cutoff {
 					ktbf.add(keyA, keyB, timestamp)
@@ -1532,6 +1553,8 @@ func (vs *ValueStore) background() {
 		}
 	}
 	sp := uint32(vs.rand.Intn(int(partitions)))
+	wg := &sync.WaitGroup{}
+	wg.Add(vs.backgroundWorkers)
 	for g := 0; g < vs.backgroundWorkers; g++ {
 		go func(g uint32) {
 			ktbf := vs.ktbfs[g]
@@ -1555,12 +1578,9 @@ func (vs *ValueStore) background() {
 		}(uint32(g))
 	}
 	wg.Wait()
-	if vs.logDebug != nil {
-		vs.logDebug.Printf("background tasks took %s", time.Now().Sub(begin))
-	}
 }
 
-const pullReplicationMsgHeaderBytes = 36
+const pullReplicationMsgHeaderBytes = 44
 const _GLH_IN_PULL_REPLICATION_MSG_TIMEOUT = 300
 
 var toss []byte = make([]byte, 65536)
@@ -1611,11 +1631,12 @@ func (vs *ValueStore) newInPullReplicationMsg(r io.Reader, l uint64) (uint64, er
 
 func (vs *ValueStore) newOutPullReplicationMsg(ringID uint64, partition uint32, timestampCutoff uint64, rangeStart uint64, rangeStop uint64, ktbf *ktBloomFilter) *pullReplicationMsg {
 	prm := <-vs.outPullReplicationChan
-	binary.BigEndian.PutUint64(prm.header, ringID)
-	binary.BigEndian.PutUint32(prm.header[8:], partition)
-	binary.BigEndian.PutUint64(prm.header[12:], timestampCutoff)
-	binary.BigEndian.PutUint64(prm.header[20:], rangeStart)
-	binary.BigEndian.PutUint64(prm.header[28:], rangeStop)
+	binary.BigEndian.PutUint64(prm.header, vs.ring.NodeID())
+	binary.BigEndian.PutUint64(prm.header[8:], ringID)
+	binary.BigEndian.PutUint32(prm.header[16:], partition)
+	binary.BigEndian.PutUint64(prm.header[20:], timestampCutoff)
+	binary.BigEndian.PutUint64(prm.header[28:], rangeStart)
+	binary.BigEndian.PutUint64(prm.header[36:], rangeStop)
 	ktbf.toMsg(prm, pullReplicationMsgHeaderBytes)
 	return prm
 }
@@ -1628,24 +1649,28 @@ func (prm *pullReplicationMsg) MsgLength() uint64 {
 	return uint64(len(prm.header)) + uint64(len(prm.body))
 }
 
-func (prm *pullReplicationMsg) ringID() uint64 {
+func (prm *pullReplicationMsg) nodeID() uint64 {
 	return binary.BigEndian.Uint64(prm.header)
 }
 
+func (prm *pullReplicationMsg) ringID() uint64 {
+	return binary.BigEndian.Uint64(prm.header[8:])
+}
+
 func (prm *pullReplicationMsg) partition() uint32 {
-	return binary.BigEndian.Uint32(prm.header[8:])
+	return binary.BigEndian.Uint32(prm.header[16:])
 }
 
 func (prm *pullReplicationMsg) timestampCutoff() uint64 {
-	return binary.BigEndian.Uint64(prm.header[12:])
-}
-
-func (prm *pullReplicationMsg) rangeStart() uint64 {
 	return binary.BigEndian.Uint64(prm.header[20:])
 }
 
-func (prm *pullReplicationMsg) rangeStop() uint64 {
+func (prm *pullReplicationMsg) rangeStart() uint64 {
 	return binary.BigEndian.Uint64(prm.header[28:])
+}
+
+func (prm *pullReplicationMsg) rangeStop() uint64 {
+	return binary.BigEndian.Uint64(prm.header[36:])
 }
 
 func (prm *pullReplicationMsg) ktBloomFilter() *ktBloomFilter {

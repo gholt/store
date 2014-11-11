@@ -1,4 +1,4 @@
-package brimstore
+package main
 
 import (
 	"io"
@@ -8,6 +8,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/gholt/brimstore"
 )
 
 type FlushWriter interface {
@@ -15,25 +17,16 @@ type FlushWriter interface {
 	Flush() error
 }
 
-type MsgType uint64
-
-const (
-	_MSG_PULL_REPLICATION MsgType = iota
-	_MSG_BULK_SET
-)
-
-type MsgUnmarshaller func(io.Reader, uint64) (uint64, error)
-
 type msgMap struct {
 	lock    sync.RWMutex
-	mapping map[MsgType]MsgUnmarshaller
+	mapping map[brimstore.MsgType]brimstore.MsgUnmarshaller
 }
 
 func newMsgMap() *msgMap {
-	return &msgMap{mapping: make(map[MsgType]MsgUnmarshaller)}
+	return &msgMap{mapping: make(map[brimstore.MsgType]brimstore.MsgUnmarshaller)}
 }
 
-func (mm *msgMap) set(t MsgType, f MsgUnmarshaller) MsgUnmarshaller {
+func (mm *msgMap) set(t brimstore.MsgType, f brimstore.MsgUnmarshaller) brimstore.MsgUnmarshaller {
 	mm.lock.Lock()
 	p := mm.mapping[t]
 	mm.mapping[t] = f
@@ -41,18 +34,11 @@ func (mm *msgMap) set(t MsgType, f MsgUnmarshaller) MsgUnmarshaller {
 	return p
 }
 
-func (mm *msgMap) get(t MsgType) MsgUnmarshaller {
+func (mm *msgMap) get(t brimstore.MsgType) brimstore.MsgUnmarshaller {
 	mm.lock.RLock()
 	f := mm.mapping[t]
 	mm.lock.RUnlock()
 	return f
-}
-
-type Msg interface {
-	MsgType() MsgType
-	MsgLength() uint64
-	WriteContent(io.Writer) (uint64, error)
-	Done()
 }
 
 type pipeMsgConn struct {
@@ -63,7 +49,7 @@ type pipeMsgConn struct {
 	logWarning      *log.Logger
 	typeBytes       int
 	lengthBytes     int
-	writeChan       chan Msg
+	writeChan       chan brimstore.Msg
 	writingDoneChan chan struct{}
 	sendDrops       uint32
 }
@@ -76,7 +62,7 @@ func NewPipeMsgConn(c net.Conn) *pipeMsgConn {
 		logWarning:      log.New(os.Stderr, "", log.LstdFlags),
 		typeBytes:       1,
 		lengthBytes:     3,
-		writeChan:       make(chan Msg, 40),
+		writeChan:       make(chan brimstore.Msg, 40),
 		writingDoneChan: make(chan struct{}, 1),
 	}
 	return mc
@@ -89,11 +75,11 @@ func (mc *pipeMsgConn) Start() {
 
 const _GLH_SEND_MSG_TIMEOUT = 1
 
-func (mc *pipeMsgConn) SetHandler(t MsgType, h MsgUnmarshaller) {
+func (mc *pipeMsgConn) SetHandler(t brimstore.MsgType, h brimstore.MsgUnmarshaller) {
 	mc.msgMap.set(t, h)
 }
 
-func (mc *pipeMsgConn) SendToNode(nodeID uint64, m Msg) bool {
+func (mc *pipeMsgConn) SendToNode(nodeID uint64, m brimstore.Msg) bool {
 	select {
 	case mc.writeChan <- m:
 		return true
@@ -103,7 +89,7 @@ func (mc *pipeMsgConn) SendToNode(nodeID uint64, m Msg) bool {
 	}
 }
 
-func (mc *pipeMsgConn) SendToOtherReplicas(ringID uint64, partition uint32, m Msg) bool {
+func (mc *pipeMsgConn) SendToOtherReplicas(ringID uint64, partition uint32, m brimstore.Msg) bool {
 	// TODO: If ringID has changed, partition invalid, etc. return false
 	select {
 	case mc.writeChan <- m:
@@ -135,9 +121,9 @@ func (mc *pipeMsgConn) reading() {
 			mc.logError.Print("error reading msg content", err)
 			return
 		}
-		var t MsgType
+		var t brimstore.MsgType
 		for i := 0; i < mc.typeBytes; i++ {
-			t = (t << 8) | MsgType(b[i])
+			t = (t << 8) | brimstore.MsgType(b[i])
 		}
 		var l uint64
 		for i := 0; i < mc.lengthBytes; i++ {
