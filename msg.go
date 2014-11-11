@@ -15,25 +15,25 @@ type FlushWriter interface {
 	Flush() error
 }
 
-type msgType uint64
+type MsgType uint64
 
 const (
-	_MSG_PULL_REPLICATION msgType = iota
+	_MSG_PULL_REPLICATION MsgType = iota
 	_MSG_BULK_SET
 )
 
-type msgUnmarshaller func(io.Reader, uint64) (uint64, error)
+type MsgUnmarshaller func(io.Reader, uint64) (uint64, error)
 
 type msgMap struct {
 	lock    sync.RWMutex
-	mapping map[msgType]msgUnmarshaller
+	mapping map[MsgType]MsgUnmarshaller
 }
 
 func newMsgMap() *msgMap {
-	return &msgMap{mapping: make(map[msgType]msgUnmarshaller)}
+	return &msgMap{mapping: make(map[MsgType]MsgUnmarshaller)}
 }
 
-func (mm *msgMap) set(t msgType, f msgUnmarshaller) msgUnmarshaller {
+func (mm *msgMap) set(t MsgType, f MsgUnmarshaller) MsgUnmarshaller {
 	mm.lock.Lock()
 	p := mm.mapping[t]
 	mm.mapping[t] = f
@@ -41,21 +41,21 @@ func (mm *msgMap) set(t msgType, f msgUnmarshaller) msgUnmarshaller {
 	return p
 }
 
-func (mm *msgMap) get(t msgType) msgUnmarshaller {
+func (mm *msgMap) get(t MsgType) MsgUnmarshaller {
 	mm.lock.RLock()
 	f := mm.mapping[t]
 	mm.lock.RUnlock()
 	return f
 }
 
-type msg interface {
-	msgType() msgType
-	msgLength() uint64
-	writeContent(io.Writer) (uint64, error)
-	done()
+type Msg interface {
+	MsgType() MsgType
+	MsgLength() uint64
+	WriteContent(io.Writer) (uint64, error)
+	Done()
 }
 
-type MsgConn struct {
+type pipeMsgConn struct {
 	conn            net.Conn
 	lock            sync.RWMutex
 	msgMap          *msgMap
@@ -63,33 +63,37 @@ type MsgConn struct {
 	logWarning      *log.Logger
 	typeBytes       int
 	lengthBytes     int
-	writeChan       chan msg
+	writeChan       chan Msg
 	writingDoneChan chan struct{}
 	sendDrops       uint32
 }
 
-func NewMsgConn(c net.Conn) *MsgConn {
-	mc := &MsgConn{
+func NewPipeMsgConn(c net.Conn) *pipeMsgConn {
+	mc := &pipeMsgConn{
 		conn:            c,
 		msgMap:          newMsgMap(),
 		logError:        log.New(os.Stderr, "", log.LstdFlags),
 		logWarning:      log.New(os.Stderr, "", log.LstdFlags),
 		typeBytes:       1,
 		lengthBytes:     3,
-		writeChan:       make(chan msg, 40),
+		writeChan:       make(chan Msg, 40),
 		writingDoneChan: make(chan struct{}, 1),
 	}
 	return mc
 }
 
-func (mc *MsgConn) start() {
+func (mc *pipeMsgConn) Start() {
 	go mc.reading()
 	go mc.writing()
 }
 
 const _GLH_SEND_MSG_TIMEOUT = 1
 
-func (mc *MsgConn) send(m msg) bool {
+func (mc *pipeMsgConn) SetHandler(t MsgType, h MsgUnmarshaller) {
+	mc.msgMap.set(t, h)
+}
+
+func (mc *pipeMsgConn) SendToNode(nodeID uint64, m Msg) bool {
 	select {
 	case mc.writeChan <- m:
 		return true
@@ -99,7 +103,18 @@ func (mc *MsgConn) send(m msg) bool {
 	}
 }
 
-func (mc *MsgConn) reading() {
+func (mc *pipeMsgConn) SendToOtherReplicas(ringID uint64, partition uint32, m Msg) bool {
+	// TODO: If ringID has changed, partition invalid, etc. return false
+	select {
+	case mc.writeChan <- m:
+		return true
+	case <-time.After(_GLH_SEND_MSG_TIMEOUT * time.Second):
+		atomic.AddUint32(&mc.sendDrops, 1)
+		return false
+	}
+}
+
+func (mc *pipeMsgConn) reading() {
 	b := make([]byte, mc.typeBytes+mc.lengthBytes)
 	d := make([]byte, 65536)
 	for {
@@ -120,9 +135,9 @@ func (mc *MsgConn) reading() {
 			mc.logError.Print("error reading msg content", err)
 			return
 		}
-		var t msgType
+		var t MsgType
 		for i := 0; i < mc.typeBytes; i++ {
-			t = (t << 8) | msgType(b[i])
+			t = (t << 8) | MsgType(b[i])
 		}
 		var l uint64
 		for i := 0; i < mc.lengthBytes; i++ {
@@ -153,19 +168,19 @@ func (mc *MsgConn) reading() {
 	}
 }
 
-func (mc *MsgConn) writing() {
+func (mc *pipeMsgConn) writing() {
 	b := make([]byte, mc.typeBytes+mc.lengthBytes)
 	for {
 		m := <-mc.writeChan
 		if m == nil {
 			break
 		}
-		t := m.msgType()
+		t := m.MsgType()
 		for i := mc.typeBytes - 1; i >= 0; i-- {
 			b[i] = byte(t)
 			t >>= 8
 		}
-		l := m.msgLength()
+		l := m.MsgLength()
 		for i := mc.lengthBytes - 1; i >= 0; i-- {
 			b[mc.typeBytes+i] = byte(l)
 			l >>= 8
@@ -175,12 +190,12 @@ func (mc *MsgConn) writing() {
 			mc.logError.Print("err writing msg", err)
 			break
 		}
-		_, err = m.writeContent(mc.conn)
+		_, err = m.WriteContent(mc.conn)
 		if err != nil {
 			mc.logError.Print("err writing msg content", err)
 			break
 		}
-		m.done()
+		m.Done()
 	}
 	mc.writingDoneChan <- struct{}{}
 }

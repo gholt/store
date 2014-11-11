@@ -63,7 +63,8 @@ type config struct {
 	valuesFileSize          int
 	valuesFileReaders       int
 	checksumInterval        int
-	msgConn                 *MsgConn
+	ring                    Ring
+	msgConn                 MsgConn
 	replicationIgnoreRecent int
 }
 
@@ -392,7 +393,13 @@ func OptChecksumInterval(bytes int) func(*config) {
 	}
 }
 
-func OptMsgConn(mc *MsgConn) func(*config) {
+func OptRing(r Ring) func(*config) {
+	return func(cfg *config) {
+		cfg.ring = r
+	}
+}
+
+func OptMsgConn(mc MsgConn) func(*config) {
 	return func(cfg *config) {
 		cfg.msgConn = mc
 	}
@@ -420,6 +427,19 @@ type ValueLocMap interface {
 	DiscardTombstones(tombstoneCutoff uint64)
 	ScanCount(start uint64, stop uint64, max uint64) uint64
 	ScanCallback(start uint64, stop uint64, callback func(keyA uint64, keyB uint64, timestamp uint64, length uint32))
+}
+
+type Ring interface {
+	ID() uint64
+	PartitionPower() uint16
+	Responsible(partition uint32) bool
+}
+
+type MsgConn interface {
+	SetHandler(t MsgType, h MsgUnmarshaller)
+	Start()
+	SendToNode(nodeID uint64, msg Msg) bool
+	SendToOtherReplicas(ringID uint64, partition uint32, msg Msg) bool
 }
 
 type pullReplicationMsg struct {
@@ -465,7 +485,8 @@ type ValueStore struct {
 	valuesFileSize            uint32
 	valuesFileReaders         int
 	checksumInterval          uint32
-	msgConn                   *MsgConn
+	ring                      Ring
+	msgConn                   MsgConn
 	replicationIgnoreRecent   uint64
 	inPullReplicationChan     chan *pullReplicationMsg
 	freeInPullReplicationChan chan *pullReplicationMsg
@@ -598,6 +619,7 @@ func NewValueStore(opts ...func(*config)) *ValueStore {
 		valuesFileSize:          uint32(cfg.valuesFileSize),
 		valuesFileReaders:       cfg.valuesFileReaders,
 		checksumInterval:        uint32(cfg.checksumInterval),
+		ring:                    cfg.ring,
 		msgConn:                 cfg.msgConn,
 		replicationIgnoreRecent: uint64(cfg.replicationIgnoreRecent) * uint64(time.Second),
 		backgroundIteration:     uint16(cfg.rand.Uint32()),
@@ -644,7 +666,7 @@ func NewValueStore(opts ...func(*config)) *ValueStore {
 	}
 	vs.recovery()
 	if vs.msgConn != nil {
-		vs.msgConn.msgMap.set(_MSG_PULL_REPLICATION, vs.newInPullReplicationMsg)
+		vs.msgConn.SetHandler(_MSG_PULL_REPLICATION, vs.newInPullReplicationMsg)
 		vs.inPullReplicationChan = make(chan *pullReplicationMsg, _GLH_IN_PULL_REPLICATION_MSGS)
 		vs.freeInPullReplicationChan = make(chan *pullReplicationMsg, _GLH_IN_PULL_REPLICATION_MSGS)
 		for i := 0; i < cap(vs.freeInPullReplicationChan); i++ {
@@ -665,7 +687,7 @@ func NewValueStore(opts ...func(*config)) *ValueStore {
 				body:   make([]byte, len(vs.ktbfs[0].bits)),
 			}
 		}
-		vs.msgConn.msgMap.set(_MSG_BULK_SET, vs.newInBulkSetMsg)
+		vs.msgConn.SetHandler(_MSG_BULK_SET, vs.newInBulkSetMsg)
 		vs.inBulkSetChan = make(chan *bulkSetMsg, _GLH_IN_BULK_SET_MSGS)
 		vs.freeInBulkSetChan = make(chan *bulkSetMsg, _GLH_IN_BULK_SET_MSGS)
 		for i := 0; i < cap(vs.freeInBulkSetChan); i++ {
@@ -681,7 +703,7 @@ func NewValueStore(opts ...func(*config)) *ValueStore {
 				body: make([]byte, _GLH_OUT_BULK_SET_MSG_SIZE),
 			}
 		}
-		vs.msgConn.start()
+		vs.msgConn.Start()
 	}
 	vs.backgroundNotifyChan = make(chan *backgroundNotification, 1)
 	go vs.backgroundLauncher()
@@ -838,9 +860,11 @@ func (vs *ValueStore) GatherStats(debug bool) (count uint64, length uint64, debu
 		stats.valuesFileReaders = vs.valuesFileReaders
 		stats.checksumInterval = vs.checksumInterval
 		stats.replicationIgnoreRecent = int(vs.replicationIgnoreRecent / uint64(time.Second))
+		/* TODO
 		if vs.msgConn != nil {
 			stats.msgSendDrops = vs.msgConn.sendDrops
 		}
+		*/
 		stats.vlmCount, stats.vlmLength, stats.vlmDebugInfo = vs.vlm.GatherStats(true)
 	} else {
 		stats.vlmCount, stats.vlmLength, stats.vlmDebugInfo = vs.vlm.GatherStats(false)
@@ -1344,7 +1368,8 @@ func (vs *ValueStore) inPullReplication() {
 					break
 				}
 			}
-			vs.msgConn.send(bsm)
+			// TODO
+			vs.msgConn.SendToNode(0, bsm)
 		}
 	}
 }
@@ -1459,6 +1484,9 @@ const _GLH_BLOOM_FILTER_N = 1000000
 const _GLH_BLOOM_FILTER_P = 0.001
 
 func (vs *ValueStore) background() {
+	if vs.ring == nil {
+		return
+	}
 	if vs.backgroundIteration == math.MaxUint16 {
 		vs.backgroundIteration = 0
 	} else {
@@ -1466,8 +1494,8 @@ func (vs *ValueStore) background() {
 	}
 	iteration := vs.backgroundIteration
 	begin := time.Now()
-	ringID := uint64(0)
-	partitionPower := uint16(8)
+	ringID := vs.ring.ID()
+	partitionPower := vs.ring.PartitionPower()
 	partitions := uint32(1) << partitionPower
 	vs.vlm.DiscardTombstones(uint64(time.Now().UnixNano()) - vs.tombstoneAge)
 	wg := &sync.WaitGroup{}
@@ -1476,7 +1504,6 @@ func (vs *ValueStore) background() {
 		vs.ktbfs = append(vs.ktbfs, newKTBloomFilter(_GLH_BLOOM_FILTER_N, _GLH_BLOOM_FILTER_P, 0))
 	}
 	f := func(p uint32, ktbf *ktBloomFilter) {
-		vs.logDebug.Println("GLH doing", p)
 		start := uint64(p) << uint64(64-partitionPower)
 		stop := start + (uint64(1)<<(64-partitionPower) - 1)
 		pullSize := uint64(1) << (64 - partitionPower)
@@ -1496,7 +1523,7 @@ func (vs *ValueStore) background() {
 			if atomic.LoadUint32(&vs.backgroundAbort) != 0 {
 				break
 			}
-			vs.msgConn.send(vs.newOutPullReplicationMsg(ringID, p, cutoff, substart, substop, ktbf))
+			vs.msgConn.SendToOtherReplicas(ringID, p, vs.newOutPullReplicationMsg(ringID, p, cutoff, substart, substop, ktbf))
 			substart += pullSize
 			substop += pullSize
 			if substop > stop || substop < stop {
@@ -1505,21 +1532,24 @@ func (vs *ValueStore) background() {
 		}
 	}
 	sp := uint32(vs.rand.Intn(int(partitions)))
-	vs.logDebug.Println("GLH", sp)
 	for g := 0; g < vs.backgroundWorkers; g++ {
 		go func(g uint32) {
-			// Here I'm doing pull replication scans for every
-			// partition when eventually it should just do this for
-			// partitions we're in the ring for. Partitions we're not
-			// in the ring for (handoffs, old data from ring changes,
-			// etc.) we should just send out what data we have and the
-			// remove it locally.
 			ktbf := vs.ktbfs[g]
 			for p := uint32(sp + g); p < partitions && atomic.LoadUint32(&vs.backgroundAbort) == 0; p += uint32(vs.backgroundWorkers) {
-				f(p, ktbf)
+				if vs.ring.ID() != ringID {
+					break
+				}
+				if vs.ring.Responsible(p) {
+					f(p, ktbf)
+				}
 			}
 			for p := uint32(g); p < sp && atomic.LoadUint32(&vs.backgroundAbort) == 0; p += uint32(vs.backgroundWorkers) {
-				f(p, ktbf)
+				if vs.ring.ID() != ringID {
+					break
+				}
+				if vs.ring.Responsible(p) {
+					f(p, ktbf)
+				}
 			}
 			wg.Done()
 		}(uint32(g))
@@ -1590,11 +1620,11 @@ func (vs *ValueStore) newOutPullReplicationMsg(ringID uint64, partition uint32, 
 	return prm
 }
 
-func (prm *pullReplicationMsg) msgType() msgType {
+func (prm *pullReplicationMsg) MsgType() MsgType {
 	return _MSG_PULL_REPLICATION
 }
 
-func (prm *pullReplicationMsg) msgLength() uint64 {
+func (prm *pullReplicationMsg) MsgLength() uint64 {
 	return uint64(len(prm.header)) + uint64(len(prm.body))
 }
 
@@ -1622,7 +1652,7 @@ func (prm *pullReplicationMsg) ktBloomFilter() *ktBloomFilter {
 	return newKTBloomFilterFromMsg(prm, pullReplicationMsgHeaderBytes)
 }
 
-func (prm *pullReplicationMsg) writeContent(w io.Writer) (uint64, error) {
+func (prm *pullReplicationMsg) WriteContent(w io.Writer) (uint64, error) {
 	var n int
 	var sn int
 	var err error
@@ -1636,7 +1666,7 @@ func (prm *pullReplicationMsg) writeContent(w io.Writer) (uint64, error) {
 	return uint64(n), err
 }
 
-func (prm *pullReplicationMsg) done() {
+func (prm *pullReplicationMsg) Done() {
 	prm.vs.outPullReplicationChan <- prm
 }
 
@@ -1683,20 +1713,20 @@ func (vs *ValueStore) newOutBulkSetMsg() *bulkSetMsg {
 	return bsm
 }
 
-func (bsm *bulkSetMsg) msgType() msgType {
+func (bsm *bulkSetMsg) MsgType() MsgType {
 	return _MSG_BULK_SET
 }
 
-func (bsm *bulkSetMsg) msgLength() uint64 {
+func (bsm *bulkSetMsg) MsgLength() uint64 {
 	return uint64(len(bsm.body))
 }
 
-func (bsm *bulkSetMsg) writeContent(w io.Writer) (uint64, error) {
+func (bsm *bulkSetMsg) WriteContent(w io.Writer) (uint64, error) {
 	n, err := w.Write(bsm.body)
 	return uint64(n), err
 }
 
-func (bsm *bulkSetMsg) done() {
+func (bsm *bulkSetMsg) Done() {
 	bsm.vs.outBulkSetChan <- bsm
 }
 
