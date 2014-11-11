@@ -15,7 +15,7 @@ import (
 )
 
 type valuesFile struct {
-	vs                  *ValueStore
+	vs                  *DefaultValueStore
 	id                  uint32
 	bts                 int64
 	writerFP            io.WriteCloser
@@ -38,7 +38,7 @@ type valuesFileWriteBuf struct {
 	vms    []*valuesMem
 }
 
-func newValuesFile(vs *ValueStore, bts int64) *valuesFile {
+func newValuesFile(vs *DefaultValueStore, bts int64) *valuesFile {
 	vf := &valuesFile{vs: vs, bts: bts}
 	name := path.Join(vs.path, fmt.Sprintf("%d.values", vf.bts))
 	vf.readerFPs = make([]brimutil.ChecksummedReader, vs.valuesFileReaders)
@@ -56,7 +56,7 @@ func newValuesFile(vs *ValueStore, bts int64) *valuesFile {
 	return vf
 }
 
-func createValuesFile(vs *ValueStore) *valuesFile {
+func createValuesFile(vs *DefaultValueStore) *valuesFile {
 	vf := &valuesFile{vs: vs, bts: time.Now().UnixNano()}
 	name := path.Join(vs.path, fmt.Sprintf("%d.values", vf.bts))
 	fp, err := os.Create(name)

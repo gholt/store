@@ -48,9 +48,29 @@ import (
 
 	"github.com/gholt/brimtext"
 	"github.com/gholt/brimutil"
+	"github.com/gholt/ring"
 	"github.com/gholt/valuelocmap"
 	"github.com/spaolacci/murmur3"
 )
+
+// ValueStore is an interface for a disk-backed data structure that stores
+// []byte values referenced by 128 bit keys with options for replication.
+//
+// For documentation on each of these functions, see the DefaultValueStore.
+type ValueStore interface {
+	BackgroundNow()
+	Delete(keyA uint64, keyB uint64, timestamp uint64) (uint64, error)
+	DisableBackgroundTasks()
+	DisableWrites()
+	EnableBackgroundTasks()
+	EnableWrites()
+	Flush()
+	GatherStats(debug bool) (uint64, uint64, fmt.Stringer)
+	Lookup(keyA uint64, keyB uint64) (uint64, uint32, error)
+	MaxValueSize() uint32
+	Read(keyA uint64, keyB uint64, value []byte) (uint64, []byte, error)
+	Write(keyA uint64, keyB uint64, timestamp uint64, value []byte) (uint64, error)
+}
 
 type config struct {
 	logCritical             *log.Logger
@@ -61,7 +81,7 @@ type config struct {
 	rand                    *rand.Rand
 	path                    string
 	pathtoc                 string
-	vlm                     ValueLocMap
+	vlm                     valuelocmap.ValueLocMap
 	workers                 int
 	backgroundWorkers       int
 	backgroundInterval      int
@@ -73,7 +93,7 @@ type config struct {
 	valuesFileSize          int
 	valuesFileReaders       int
 	checksumInterval        int
-	ring                    Ring
+	ring                    ring.MsgRing
 	replicationIgnoreRecent int
 }
 
@@ -227,7 +247,7 @@ func resolveConfig(opts ...func(*config)) *config {
 }
 
 // OptList returns a slice with the opts given; useful if you want to possibly
-// append more options to the list before using it with NewValueStore(list...).
+// append more options to the list before using it with New(list...).
 func OptList(opts ...func(*config)) []func(*config) {
 	return opts
 }
@@ -299,8 +319,8 @@ func OptPathTOC(dirpath string) func(*config) {
 
 // OptValueLocMap allows overriding the default ValueLocMap, an interface used
 // by ValueStore for tracking the mappings from keys to the locations of their
-// values. Defaults to github.com/gholt/valuelocmap.NewValueLocMap().
-func OptValueLocMap(vlm ValueLocMap) func(*config) {
+// values. Defaults to github.com/gholt/valuelocmap.New().
+func OptValueLocMap(vlm valuelocmap.ValueLocMap) func(*config) {
 	return func(cfg *config) {
 		cfg.vlm = vlm
 	}
@@ -401,7 +421,7 @@ func OptChecksumInterval(bytes int) func(*config) {
 }
 
 // TODO
-func OptRing(r Ring) func(*config) {
+func OptMsgRing(r ring.MsgRing) func(*config) {
 	return func(cfg *config) {
 		cfg.ring = r
 	}
@@ -419,57 +439,19 @@ func OptReplicationIgnoreRecent(seconds int) func(*config) {
 var ErrNotFound error = errors.New("not found")
 var ErrDisabled error = errors.New("disabled")
 
-// ValueLocMap is an interface used by ValueStore for tracking the mappings
-// from keys to the locations of their values. You can use OptValueLocMap to
-// specify your own ValueLocMap implemention instead of the default.
-//
-// For documentation of each of these functions, see the default implementation
-// in github.com/gholt/valuelocmap.
-type ValueLocMap interface {
-	Get(keyA uint64, keyB uint64) (timestamp uint64, blockID uint32, offset uint32, length uint32)
-	Set(keyA uint64, keyB uint64, timestamp uint64, blockID uint32, offset uint32, length uint32, evenIfSameTimestamp bool) (previousTimestamp uint64)
-	GatherStats(debug bool) (count uint64, length uint64, debugInfo fmt.Stringer)
-	DiscardTombstones(tombstoneCutoff uint64)
-	ScanCount(start uint64, stop uint64, max uint64) uint64
-	ScanCallback(start uint64, stop uint64, callback func(keyA uint64, keyB uint64, timestamp uint64, length uint32))
-}
-
-// TODO
-type Ring interface {
-	ID() uint64
-	PartitionPower() uint16
-	NodeID() uint64
-	Responsible(partition uint32) bool
-	MsgType(name string) uint64
-	SetMsgHandler(msgType uint64, h MsgUnmarshaller)
-	MsgToNode(nodeID uint64, msg Msg) bool
-	MsgToOtherReplicas(ringID uint64, partition uint32, msg Msg) bool
-}
-
-// TODO
-type Msg interface {
-	MsgType() uint64
-	MsgLength() uint64
-	WriteContent(io.Writer) (uint64, error)
-	Done()
-}
-
-// TODO
-type MsgUnmarshaller func(io.Reader, uint64) (uint64, error)
-
 type pullReplicationMsg struct {
-	vs     *ValueStore
+	vs     *DefaultValueStore
 	header []byte
 	body   []byte
 }
 
 type bulkSetMsg struct {
-	vs   *ValueStore
+	vs   *DefaultValueStore
 	body []byte
 }
 
-// ValueStore instances are created with NewValueStore.
-type ValueStore struct {
+// DefaultValueStore instances are created with New.
+type DefaultValueStore struct {
 	logCritical               *log.Logger
 	logError                  *log.Logger
 	logWarning                *log.Logger
@@ -488,7 +470,7 @@ type ValueStore struct {
 	valueLocBlockIDer         uint64
 	path                      string
 	pathtoc                   string
-	vlm                       ValueLocMap
+	vlm                       valuelocmap.ValueLocMap
 	workers                   int
 	backgroundWorkers         int
 	backgroundInterval        int
@@ -500,9 +482,7 @@ type ValueStore struct {
 	valuesFileSize            uint32
 	valuesFileReaders         int
 	checksumInterval          uint32
-	ring                      Ring
-	msgTypePullReplication    uint64
-	msgTypeBulkSet            uint64
+	ring                      ring.MsgRing
 	replicationIgnoreRecent   uint64
 	inPullReplicationChan     chan *pullReplicationMsg
 	freeInPullReplicationChan chan *pullReplicationMsg
@@ -585,8 +565,8 @@ const _GLH_IN_BULK_SET_HANDLERS = 40
 const _GLH_OUT_BULK_SET_MSGS = 128
 const _GLH_OUT_BULK_SET_MSG_SIZE = 16 * 1024 * 1024
 
-// NewValueStore creates a ValueStore for use in storing []byte values
-// referenced by 128 bit keys.
+// New creates a DefaultValueStore for use in storing []byte values referenced
+// by 128 bit keys.
 //
 // Note that a lot of buffering and multiple cores can be in use and therefore
 // DisableBackgroundTasks() DisableWrites() and Flush() should be called prior
@@ -596,8 +576,8 @@ const _GLH_OUT_BULK_SET_MSG_SIZE = 16 * 1024 * 1024
 // You can provide Opt* functions for optional configuration items, such as
 // OptWorkers:
 //
-//  vsWithDefaults := valuestore.NewValueStore()
-//  vsWithOptions := valuestore.NewValueStore(
+//  vsWithDefaults := valuestore.New()
+//  vsWithOptions := valuestore.New(
 //      valuestore.OptWorkers(10),
 //      valuestore.OptPageSize(8388608),
 //  )
@@ -605,14 +585,14 @@ const _GLH_OUT_BULK_SET_MSG_SIZE = 16 * 1024 * 1024
 //  if commandLineOptionForWorkers {
 //      opts = append(opts, valuestore.OptWorkers(commandLineOptionValue))
 //  }
-//  vsWithOptionsBuiltUp := valuestore.NewValueStore(opts...)
-func NewValueStore(opts ...func(*config)) *ValueStore {
+//  vsWithOptionsBuiltUp := valuestore.New(opts...)
+func New(opts ...func(*config)) *DefaultValueStore {
 	cfg := resolveConfig(opts...)
 	vlm := cfg.vlm
 	if vlm == nil {
-		vlm = valuelocmap.NewValueLocMap()
+		vlm = valuelocmap.New()
 	}
-	vs := &ValueStore{
+	vs := &DefaultValueStore{
 		logCritical:         cfg.logCritical,
 		logError:            cfg.logError,
 		logWarning:          cfg.logWarning,
@@ -680,8 +660,7 @@ func NewValueStore(opts ...func(*config)) *ValueStore {
 	}
 	vs.recovery()
 	if vs.ring != nil {
-		vs.msgTypePullReplication = vs.ring.MsgType("PullReplication")
-		vs.ring.SetMsgHandler(vs.msgTypePullReplication, vs.newInPullReplicationMsg)
+		vs.ring.SetMsgHandler(ring.MSG_PULL_REPLICATION, vs.newInPullReplicationMsg)
 		vs.inPullReplicationChan = make(chan *pullReplicationMsg, _GLH_IN_PULL_REPLICATION_MSGS)
 		vs.freeInPullReplicationChan = make(chan *pullReplicationMsg, _GLH_IN_PULL_REPLICATION_MSGS)
 		for i := 0; i < cap(vs.freeInPullReplicationChan); i++ {
@@ -702,8 +681,7 @@ func NewValueStore(opts ...func(*config)) *ValueStore {
 				body:   make([]byte, len(vs.ktbfs[0].bits)),
 			}
 		}
-		vs.msgTypeBulkSet = vs.ring.MsgType("BulkSet")
-		vs.ring.SetMsgHandler(vs.msgTypeBulkSet, vs.newInBulkSetMsg)
+		vs.ring.SetMsgHandler(ring.MSG_BULK_SET, vs.newInBulkSetMsg)
 		vs.inBulkSetChan = make(chan *bulkSetMsg, _GLH_IN_BULK_SET_MSGS)
 		vs.freeInBulkSetChan = make(chan *bulkSetMsg, _GLH_IN_BULK_SET_MSGS)
 		for i := 0; i < cap(vs.freeInBulkSetChan); i++ {
@@ -727,20 +705,20 @@ func NewValueStore(opts ...func(*config)) *ValueStore {
 
 // MaxValueSize returns the maximum length of a value the ValueStore can
 // accept.
-func (vs *ValueStore) MaxValueSize() uint32 {
+func (vs *DefaultValueStore) MaxValueSize() uint32 {
 	return vs.maxValueSize
 }
 
 // DisableWrites will cause any incoming Write or Delete requests to respond
 // with ErrDisabled until EnableWrites is called.
-func (vs *ValueStore) DisableWrites() {
+func (vs *DefaultValueStore) DisableWrites() {
 	for _, c := range vs.pendingVWRChans {
 		c <- disableValueWriteReq
 	}
 }
 
 // EnableWrites will resume accepting incoming Write and Delete requests.
-func (vs *ValueStore) EnableWrites() {
+func (vs *DefaultValueStore) EnableWrites() {
 	for _, c := range vs.pendingVWRChans {
 		c <- enableValueWriteReq
 	}
@@ -748,7 +726,7 @@ func (vs *ValueStore) EnableWrites() {
 
 // DisableBackgroundTasks will abort any running background tasks and suspend
 // relaunching them until EnableBackgroundTasks is called.
-func (vs *ValueStore) DisableBackgroundTasks() {
+func (vs *DefaultValueStore) DisableBackgroundTasks() {
 	atomic.StoreUint32(&vs.backgroundAbort, 1)
 	c := make(chan struct{}, 1)
 	vs.backgroundNotifyChan <- &backgroundNotification{
@@ -760,7 +738,7 @@ func (vs *ValueStore) DisableBackgroundTasks() {
 
 // EnableBackgroundTasks will resume launching background tasks at configured
 // intervals.
-func (vs *ValueStore) EnableBackgroundTasks() {
+func (vs *DefaultValueStore) EnableBackgroundTasks() {
 	c := make(chan struct{}, 1)
 	vs.backgroundNotifyChan <- &backgroundNotification{
 		enable:   true,
@@ -771,7 +749,7 @@ func (vs *ValueStore) EnableBackgroundTasks() {
 
 // Flush will ensure buffered data (at the time of the call) is written to
 // disk.
-func (vs *ValueStore) Flush() {
+func (vs *DefaultValueStore) Flush() {
 	for _, c := range vs.pendingVWRChans {
 		c <- flushValueWriteReq
 	}
@@ -784,7 +762,7 @@ func (vs *ValueStore) Flush() {
 // not known at all whereas err == ErrNotFound with timestamp != 0 (also
 // timestamp & 1 == 1) indicates keyA, keyB was known and had a deletion marker
 // (aka tombstone).
-func (vs *ValueStore) Lookup(keyA uint64, keyB uint64) (uint64, uint32, error) {
+func (vs *DefaultValueStore) Lookup(keyA uint64, keyB uint64) (uint64, uint32, error) {
 	timestamp, id, _, length := vs.vlm.Get(keyA, keyB)
 	if id == 0 || timestamp&1 == 1 {
 		return timestamp, 0, ErrNotFound
@@ -800,7 +778,7 @@ func (vs *ValueStore) Lookup(keyA uint64, keyB uint64) (uint64, uint32, error) {
 // not known at all whereas err == ErrNotFound with timestamp != 0 (also
 // timestamp & 1 == 1) indicates keyA, keyB was known and had a deletion marker
 // (aka tombstone).
-func (vs *ValueStore) Read(keyA uint64, keyB uint64, value []byte) (uint64, []byte, error) {
+func (vs *DefaultValueStore) Read(keyA uint64, keyB uint64, value []byte) (uint64, []byte, error) {
 	timestamp, id, offset, length := vs.vlm.Get(keyA, keyB)
 	if id == 0 || timestamp&1 == 1 {
 		return timestamp, value, ErrNotFound
@@ -811,7 +789,7 @@ func (vs *ValueStore) Read(keyA uint64, keyB uint64, value []byte) (uint64, []by
 // Write stores timestamp & 0xfffffffffffffffe (lowest bit zeroed), value for
 // keyA, keyB or returns any error; a newer timestamp already in place is not
 // reported as an error.
-func (vs *ValueStore) Write(keyA uint64, keyB uint64, timestamp uint64, value []byte) (uint64, error) {
+func (vs *DefaultValueStore) Write(keyA uint64, keyB uint64, timestamp uint64, value []byte) (uint64, error) {
 	i := int(keyA>>1) % len(vs.freeVWRChans)
 	vwr := <-vs.freeVWRChans[i]
 	vwr.keyA = keyA
@@ -828,7 +806,7 @@ func (vs *ValueStore) Write(keyA uint64, keyB uint64, timestamp uint64, value []
 
 // Delete stores timestamp | 1 for keyA, keyB or returns any error; a newer
 // timestamp already in place is not reported as an error.
-func (vs *ValueStore) Delete(keyA uint64, keyB uint64, timestamp uint64) (uint64, error) {
+func (vs *DefaultValueStore) Delete(keyA uint64, keyB uint64, timestamp uint64) (uint64, error) {
 	i := int(keyA>>1) % len(vs.freeVWRChans)
 	vwr := <-vs.freeVWRChans[i]
 	vwr.keyA = keyA
@@ -843,7 +821,7 @@ func (vs *ValueStore) Delete(keyA uint64, keyB uint64, timestamp uint64) (uint64
 }
 
 // GatherStats returns overall information about the state of the ValueStore.
-func (vs *ValueStore) GatherStats(debug bool) (uint64, uint64, fmt.Stringer) {
+func (vs *DefaultValueStore) GatherStats(debug bool) (uint64, uint64, fmt.Stringer) {
 	stats := &valueStoreStats{}
 	if debug {
 		stats.debug = debug
@@ -891,11 +869,11 @@ func (vs *ValueStore) GatherStats(debug bool) (uint64, uint64, fmt.Stringer) {
 	return stats.vlmCount, stats.vlmLength, stats
 }
 
-func (vs *ValueStore) valueLocBlock(valueLocBlockID uint32) valueLocBlock {
+func (vs *DefaultValueStore) valueLocBlock(valueLocBlockID uint32) valueLocBlock {
 	return vs.valueLocBlocks[valueLocBlockID]
 }
 
-func (vs *ValueStore) addValueLocBlock(block valueLocBlock) uint32 {
+func (vs *DefaultValueStore) addValueLocBlock(block valueLocBlock) uint32 {
 	id := atomic.AddUint64(&vs.valueLocBlockIDer, 1)
 	if id >= math.MaxUint32 {
 		panic("too many valueLocBlocks")
@@ -904,7 +882,7 @@ func (vs *ValueStore) addValueLocBlock(block valueLocBlock) uint32 {
 	return uint32(id)
 }
 
-func (vs *ValueStore) memClearer(freeableVMChan chan *valuesMem) {
+func (vs *DefaultValueStore) memClearer(freeableVMChan chan *valuesMem) {
 	var tb []byte
 	var tbTS int64
 	var tbOffset int
@@ -962,7 +940,7 @@ func (vs *ValueStore) memClearer(freeableVMChan chan *valuesMem) {
 	}
 }
 
-func (vs *ValueStore) memWriter(pendingVWRChan chan *valueWriteReq) {
+func (vs *DefaultValueStore) memWriter(pendingVWRChan chan *valueWriteReq) {
 	var enabled bool
 	var vm *valuesMem
 	var vmTOCOffset int
@@ -1036,7 +1014,7 @@ func (vs *ValueStore) memWriter(pendingVWRChan chan *valueWriteReq) {
 	}
 }
 
-func (vs *ValueStore) vfWriter() {
+func (vs *DefaultValueStore) vfWriter() {
 	var vf *valuesFile
 	memWritersFlushLeft := len(vs.pendingVWRChans)
 	var tocLen uint64
@@ -1073,7 +1051,7 @@ func (vs *ValueStore) vfWriter() {
 	}
 }
 
-func (vs *ValueStore) tocWriter() {
+func (vs *DefaultValueStore) tocWriter() {
 	memClearersFlushLeft := len(vs.freeableVMChans)
 	var btsA uint64
 	var writerA io.WriteCloser
@@ -1169,7 +1147,7 @@ func (vs *ValueStore) tocWriter() {
 	}
 }
 
-func (vs *ValueStore) recovery() {
+func (vs *DefaultValueStore) recovery() {
 	start := time.Now()
 	dfp, err := os.Open(vs.pathtoc)
 	if err != nil {
@@ -1353,7 +1331,7 @@ func (vs *ValueStore) recovery() {
 	}
 }
 
-func (vs *ValueStore) inPullReplication() {
+func (vs *DefaultValueStore) inPullReplication() {
 	k := make([]uint64, 2*1024*1024)
 	v := make([]byte, vs.maxValueSize)
 	for {
@@ -1394,7 +1372,7 @@ func (vs *ValueStore) inPullReplication() {
 	}
 }
 
-func (vs *ValueStore) inBulkSet() {
+func (vs *DefaultValueStore) inBulkSet() {
 	for {
 		bsm := <-vs.inBulkSetChan
 		bsm.valueStore(vs)
@@ -1452,14 +1430,14 @@ func (stats *valueStoreStats) String() string {
 // waiting for the next background interval. If the background tasks are
 // currently executing, they will be stopped and restarted so that a call to
 // this function ensures one complete pass occurs.
-func (vs *ValueStore) BackgroundNow() {
+func (vs *DefaultValueStore) BackgroundNow() {
 	atomic.StoreUint32(&vs.backgroundAbort, 1)
 	c := make(chan struct{}, 1)
 	vs.backgroundNotifyChan <- &backgroundNotification{doneChan: c}
 	<-c
 }
 
-func (vs *ValueStore) backgroundLauncher() {
+func (vs *DefaultValueStore) backgroundLauncher() {
 	var enabled bool
 	interval := float64(vs.backgroundInterval) * float64(time.Second)
 	nextRun := time.Now().Add(time.Duration(interval + interval*vs.rand.NormFloat64()*0.1))
@@ -1502,7 +1480,7 @@ func (vs *ValueStore) backgroundLauncher() {
 const _GLH_BLOOM_FILTER_N = 1000000
 const _GLH_BLOOM_FILTER_P = 0.001
 
-func (vs *ValueStore) background() {
+func (vs *DefaultValueStore) background() {
 	begin := time.Now()
 	if vs.backgroundIteration == math.MaxUint16 {
 		vs.backgroundIteration = 0
@@ -1518,7 +1496,7 @@ func (vs *ValueStore) background() {
 	}
 }
 
-func (vs *ValueStore) backgroundPullReplication() {
+func (vs *DefaultValueStore) backgroundPullReplication() {
 	ringID := vs.ring.ID()
 	partitionPower := vs.ring.PartitionPower()
 	partitions := uint32(1) << partitionPower
@@ -1586,7 +1564,7 @@ const _GLH_IN_PULL_REPLICATION_MSG_TIMEOUT = 300
 
 var toss []byte = make([]byte, 65536)
 
-func (vs *ValueStore) newInPullReplicationMsg(r io.Reader, l uint64) (uint64, error) {
+func (vs *DefaultValueStore) newInPullReplicationMsg(r io.Reader, l uint64) (uint64, error) {
 	var prm *pullReplicationMsg
 	select {
 	case prm = <-vs.freeInPullReplicationChan:
@@ -1630,7 +1608,7 @@ func (vs *ValueStore) newInPullReplicationMsg(r io.Reader, l uint64) (uint64, er
 	return l, nil
 }
 
-func (vs *ValueStore) newOutPullReplicationMsg(ringID uint64, partition uint32, timestampCutoff uint64, rangeStart uint64, rangeStop uint64, ktbf *ktBloomFilter) *pullReplicationMsg {
+func (vs *DefaultValueStore) newOutPullReplicationMsg(ringID uint64, partition uint32, timestampCutoff uint64, rangeStart uint64, rangeStop uint64, ktbf *ktBloomFilter) *pullReplicationMsg {
 	prm := <-vs.outPullReplicationChan
 	binary.BigEndian.PutUint64(prm.header, vs.ring.NodeID())
 	binary.BigEndian.PutUint64(prm.header[8:], ringID)
@@ -1642,8 +1620,8 @@ func (vs *ValueStore) newOutPullReplicationMsg(ringID uint64, partition uint32, 
 	return prm
 }
 
-func (prm *pullReplicationMsg) MsgType() uint64 {
-	return prm.vs.msgTypePullReplication
+func (prm *pullReplicationMsg) MsgType() ring.MsgType {
+	return ring.MSG_PULL_REPLICATION
 }
 
 func (prm *pullReplicationMsg) MsgLength() uint64 {
@@ -1698,7 +1676,7 @@ func (prm *pullReplicationMsg) Done() {
 
 const _GLH_IN_BULK_SET_MSG_TIMEOUT = 300
 
-func (vs *ValueStore) newInBulkSetMsg(r io.Reader, l uint64) (uint64, error) {
+func (vs *DefaultValueStore) newInBulkSetMsg(r io.Reader, l uint64) (uint64, error) {
 	var bsm *bulkSetMsg
 	select {
 	case bsm = <-vs.freeInBulkSetChan:
@@ -1733,14 +1711,14 @@ func (vs *ValueStore) newInBulkSetMsg(r io.Reader, l uint64) (uint64, error) {
 	return l, nil
 }
 
-func (vs *ValueStore) newOutBulkSetMsg() *bulkSetMsg {
+func (vs *DefaultValueStore) newOutBulkSetMsg() *bulkSetMsg {
 	bsm := <-vs.outBulkSetChan
 	bsm.body = bsm.body[:0]
 	return bsm
 }
 
-func (bsm *bulkSetMsg) MsgType() uint64 {
-	return bsm.vs.msgTypeBulkSet
+func (bsm *bulkSetMsg) MsgType() ring.MsgType {
+	return ring.MSG_BULK_SET
 }
 
 func (bsm *bulkSetMsg) MsgLength() uint64 {
@@ -1770,7 +1748,7 @@ func (bsm *bulkSetMsg) add(keyA uint64, keyB uint64, timestamp uint64, value []b
 	return true
 }
 
-func (bsm *bulkSetMsg) valueStore(vs *ValueStore) {
+func (bsm *bulkSetMsg) valueStore(vs *DefaultValueStore) {
 	body := bsm.body
 	for len(body) > 0 {
 		keyA := binary.BigEndian.Uint64(body)
