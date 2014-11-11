@@ -1464,7 +1464,6 @@ func (vs *ValueStore) background() {
 	for g := 0; g < vs.backgroundWorkers; g++ {
 		go func(g int) {
 			ktbf := vs.ktbfs[g]
-			var pullSize uint64
 			for p := uint32(g); p < partitions && atomic.LoadUint32(&vs.backgroundAbort) == 0; p += uint32(vs.backgroundWorkers) {
 				// Here I'm doing pull replication scans for every
 				// partition when eventually it should just do this for
@@ -1474,11 +1473,9 @@ func (vs *ValueStore) background() {
 				// remove it locally.
 				start := uint64(p) << uint64(64-partitionPower)
 				stop := start + (uint64(1)<<(64-partitionPower) - 1)
-				if pullSize == 0 {
-					pullSize = uint64(1) << (64 - partitionPower)
-					for vs.vlm.ScanCount(start, start+(pullSize-1), _GLH_BLOOM_FILTER_N) >= _GLH_BLOOM_FILTER_N {
-						pullSize /= 2
-					}
+				pullSize := uint64(1) << (64 - partitionPower)
+				for vs.vlm.ScanCount(start, start+(pullSize-1), _GLH_BLOOM_FILTER_N) >= _GLH_BLOOM_FILTER_N {
+					pullSize /= 2
 				}
 				cutoff := uint64(time.Now().UnixNano()) - vs.replicationIgnoreRecent
 				substart := start
