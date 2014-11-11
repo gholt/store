@@ -36,9 +36,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/gholt/brimstore/valuelocmap"
 	"github.com/gholt/brimtext"
 	"github.com/gholt/brimutil"
+	"github.com/gholt/valuelocmap"
 	"github.com/spaolacci/murmur3"
 )
 
