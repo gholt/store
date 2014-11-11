@@ -48,6 +48,7 @@ type config struct {
 	logWarning              *log.Logger
 	logInfo                 *log.Logger
 	logDebug                *log.Logger
+	rand                    *rand.Rand
 	path                    string
 	pathtoc                 string
 	vlm                     ValueLocMap
@@ -150,6 +151,9 @@ func resolveConfig(opts ...func(*config)) *config {
 	}
 	if cfg.logInfo == nil {
 		cfg.logInfo = log.New(os.Stdout, "ValueStore ", log.LstdFlags)
+	}
+	if cfg.rand == nil {
+		cfg.rand = rand.New(rand.NewSource(time.Now().UnixNano()))
 	}
 	if cfg.path == "" {
 		cfg.path = "."
@@ -255,6 +259,14 @@ func OptLogInfo(l *log.Logger) func(*config) {
 func OptLogDebug(l *log.Logger) func(*config) {
 	return func(cfg *config) {
 		cfg.logDebug = l
+	}
+}
+
+// OptRand sets the rand.Rand to use as a random data source. Defaults to a new
+// randomizer based on the current time.
+func OptRand(r *rand.Rand) func(*config) {
+	return func(cfg *config) {
+		cfg.rand = r
 	}
 }
 
@@ -428,6 +440,7 @@ type ValueStore struct {
 	logWarning                *log.Logger
 	logInfo                   *log.Logger
 	logDebug                  *log.Logger
+	rand                      *rand.Rand
 	freeableVMChans           []chan *valuesMem
 	freeVMChan                chan *valuesMem
 	freeVWRChans              []chan *valueWriteReq
@@ -569,6 +582,7 @@ func NewValueStore(opts ...func(*config)) *ValueStore {
 		logWarning:              cfg.logWarning,
 		logInfo:                 cfg.logInfo,
 		logDebug:                cfg.logDebug,
+		rand:                    cfg.rand,
 		valueLocBlocks:          make([]valueLocBlock, math.MaxUint16),
 		path:                    cfg.path,
 		pathtoc:                 cfg.pathtoc,
@@ -586,7 +600,7 @@ func NewValueStore(opts ...func(*config)) *ValueStore {
 		checksumInterval:        uint32(cfg.checksumInterval),
 		msgConn:                 cfg.msgConn,
 		replicationIgnoreRecent: uint64(cfg.replicationIgnoreRecent) * uint64(time.Second),
-		backgroundIteration:     uint16(rand.New(rand.NewSource(time.Now().UnixNano())).Uint32()),
+		backgroundIteration:     uint16(cfg.rand.Uint32()),
 	}
 	vs.freeableVMChans = make([]chan *valuesMem, vs.cores)
 	for i := 0; i < cap(vs.freeableVMChans); i++ {
@@ -1404,7 +1418,7 @@ func (vs *ValueStore) BackgroundNow() {
 func (vs *ValueStore) backgroundLauncher() {
 	var enabled bool
 	interval := float64(vs.backgroundInterval) * float64(time.Second)
-	nextRun := time.Now().Add(time.Duration(interval + interval*rand.NormFloat64()*0.1))
+	nextRun := time.Now().Add(time.Duration(interval + interval*vs.rand.NormFloat64()*0.1))
 	for {
 		var notification *backgroundNotification
 		sleep := nextRun.Sub(time.Now())
@@ -1419,7 +1433,7 @@ func (vs *ValueStore) backgroundLauncher() {
 			default:
 			}
 		}
-		nextRun = time.Now().Add(time.Duration(interval + interval*rand.NormFloat64()*0.1))
+		nextRun = time.Now().Add(time.Duration(interval + interval*vs.rand.NormFloat64()*0.1))
 		if notification != nil {
 			if notification.enable {
 				enabled = true
@@ -1461,45 +1475,54 @@ func (vs *ValueStore) background() {
 	for len(vs.ktbfs) < vs.backgroundWorkers {
 		vs.ktbfs = append(vs.ktbfs, newKTBloomFilter(_GLH_BLOOM_FILTER_N, _GLH_BLOOM_FILTER_P, 0))
 	}
+	f := func(p uint32, ktbf *ktBloomFilter) {
+		vs.logDebug.Println("GLH doing", p)
+		start := uint64(p) << uint64(64-partitionPower)
+		stop := start + (uint64(1)<<(64-partitionPower) - 1)
+		pullSize := uint64(1) << (64 - partitionPower)
+		for vs.vlm.ScanCount(start, start+(pullSize-1), _GLH_BLOOM_FILTER_N) >= _GLH_BLOOM_FILTER_N {
+			pullSize /= 2
+		}
+		cutoff := uint64(time.Now().UnixNano()) - vs.replicationIgnoreRecent
+		substart := start
+		substop := start + (pullSize - 1)
+		for {
+			ktbf.reset(iteration)
+			vs.vlm.ScanCallback(substart, substop, func(keyA uint64, keyB uint64, timestamp uint64, length uint32) {
+				if timestamp < cutoff {
+					ktbf.add(keyA, keyB, timestamp)
+				}
+			})
+			if atomic.LoadUint32(&vs.backgroundAbort) != 0 {
+				break
+			}
+			vs.msgConn.send(vs.newOutPullReplicationMsg(ringID, p, cutoff, substart, substop, ktbf))
+			substart += pullSize
+			substop += pullSize
+			if substop > stop || substop < stop {
+				break
+			}
+		}
+	}
+	sp := uint32(vs.rand.Intn(int(partitions)))
+	vs.logDebug.Println("GLH", sp)
 	for g := 0; g < vs.backgroundWorkers; g++ {
-		go func(g int) {
+		go func(g uint32) {
+			// Here I'm doing pull replication scans for every
+			// partition when eventually it should just do this for
+			// partitions we're in the ring for. Partitions we're not
+			// in the ring for (handoffs, old data from ring changes,
+			// etc.) we should just send out what data we have and the
+			// remove it locally.
 			ktbf := vs.ktbfs[g]
-			for p := uint32(g); p < partitions && atomic.LoadUint32(&vs.backgroundAbort) == 0; p += uint32(vs.backgroundWorkers) {
-				// Here I'm doing pull replication scans for every
-				// partition when eventually it should just do this for
-				// partitions we're in the ring for. Partitions we're not
-				// in the ring for (handoffs, old data from ring changes,
-				// etc.) we should just send out what data we have and the
-				// remove it locally.
-				start := uint64(p) << uint64(64-partitionPower)
-				stop := start + (uint64(1)<<(64-partitionPower) - 1)
-				pullSize := uint64(1) << (64 - partitionPower)
-				for vs.vlm.ScanCount(start, start+(pullSize-1), _GLH_BLOOM_FILTER_N) >= _GLH_BLOOM_FILTER_N {
-					pullSize /= 2
-				}
-				cutoff := uint64(time.Now().UnixNano()) - vs.replicationIgnoreRecent
-				substart := start
-				substop := start + (pullSize - 1)
-				for {
-					ktbf.reset(iteration)
-					vs.vlm.ScanCallback(substart, substop, func(keyA uint64, keyB uint64, timestamp uint64, length uint32) {
-						if timestamp < cutoff {
-							ktbf.add(keyA, keyB, timestamp)
-						}
-					})
-					if atomic.LoadUint32(&vs.backgroundAbort) != 0 {
-						break
-					}
-					vs.msgConn.send(vs.newOutPullReplicationMsg(ringID, p, cutoff, substart, substop, ktbf))
-					substart += pullSize
-					substop += pullSize
-					if substop > stop || substop < stop {
-						break
-					}
-				}
+			for p := uint32(sp + g); p < partitions && atomic.LoadUint32(&vs.backgroundAbort) == 0; p += uint32(vs.backgroundWorkers) {
+				f(p, ktbf)
+			}
+			for p := uint32(g); p < sp && atomic.LoadUint32(&vs.backgroundAbort) == 0; p += uint32(vs.backgroundWorkers) {
+				f(p, ktbf)
 			}
 			wg.Done()
-		}(g)
+		}(uint32(g))
 	}
 	wg.Wait()
 	if vs.logDebug != nil {

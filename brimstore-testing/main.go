@@ -21,6 +21,7 @@ import (
 type optsStruct struct {
 	Clients       int    `long:"clients" description:"The number of clients. Default: cores*cores"`
 	Cores         int    `long:"cores" description:"The number of cores. Default: CPU core count"`
+	Debug         bool   `long:"debug" description:"Turns on debug output."`
 	ExtendedStats bool   `long:"extended-stats" description:"Extended statistics at exit."`
 	Length        int    `short:"l" long:"length" description:"Length of values. Default: 0"`
 	Number        int    `short:"n" long:"number" description:"Number of keys. Default: 0"`
@@ -104,12 +105,18 @@ func main() {
 		vs2opts = append(vs2opts, brimstore.OptLogError(log.New(os.Stderr, "ReplicatedValueStore ", log.LstdFlags)))
 		vs2opts = append(vs2opts, brimstore.OptLogWarning(log.New(os.Stderr, "ReplicatedValueStore ", log.LstdFlags)))
 		vs2opts = append(vs2opts, brimstore.OptLogInfo(log.New(os.Stdout, "ReplicatedValueStore ", log.LstdFlags)))
+		if opts.Debug {
+			vs2opts = append(vs2opts, brimstore.OptLogDebug(log.New(os.Stderr, "ReplicatedValueStore ", log.LstdFlags)))
+		}
 		wg.Add(1)
 		go func() {
 			opts.rvs = brimstore.NewValueStore(vs2opts...)
 			wg.Done()
 		}()
 		vsopts = append(vsopts, brimstore.OptMsgConn(brimstore.NewMsgConn(conn)))
+	}
+	if opts.Debug {
+		vsopts = append(vsopts, brimstore.OptLogDebug(log.New(os.Stderr, "ValueStore ", log.LstdFlags)))
 	}
 	opts.vs = brimstore.NewValueStore(vsopts...)
 	wg.Wait()
