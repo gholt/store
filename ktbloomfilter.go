@@ -61,6 +61,10 @@ func (ktbf *ktBloomFilter) String() string {
 }
 
 func (ktbf *ktBloomFilter) add(keyA uint64, keyB uint64, timestamp uint64) {
+    // TODO: There are optimization opportunities here as keyA and keyB can be
+    // considered to already have good bit distribution and using a hashing
+    // function to mix-in timestamp, salt, and i instead of redoing the whole
+    // hash each time would be good to test and benchmark.
 	scratch := ktbf.scratch
 	binary.BigEndian.PutUint64(scratch[4:], keyA)
 	binary.BigEndian.PutUint64(scratch[12:], keyB)
