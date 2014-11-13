@@ -1613,8 +1613,6 @@ func (vs *DefaultValueStore) outReplicationPass() {
 		begin := time.Now()
 		defer vs.logDebug.Printf("out replication pass took %s", time.Now().Sub(begin))
 	}
-	// TODO: Move to its own background task.
-	vs.vlm.DiscardTombstones(uint64(time.Now().UnixNano()) - vs.tombstoneAge)
 	if vs.ring == nil {
 		return
 	}
