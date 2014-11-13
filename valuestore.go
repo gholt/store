@@ -1404,13 +1404,16 @@ func (vs *DefaultValueStore) inPullReplication() {
 		prm := <-vs.inPullReplicationChan
 		k = k[:0]
 		cutoff := prm.timestampCutoff()
+		tombstoneCutoff := uint64(time.Now().UnixNano()) - vs.tombstoneAge
 		ktbf := prm.ktBloomFilter()
 		l := int64(_GLH_OUT_BULK_SET_MSG_SIZE)
 		vs.vlm.ScanCallback(prm.rangeStart(), prm.rangeStop(), func(keyA uint64, keyB uint64, timestamp uint64, length uint32) {
 			if l > 0 && timestamp < cutoff && !ktbf.mayHave(keyA, keyB, timestamp) {
-				k = append(k, keyA, keyB)
-				// bsm: keyA:8, keyB:8, timestamp:8, length:4, value:n
-				l -= 28 + int64(length)
+				if timestamp&1 == 0 || timestamp >= tombstoneCutoff {
+					k = append(k, keyA, keyB)
+					// bsm: keyA:8, keyB:8, timestamp:8, length:4, value:n
+					l -= 28 + int64(length)
+				}
 			}
 		})
 		nodeID := prm.nodeID()
@@ -1635,13 +1638,16 @@ func (vs *DefaultValueStore) outReplicationPass() {
 			pullSize /= 2
 		}
 		cutoff := uint64(time.Now().UnixNano()) - vs.replicationIgnoreRecent
+		tombstoneCutoff := uint64(time.Now().UnixNano()) - vs.tombstoneAge
 		substart := start
 		substop := start + (pullSize - 1)
 		for {
 			ktbf.reset(vs.outReplicationIteration)
 			vs.vlm.ScanCallback(substart, substop, func(keyA uint64, keyB uint64, timestamp uint64, length uint32) {
 				if timestamp < cutoff {
-					ktbf.add(keyA, keyB, timestamp)
+					if timestamp&1 == 0 || timestamp >= tombstoneCutoff {
+						ktbf.add(keyA, keyB, timestamp)
+					}
 				}
 			})
 			if atomic.LoadUint32(&vs.outReplicationAbort) != 0 {
