@@ -21,9 +21,8 @@
 // specific values at any time, without having the possibility of deleting any
 // newer values (e.g. expiring values).
 //
-// TODO: List probably not comprehensive:
-//  Replication
-//      blockID = 0 setting due to replication of handoffs
+// TODO list probably not comprehensive:
+//  Push replication
 //  Compaction
 package valuestore
 
@@ -58,18 +57,21 @@ import (
 //
 // For documentation on each of these functions, see the DefaultValueStore.
 type ValueStore interface {
-	BackgroundNow()
-	Delete(keyA uint64, keyB uint64, timestamp uint64) (uint64, error)
-	DisableBackgroundTasks()
-	DisableWrites()
-	EnableBackgroundTasks()
-	EnableWrites()
-	Flush()
-	GatherStats(debug bool) (uint64, uint64, fmt.Stringer)
 	Lookup(keyA uint64, keyB uint64) (uint64, uint32, error)
-	MaxValueSize() uint32
 	Read(keyA uint64, keyB uint64, value []byte) (uint64, []byte, error)
 	Write(keyA uint64, keyB uint64, timestamp uint64, value []byte) (uint64, error)
+	Delete(keyA uint64, keyB uint64, timestamp uint64) (uint64, error)
+	EnableDiscard()
+	DisableDiscard()
+	DiscardPass()
+	EnableOutReplication()
+	DisableOutReplication()
+	OutReplicationPass()
+	EnableWrites()
+	DisableWrites()
+	Flush()
+	GatherStats(debug bool) (uint64, uint64, fmt.Stringer)
+	MaxValueSize() uint32
 }
 
 type config struct {
@@ -83,8 +85,9 @@ type config struct {
 	pathtoc                 string
 	vlm                     valuelocmap.ValueLocMap
 	workers                 int
-	backgroundWorkers       int
-	backgroundInterval      int
+	discardInterval         int
+	outReplicationWorkers   int
+	outReplicationInterval  int
 	maxValueSize            int
 	pageSize                int
 	minValueAlloc           int
@@ -107,16 +110,22 @@ func resolveConfig(opts ...func(*config)) *config {
 			cfg.workers = val
 		}
 	}
-	cfg.backgroundWorkers = cfg.workers
-	if env := os.Getenv("VALUESTORE_BACKGROUNDWORKERS"); env != "" {
+	cfg.discardInterval = 60
+	if env := os.Getenv("VALUESTORE_DISCARDINTERVAL"); env != "" {
 		if val, err := strconv.Atoi(env); err == nil {
-			cfg.backgroundWorkers = val
+			cfg.discardInterval = val
 		}
 	}
-	cfg.backgroundInterval = 60
-	if env := os.Getenv("VALUESTORE_BACKGROUNDINTERVAL"); env != "" {
+	cfg.outReplicationWorkers = cfg.workers
+	if env := os.Getenv("VALUESTORE_OUTREPLICATIONWORKERS"); env != "" {
 		if val, err := strconv.Atoi(env); err == nil {
-			cfg.backgroundInterval = val
+			cfg.outReplicationWorkers = val
+		}
+	}
+	cfg.outReplicationInterval = 60
+	if env := os.Getenv("VALUESTORE_OUTREPLICATIONINTERVAL"); env != "" {
+		if val, err := strconv.Atoi(env); err == nil {
+			cfg.outReplicationInterval = val
 		}
 	}
 	cfg.maxValueSize = 4 * 1024 * 1024
@@ -194,11 +203,14 @@ func resolveConfig(opts ...func(*config)) *config {
 	if cfg.workers < 1 {
 		cfg.workers = 1
 	}
-	if cfg.backgroundWorkers < 1 {
-		cfg.backgroundWorkers = 1
+	if cfg.discardInterval < 1 {
+		cfg.discardInterval = 1
 	}
-	if cfg.backgroundInterval < 1 {
-		cfg.backgroundInterval = 1
+	if cfg.outReplicationWorkers < 1 {
+		cfg.outReplicationWorkers = 1
+	}
+	if cfg.outReplicationInterval < 1 {
+		cfg.outReplicationInterval = 1
 	}
 	if cfg.maxValueSize < 0 {
 		cfg.maxValueSize = 0
@@ -335,27 +347,43 @@ func OptWorkers(count int) func(*config) {
 	}
 }
 
-// OptBackgroundWorkers indicates how many goroutines may be used for
-// background tasks. Defaults to env VALUESTORE_BACKGROUNDWORKERS or
-// VALUESTORE_WORKERS.
-func OptBackgroundWorkers(workers int) func(*config) {
+// OptDiscardInterval indicates the minimum number of seconds betweeen the
+// starts of discard passes (discarding expired tombstones [deletion markers]).
+// If set to 60 seconds and the passes take 10 seconds to run, they will wait
+// 50 seconds (with a small amount of randomization) between the stop of one
+// run and the start of the next. This is really just meant to keep nearly
+// empty structures from using a lot of resources doing nearly nothing.
+// Normally, you'd want your discard passes to be running constantly so that
+// they are as fast as possible and the load constant. The default of 60
+// seconds is almost always fine. Defaults to env VALUESTORE_DISCARDINTERVAL or
+// 60.
+func OptDiscardInterval(seconds int) func(*config) {
 	return func(cfg *config) {
-		cfg.backgroundWorkers = workers
+		cfg.discardInterval = seconds
 	}
 }
 
-// OptBackgroundInterval indicates the minimum number of seconds betweeen the
-// starts of background tasks. For example, if set to 60 seconds and the tasks
+// OptOutReplicationWorkers indicates how many goroutines may be used for an
+// out replication pass. Defaults to env VALUESTORE_OUTREPLICATIONWORKERS or
+// VALUESTORE_WORKERS.
+func OptOutReplicationWorkers(workers int) func(*config) {
+	return func(cfg *config) {
+		cfg.outReplicationWorkers = workers
+	}
+}
+
+// OptOutReplicationInterval indicates the minimum number of seconds betweeen
+// the starts of out replication passes. If set to 60 seconds and the passes
 // take 10 seconds to run, they will wait 50 seconds (with a small amount of
 // randomization) between the stop of one run and the start of the next. This
 // is really just meant to keep nearly empty structures from using a lot of
-// resources doing nearly nothing. Normally, you'd want your tasks to be
-// running constantly so that replication and cleanup are as fast as possible
+// resources doing nearly nothing. Normally, you'd want your out replication
+// passes to be running constantly so that replication is as fast as possible
 // and the load constant. The default of 60 seconds is almost always fine.
-// Defaults to env VALUESTORE_BACKGROUNDINTERVAL or 60.
-func OptBackgroundInterval(seconds int) func(*config) {
+// Defaults to env VALUESTORE_OUTREPLICATIONINTERVAL or 60.
+func OptOutReplicationInterval(seconds int) func(*config) {
 	return func(cfg *config) {
-		cfg.backgroundInterval = seconds
+		cfg.outReplicationInterval = seconds
 	}
 }
 
@@ -420,7 +448,9 @@ func OptChecksumInterval(bytes int) func(*config) {
 	}
 }
 
-// TODO
+// OptMsgRing sets the ring.MsgRing to use for determining the key ranges the
+// ValueStore is responsible for as well as providing methods to send messages
+// to other nodes.
 func OptMsgRing(r ring.MsgRing) func(*config) {
 	return func(cfg *config) {
 		cfg.ring = r
@@ -472,8 +502,9 @@ type DefaultValueStore struct {
 	pathtoc                   string
 	vlm                       valuelocmap.ValueLocMap
 	workers                   int
-	backgroundWorkers         int
-	backgroundInterval        int
+	discardInterval           int
+	outReplicationWorkers     int
+	outReplicationInterval    int
 	maxValueSize              uint32
 	pageSize                  uint32
 	minValueAlloc             int
@@ -483,17 +514,19 @@ type DefaultValueStore struct {
 	valuesFileReaders         int
 	checksumInterval          uint32
 	ring                      ring.MsgRing
+	discardNotifyChan         chan *discardNotification
+	discardAbort              uint32
 	replicationIgnoreRecent   uint64
 	inPullReplicationChan     chan *pullReplicationMsg
 	freeInPullReplicationChan chan *pullReplicationMsg
+	outReplicationNotifyChan  chan *outReplicationNotification
+	outReplicationIteration   uint16
+	outReplicationAbort       uint32
 	outPullReplicationChan    chan *pullReplicationMsg
+	ktbfs                     []*ktBloomFilter
 	inBulkSetChan             chan *bulkSetMsg
 	freeInBulkSetChan         chan *bulkSetMsg
 	outBulkSetChan            chan *bulkSetMsg
-	backgroundNotifyChan      chan *backgroundNotification
-	backgroundIteration       uint16
-	backgroundAbort           uint32
-	ktbfs                     []*ktBloomFilter
 }
 
 type valueWriteReq struct {
@@ -535,8 +568,9 @@ type valueStoreStats struct {
 	path                    string
 	pathtoc                 string
 	workers                 int
-	backgroundWorkers       int
-	backgroundInterval      int
+	discardInterval         int
+	outReplicationWorkers   int
+	outReplicationInterval  int
 	maxValueSize            uint32
 	pageSize                uint32
 	minValueAlloc           int
@@ -551,7 +585,13 @@ type valueStoreStats struct {
 	vlmDebugInfo            fmt.Stringer
 }
 
-type backgroundNotification struct {
+type discardNotification struct {
+	enable   bool
+	disable  bool
+	doneChan chan struct{}
+}
+
+type outReplicationNotification struct {
 	enable   bool
 	disable  bool
 	doneChan chan struct{}
@@ -568,10 +608,10 @@ const _GLH_OUT_BULK_SET_MSG_SIZE = 16 * 1024 * 1024
 // New creates a DefaultValueStore for use in storing []byte values referenced
 // by 128 bit keys.
 //
-// Note that a lot of buffering and multiple cores can be in use and therefore
-// DisableBackgroundTasks() DisableWrites() and Flush() should be called prior
-// to the process exiting to ensure all processing is done and the buffers are
-// flushed.
+// Note that a lot of buffering, multiple cores, and background processes can
+// be in use and therefore DisableDiscard() DisableOutReplication()
+// DisableWrites() and Flush() should be called prior to the process exiting to
+// ensure all processing is done and the buffers are flushed.
 //
 // You can provide Opt* functions for optional configuration items, such as
 // OptWorkers:
@@ -593,30 +633,31 @@ func New(opts ...func(*config)) *DefaultValueStore {
 		vlm = valuelocmap.New()
 	}
 	vs := &DefaultValueStore{
-		logCritical:         cfg.logCritical,
-		logError:            cfg.logError,
-		logWarning:          cfg.logWarning,
-		logInfo:             cfg.logInfo,
-		logDebug:            cfg.logDebug,
-		rand:                cfg.rand,
-		valueLocBlocks:      make([]valueLocBlock, math.MaxUint16),
-		path:                cfg.path,
-		pathtoc:             cfg.pathtoc,
-		vlm:                 vlm,
-		workers:             cfg.workers,
-		backgroundWorkers:   cfg.backgroundWorkers,
-		backgroundInterval:  cfg.backgroundInterval,
-		maxValueSize:        uint32(cfg.maxValueSize),
-		pageSize:            uint32(cfg.pageSize),
-		minValueAlloc:       cfg.minValueAlloc,
-		writePagesPerWorker: cfg.writePagesPerWorker,
-		tombstoneAge:        uint64(cfg.tombstoneAge) * uint64(time.Second),
-		valuesFileSize:      uint32(cfg.valuesFileSize),
-		valuesFileReaders:   cfg.valuesFileReaders,
-		checksumInterval:    uint32(cfg.checksumInterval),
-		ring:                cfg.ring,
+		logCritical:             cfg.logCritical,
+		logError:                cfg.logError,
+		logWarning:              cfg.logWarning,
+		logInfo:                 cfg.logInfo,
+		logDebug:                cfg.logDebug,
+		rand:                    cfg.rand,
+		valueLocBlocks:          make([]valueLocBlock, math.MaxUint16),
+		path:                    cfg.path,
+		pathtoc:                 cfg.pathtoc,
+		vlm:                     vlm,
+		workers:                 cfg.workers,
+		discardInterval:         cfg.discardInterval,
+		outReplicationWorkers:   cfg.outReplicationWorkers,
 		replicationIgnoreRecent: uint64(cfg.replicationIgnoreRecent) * uint64(time.Second),
-		backgroundIteration:     uint16(cfg.rand.Uint32()),
+		outReplicationIteration: uint16(cfg.rand.Uint32()),
+		outReplicationInterval:  cfg.outReplicationInterval,
+		maxValueSize:            uint32(cfg.maxValueSize),
+		pageSize:                uint32(cfg.pageSize),
+		minValueAlloc:           cfg.minValueAlloc,
+		writePagesPerWorker:     cfg.writePagesPerWorker,
+		tombstoneAge:            uint64(cfg.tombstoneAge) * uint64(time.Second),
+		valuesFileSize:          uint32(cfg.valuesFileSize),
+		valuesFileReaders:       cfg.valuesFileReaders,
+		checksumInterval:        uint32(cfg.checksumInterval),
+		ring:                    cfg.ring,
 	}
 	vs.freeableVMChans = make([]chan *valuesMem, vs.workers)
 	for i := 0; i < cap(vs.freeableVMChans); i++ {
@@ -698,8 +739,10 @@ func New(opts ...func(*config)) *DefaultValueStore {
 			}
 		}
 	}
-	vs.backgroundNotifyChan = make(chan *backgroundNotification, 1)
-	go vs.backgroundLauncher()
+	vs.discardNotifyChan = make(chan *discardNotification, 1)
+	go vs.discardLauncher()
+	vs.outReplicationNotifyChan = make(chan *outReplicationNotification, 1)
+	go vs.outReplicationLauncher()
 	return vs
 }
 
@@ -724,23 +767,45 @@ func (vs *DefaultValueStore) EnableWrites() {
 	}
 }
 
-// DisableBackgroundTasks will abort any running background tasks and suspend
-// relaunching them until EnableBackgroundTasks is called.
-func (vs *DefaultValueStore) DisableBackgroundTasks() {
-	atomic.StoreUint32(&vs.backgroundAbort, 1)
+// DisableDiscard will stop any discard passes until EnableDiscard is called. A
+// discard pass removes expired tombstones (deletion markers).
+func (vs *DefaultValueStore) DisableDiscard() {
+	atomic.StoreUint32(&vs.discardAbort, 1)
 	c := make(chan struct{}, 1)
-	vs.backgroundNotifyChan <- &backgroundNotification{
+	vs.discardNotifyChan <- &discardNotification{
 		disable:  true,
 		doneChan: c,
 	}
 	<-c
 }
 
-// EnableBackgroundTasks will resume launching background tasks at configured
-// intervals.
-func (vs *DefaultValueStore) EnableBackgroundTasks() {
+// EnableDiscard will resume discard passes. A discard pass removes expired
+// tombstones (deletion markers).
+func (vs *DefaultValueStore) EnableDiscard() {
 	c := make(chan struct{}, 1)
-	vs.backgroundNotifyChan <- &backgroundNotification{
+	vs.discardNotifyChan <- &discardNotification{
+		enable:   true,
+		doneChan: c,
+	}
+	<-c
+}
+
+// DisableOutReplication will stop any outgoing replication requests until
+// EnableOutReplication is called.
+func (vs *DefaultValueStore) DisableOutReplication() {
+	atomic.StoreUint32(&vs.outReplicationAbort, 1)
+	c := make(chan struct{}, 1)
+	vs.outReplicationNotifyChan <- &outReplicationNotification{
+		disable:  true,
+		doneChan: c,
+	}
+	<-c
+}
+
+// EnableOutReplication will resume outgoing replication requests.
+func (vs *DefaultValueStore) EnableOutReplication() {
+	c := make(chan struct{}, 1)
+	vs.outReplicationNotifyChan <- &outReplicationNotification{
 		enable:   true,
 		doneChan: c,
 	}
@@ -851,8 +916,9 @@ func (vs *DefaultValueStore) GatherStats(debug bool) (uint64, uint64, fmt.String
 		stats.path = vs.path
 		stats.pathtoc = vs.pathtoc
 		stats.workers = vs.workers
-		stats.backgroundWorkers = vs.backgroundWorkers
-		stats.backgroundInterval = vs.backgroundInterval
+		stats.discardInterval = vs.discardInterval
+		stats.outReplicationWorkers = vs.outReplicationWorkers
+		stats.outReplicationInterval = vs.outReplicationInterval
 		stats.maxValueSize = vs.maxValueSize
 		stats.pageSize = vs.pageSize
 		stats.minValueAlloc = vs.minValueAlloc
@@ -1366,7 +1432,6 @@ func (vs *DefaultValueStore) inPullReplication() {
 					break
 				}
 			}
-			// TODO
 			vs.ring.MsgToNode(nodeID, bsm)
 		}
 	}
@@ -1403,8 +1468,9 @@ func (stats *valueStoreStats) String() string {
 			[]string{"path", stats.path},
 			[]string{"pathtoc", stats.pathtoc},
 			[]string{"workers", fmt.Sprintf("%d", stats.workers)},
-			[]string{"backgroundWorkers", fmt.Sprintf("%d", stats.backgroundWorkers)},
-			[]string{"backgroundInterval", fmt.Sprintf("%d", stats.backgroundInterval)},
+			[]string{"discardInterval", fmt.Sprintf("%d", stats.discardInterval)},
+			[]string{"outReplicationWorkers", fmt.Sprintf("%d", stats.outReplicationWorkers)},
+			[]string{"outReplicationInterval", fmt.Sprintf("%d", stats.outReplicationInterval)},
 			[]string{"maxValueSize", fmt.Sprintf("%d", stats.maxValueSize)},
 			[]string{"pageSize", fmt.Sprintf("%d", stats.pageSize)},
 			[]string{"minValueAlloc", fmt.Sprintf("%d", stats.minValueAlloc)},
@@ -1426,32 +1492,32 @@ func (stats *valueStoreStats) String() string {
 	}
 }
 
-// BackgroundNow will immediately execute any background tasks rather than
-// waiting for the next background interval. If the background tasks are
-// currently executing, they will be stopped and restarted so that a call to
-// this function ensures one complete pass occurs.
-func (vs *DefaultValueStore) BackgroundNow() {
-	atomic.StoreUint32(&vs.backgroundAbort, 1)
+// DiscardPass will immediately execute a pass to discard expired tombstones
+// (deletion markers) rather than waiting for the next interval. If a pass is
+// currently executing, it will be stopped and restarted so that a call to this
+// function ensures one complete pass occurs.
+func (vs *DefaultValueStore) DiscardPass() {
+	atomic.StoreUint32(&vs.discardAbort, 1)
 	c := make(chan struct{}, 1)
-	vs.backgroundNotifyChan <- &backgroundNotification{doneChan: c}
+	vs.discardNotifyChan <- &discardNotification{doneChan: c}
 	<-c
 }
 
-func (vs *DefaultValueStore) backgroundLauncher() {
+func (vs *DefaultValueStore) discardLauncher() {
 	var enabled bool
-	interval := float64(vs.backgroundInterval) * float64(time.Second)
+	interval := float64(vs.discardInterval) * float64(time.Second)
 	nextRun := time.Now().Add(time.Duration(interval + interval*vs.rand.NormFloat64()*0.1))
 	for {
-		var notification *backgroundNotification
+		var notification *discardNotification
 		sleep := nextRun.Sub(time.Now())
 		if sleep > 0 {
 			select {
-			case notification = <-vs.backgroundNotifyChan:
+			case notification = <-vs.discardNotifyChan:
 			case <-time.After(sleep):
 			}
 		} else {
 			select {
-			case notification = <-vs.backgroundNotifyChan:
+			case notification = <-vs.discardNotifyChan:
 			default:
 			}
 		}
@@ -1467,12 +1533,74 @@ func (vs *DefaultValueStore) backgroundLauncher() {
 				notification.doneChan <- struct{}{}
 				continue
 			}
-			atomic.StoreUint32(&vs.backgroundAbort, 0)
-			vs.background()
+			atomic.StoreUint32(&vs.discardAbort, 0)
+			vs.discardPass()
 			notification.doneChan <- struct{}{}
 		} else if enabled {
-			atomic.StoreUint32(&vs.backgroundAbort, 0)
-			vs.background()
+			atomic.StoreUint32(&vs.discardAbort, 0)
+			vs.discardPass()
+		}
+	}
+}
+
+func (vs *DefaultValueStore) discardPass() {
+	if vs.logDebug != nil {
+		begin := time.Now()
+		defer vs.logDebug.Printf("discard pass took %s", time.Now().Sub(begin))
+	}
+	vs.vlm.DiscardTombstones(uint64(time.Now().UnixNano()) - vs.tombstoneAge)
+}
+
+// OutReplicationPass will immediately execute an outgoing replication pass
+// rather than waiting for the next interval. If a pass is currently executing,
+// it will be stopped and restarted so that a call to this function ensures one
+// complete pass occurs. Note that this pass will send the outgoing replication
+// requests, but all the responses will almost certainly not have been received
+// when this function returns. These requests are stateless, and so
+// synchronization at that level is not possible.
+func (vs *DefaultValueStore) OutReplicationPass() {
+	atomic.StoreUint32(&vs.outReplicationAbort, 1)
+	c := make(chan struct{}, 1)
+	vs.outReplicationNotifyChan <- &outReplicationNotification{doneChan: c}
+	<-c
+}
+
+func (vs *DefaultValueStore) outReplicationLauncher() {
+	var enabled bool
+	interval := float64(vs.outReplicationInterval) * float64(time.Second)
+	nextRun := time.Now().Add(time.Duration(interval + interval*vs.rand.NormFloat64()*0.1))
+	for {
+		var notification *outReplicationNotification
+		sleep := nextRun.Sub(time.Now())
+		if sleep > 0 {
+			select {
+			case notification = <-vs.outReplicationNotifyChan:
+			case <-time.After(sleep):
+			}
+		} else {
+			select {
+			case notification = <-vs.outReplicationNotifyChan:
+			default:
+			}
+		}
+		nextRun = time.Now().Add(time.Duration(interval + interval*vs.rand.NormFloat64()*0.1))
+		if notification != nil {
+			if notification.enable {
+				enabled = true
+				notification.doneChan <- struct{}{}
+				continue
+			}
+			if notification.disable {
+				enabled = false
+				notification.doneChan <- struct{}{}
+				continue
+			}
+			atomic.StoreUint32(&vs.outReplicationAbort, 0)
+			vs.outReplicationPass()
+			notification.doneChan <- struct{}{}
+		} else if enabled {
+			atomic.StoreUint32(&vs.outReplicationAbort, 0)
+			vs.outReplicationPass()
 		}
 	}
 }
@@ -1480,27 +1608,25 @@ func (vs *DefaultValueStore) backgroundLauncher() {
 const _GLH_BLOOM_FILTER_N = 1000000
 const _GLH_BLOOM_FILTER_P = 0.001
 
-func (vs *DefaultValueStore) background() {
-	begin := time.Now()
-	if vs.backgroundIteration == math.MaxUint16 {
-		vs.backgroundIteration = 0
-	} else {
-		vs.backgroundIteration++
-	}
-	vs.vlm.DiscardTombstones(uint64(time.Now().UnixNano()) - vs.tombstoneAge)
-	if vs.ring != nil {
-		vs.backgroundPullReplication()
-	}
+func (vs *DefaultValueStore) outReplicationPass() {
 	if vs.logDebug != nil {
-		vs.logDebug.Printf("background tasks took %s", time.Now().Sub(begin))
+		begin := time.Now()
+		defer vs.logDebug.Printf("out replication pass took %s", time.Now().Sub(begin))
 	}
-}
-
-func (vs *DefaultValueStore) backgroundPullReplication() {
+	// TODO: Move to its own background task.
+	vs.vlm.DiscardTombstones(uint64(time.Now().UnixNano()) - vs.tombstoneAge)
+	if vs.ring == nil {
+		return
+	}
+	if vs.outReplicationIteration == math.MaxUint16 {
+		vs.outReplicationIteration = 0
+	} else {
+		vs.outReplicationIteration++
+	}
 	ringID := vs.ring.ID()
 	partitionPower := vs.ring.PartitionPower()
 	partitions := uint32(1) << partitionPower
-	for len(vs.ktbfs) < vs.backgroundWorkers {
+	for len(vs.ktbfs) < vs.outReplicationWorkers {
 		vs.ktbfs = append(vs.ktbfs, newKTBloomFilter(_GLH_BLOOM_FILTER_N, _GLH_BLOOM_FILTER_P, 0))
 	}
 	f := func(p uint32, ktbf *ktBloomFilter) {
@@ -1514,13 +1640,13 @@ func (vs *DefaultValueStore) backgroundPullReplication() {
 		substart := start
 		substop := start + (pullSize - 1)
 		for {
-			ktbf.reset(vs.backgroundIteration)
+			ktbf.reset(vs.outReplicationIteration)
 			vs.vlm.ScanCallback(substart, substop, func(keyA uint64, keyB uint64, timestamp uint64, length uint32) {
 				if timestamp < cutoff {
 					ktbf.add(keyA, keyB, timestamp)
 				}
 			})
-			if atomic.LoadUint32(&vs.backgroundAbort) != 0 {
+			if atomic.LoadUint32(&vs.outReplicationAbort) != 0 {
 				break
 			}
 			vs.ring.MsgToOtherReplicas(ringID, p, vs.newOutPullReplicationMsg(ringID, p, cutoff, substart, substop, ktbf))
@@ -1533,11 +1659,11 @@ func (vs *DefaultValueStore) backgroundPullReplication() {
 	}
 	sp := uint32(vs.rand.Intn(int(partitions)))
 	wg := &sync.WaitGroup{}
-	wg.Add(vs.backgroundWorkers)
-	for g := 0; g < vs.backgroundWorkers; g++ {
+	wg.Add(vs.outReplicationWorkers)
+	for g := 0; g < vs.outReplicationWorkers; g++ {
 		go func(g uint32) {
 			ktbf := vs.ktbfs[g]
-			for p := uint32(sp + g); p < partitions && atomic.LoadUint32(&vs.backgroundAbort) == 0; p += uint32(vs.backgroundWorkers) {
+			for p := uint32(sp + g); p < partitions && atomic.LoadUint32(&vs.outReplicationAbort) == 0; p += uint32(vs.outReplicationWorkers) {
 				if vs.ring.ID() != ringID {
 					break
 				}
@@ -1545,7 +1671,7 @@ func (vs *DefaultValueStore) backgroundPullReplication() {
 					f(p, ktbf)
 				}
 			}
-			for p := uint32(g); p < sp && atomic.LoadUint32(&vs.backgroundAbort) == 0; p += uint32(vs.backgroundWorkers) {
+			for p := uint32(g); p < sp && atomic.LoadUint32(&vs.outReplicationAbort) == 0; p += uint32(vs.outReplicationWorkers) {
 				if vs.ring.ID() != ringID {
 					break
 				}
