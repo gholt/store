@@ -71,8 +71,8 @@ import (
 
 	"github.com/gholt/brimtext"
 	"github.com/gholt/brimutil"
-	"github.com/gholt/ring"
-	"github.com/gholt/valuelocmap"
+	"github.com/gholt/experimental-ring"
+	"github.com/gholt/experimental-valuelocmap"
 	"github.com/spaolacci/murmur3"
 )
 
