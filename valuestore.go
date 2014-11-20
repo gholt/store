@@ -277,8 +277,10 @@ func resolveConfig(opts ...func(*config)) *config {
 	if cfg.pageSize < 40 {
 		cfg.pageSize = 40
 	}
-	if cfg.pageSize > math.MaxUint32 {
-		cfg.pageSize = math.MaxUint32
+	// The max is MaxUint32-1 because we use MaxUint32 to indicate push
+	// replication local removal.
+	if cfg.pageSize > math.MaxUint32-1 {
+		cfg.pageSize = math.MaxUint32 - 1
 	}
 	// Ensure a full TOC page will have an associated data page of at least
 	// checksumInterval in size, again so that each page written will at least
@@ -613,7 +615,6 @@ type DefaultValueStore struct {
 	inBulkSetChan                chan *bulkSetMsg
 	freeInBulkSetChan            chan *bulkSetMsg
 	outBulkSetChan               chan *bulkSetMsg
-	freeOutBulkSetAckChan        chan *bulkSetAckMsg
 	inBulkSetAckChan             chan *bulkSetAckMsg
 	freeInBulkSetAckChan         chan *bulkSetAckMsg
 	outBulkSetAckChan            chan *bulkSetAckMsg
@@ -989,6 +990,8 @@ func (vs *DefaultValueStore) Read(keyA uint64, keyB uint64, value []byte) (uint6
 	return vs.valueLocBlock(id).read(keyA, keyB, timestamp, offset, length, value)
 }
 
+var _EMPTY_BYTE_ARRAY []byte = []byte{}
+
 // Write stores timestamp & 0xfffffffffffffffe (lowest bit zeroed), value for
 // keyA, keyB or returns any error; a newer timestamp already in place is not
 // reported as an error.
@@ -998,7 +1001,11 @@ func (vs *DefaultValueStore) Write(keyA uint64, keyB uint64, timestamp uint64, v
 	vwr.keyA = keyA
 	vwr.keyB = keyB
 	vwr.timestamp = timestamp & 0xfffffffffffffffe
-	vwr.value = value
+	if value == nil {
+		vwr.value = _EMPTY_BYTE_ARRAY
+	} else {
+		vwr.value = value
+	}
 	vs.pendingVWRChans[i] <- vwr
 	err := <-vwr.errChan
 	previousTimestamp := vwr.timestamp
@@ -1113,9 +1120,12 @@ func (vs *DefaultValueStore) memClearer(freeableVMChan chan *valuesMem) {
 			timestamp := binary.BigEndian.Uint64(vm.toc[vmTOCOffset+16:])
 			vmMemOffset := binary.BigEndian.Uint32(vm.toc[vmTOCOffset+24:])
 			length := binary.BigEndian.Uint32(vm.toc[vmTOCOffset+28:])
-			previousTimestamp := vs.vlm.Set(keyA, keyB, timestamp, vm.vfID, vm.vfOffset+vmMemOffset, length, true)
-			if previousTimestamp != timestamp {
-				continue
+			// vmMemOffset == MaxUint32 is the special case for push
+			// replication; indicates the item was pushed and removed locally.
+			if vmMemOffset != math.MaxUint32 {
+				if vs.vlm.Set(keyA, keyB, timestamp, vm.vfID, vm.vfOffset+vmMemOffset, length, true) != timestamp {
+					continue
+				}
 			}
 			if tb != nil && tbOffset+32 > cap(tb) {
 				vs.pendingTOCBlockChan <- tb
@@ -1132,8 +1142,17 @@ func (vs *DefaultValueStore) memClearer(freeableVMChan chan *valuesMem) {
 			binary.BigEndian.PutUint64(tb[tbOffset:], keyA)
 			binary.BigEndian.PutUint64(tb[tbOffset+8:], keyB)
 			binary.BigEndian.PutUint64(tb[tbOffset+16:], timestamp)
-			binary.BigEndian.PutUint32(tb[tbOffset+24:], vm.vfOffset+vmMemOffset)
-			binary.BigEndian.PutUint32(tb[tbOffset+28:], length)
+			if vmMemOffset == math.MaxUint32 {
+				// Special case for push replication; indicates the item was
+				// pushed and removed locally. We use 0 as the file offset
+				// because there always is a header therefore no "real" value
+				// references 0.
+				binary.BigEndian.PutUint32(tb[tbOffset+24:], 0)
+				binary.BigEndian.PutUint32(tb[tbOffset+28:], 0)
+			} else {
+				binary.BigEndian.PutUint32(tb[tbOffset+24:], vm.vfOffset+vmMemOffset)
+				binary.BigEndian.PutUint32(tb[tbOffset+28:], length)
+			}
 			tbOffset += 32
 		}
 		vm.discardLock.Lock()
@@ -1200,14 +1219,35 @@ func (vs *DefaultValueStore) memWriter(pendingVWRChan chan *valueWriteReq) {
 				vm.values[i] = 0
 			}
 		}
-		previousTimestamp := vs.vlm.Set(vwr.keyA, vwr.keyB, vwr.timestamp, vm.id, uint32(vmMemOffset), uint32(length), false)
-		if previousTimestamp < vwr.timestamp {
+		saved := false
+		var previousTimestamp uint64
+		if vwr.value == nil {
+			// Special case for push replication success. We're removing the
+			// local entry for the item.
+			previousTimestamp = vs.vlm.Set(vwr.keyA, vwr.keyB, vwr.timestamp, 0, 0, 0, true)
+			if previousTimestamp <= vwr.timestamp {
+				saved = true
+			}
+		} else {
+			previousTimestamp = vs.vlm.Set(vwr.keyA, vwr.keyB, vwr.timestamp, vm.id, uint32(vmMemOffset), uint32(length), false)
+			if previousTimestamp < vwr.timestamp {
+				saved = true
+			}
+		}
+		if saved {
 			vm.toc = vm.toc[:vmTOCOffset+32]
 			binary.BigEndian.PutUint64(vm.toc[vmTOCOffset:], vwr.keyA)
 			binary.BigEndian.PutUint64(vm.toc[vmTOCOffset+8:], vwr.keyB)
 			binary.BigEndian.PutUint64(vm.toc[vmTOCOffset+16:], vwr.timestamp)
-			binary.BigEndian.PutUint32(vm.toc[vmTOCOffset+24:], uint32(vmMemOffset))
-			binary.BigEndian.PutUint32(vm.toc[vmTOCOffset+28:], uint32(length))
+			if vwr.value == nil {
+				// Special case for push replication success. We're saving the
+				// fact that we removed the local entry for the item.
+				binary.BigEndian.PutUint32(vm.toc[vmTOCOffset+24:], math.MaxUint32)
+				binary.BigEndian.PutUint32(vm.toc[vmTOCOffset+28:], 0)
+			} else {
+				binary.BigEndian.PutUint32(vm.toc[vmTOCOffset+24:], uint32(vmMemOffset))
+				binary.BigEndian.PutUint32(vm.toc[vmTOCOffset+28:], uint32(length))
+			}
 			vmTOCOffset += 32
 			vmMemOffset += alloc
 		} else {
@@ -1390,7 +1430,13 @@ func (vs *DefaultValueStore) recovery() {
 				}
 				for i := len(wrs) - 1; i >= 0; i-- {
 					wr := &wrs[i]
-					if vs.vlm.Set(wr.keyA, wr.keyB, wr.timestamp, wr.blockID, wr.offset, wr.length, false) < wr.timestamp {
+					if wr.offset == 0 {
+						// Special case for push replication; indicates the
+						// item was pushed and removed locally.
+						if vs.vlm.Set(wr.keyA, wr.keyB, wr.timestamp, 0, 0, 0, true) <= wr.timestamp {
+							atomic.AddInt64(&count, 1)
+						}
+					} else if vs.vlm.Set(wr.keyA, wr.keyB, wr.timestamp, wr.blockID, wr.offset, wr.length, false) < wr.timestamp {
 						atomic.AddInt64(&count, 1)
 					}
 				}
@@ -1575,7 +1621,9 @@ func (vs *DefaultValueStore) inPullReplication() {
 					break
 				}
 			}
-			vs.ring.MsgToNode(nodeID, bsm)
+			if !vs.ring.MsgToNode(nodeID, bsm) {
+				bsm.Done()
+			}
 		}
 	}
 }
@@ -1585,7 +1633,7 @@ func (vs *DefaultValueStore) inBulkSet() {
 		bsm := <-vs.inBulkSetChan
 		var bsam *bulkSetAckMsg
 		if bsm.nodeID() != 0 {
-			bsam = <-vs.freeOutBulkSetAckChan
+			bsam = vs.newOutBulkSetAckMsg()
 		}
 		body := bsm.body
 		var err error
@@ -1605,7 +1653,9 @@ func (vs *DefaultValueStore) inBulkSet() {
 			body = body[28+l:]
 		}
 		if bsam != nil {
-			vs.ring.MsgToNode(bsm.nodeID(), bsam)
+			if !vs.ring.MsgToNode(bsm.nodeID(), bsam) {
+				bsam.Done()
+			}
 		}
 		vs.freeInBulkSetChan <- bsm
 	}
@@ -1614,7 +1664,28 @@ func (vs *DefaultValueStore) inBulkSet() {
 func (vs *DefaultValueStore) inBulkSetAck() {
 	for {
 		bsam := <-vs.inBulkSetAckChan
-		// TODO: Delete items acked if we still aren't responsible for them
+		rid := vs.ring.ID()
+		ppower := vs.ring.PartitionPower()
+		b := bsam.body
+		l := len(b)
+		for o := 0; o < l; o += 24 {
+			if rid != vs.ring.ID() {
+				rid = vs.ring.ID()
+				ppower = vs.ring.PartitionPower()
+			}
+			keyA := binary.BigEndian.Uint64(b[o:])
+			if !vs.ring.Responsible(uint32(keyA >> (64 - ppower))) {
+				i := int(keyA>>1) % len(vs.freeVWRChans)
+				vwr := <-vs.freeVWRChans[i]
+				vwr.keyA = keyA
+				vwr.keyB = binary.BigEndian.Uint64(b[o+8:])
+				vwr.timestamp = binary.BigEndian.Uint64(b[o+16:])
+				vwr.value = nil
+				vs.pendingVWRChans[i] <- vwr
+				<-vwr.errChan
+				vs.freeVWRChans[i] <- vwr
+			}
+		}
 		vs.freeInBulkSetAckChan <- bsam
 	}
 }
@@ -1884,7 +1955,10 @@ func (vs *DefaultValueStore) outPullReplicationPass() {
 			if atomic.LoadUint32(&vs.outPullReplicationAbort) != 0 {
 				break
 			}
-			vs.ring.MsgToOtherReplicas(ringID, p, vs.newOutPullReplicationMsg(ringID, p, cutoff, substart, substop, ktbf))
+			prm := vs.newOutPullReplicationMsg(ringID, p, cutoff, substart, substop, ktbf)
+			if !vs.ring.MsgToOtherReplicas(ringID, p, prm) {
+				prm.Done()
+			}
 			substart += pullSize
 			substop += pullSize
 			if substop > stop || substop < stop {
@@ -1983,7 +2057,9 @@ func (vs *DefaultValueStore) outPushReplicationPass() {
 						break
 					}
 				}
-				vs.ring.MsgToOtherReplicas(ringID, p, bsm)
+				if !vs.ring.MsgToOtherReplicas(ringID, p, bsm) {
+					bsm.Done()
+				}
 			}
 			substart += pullSize
 			substop += pullSize
@@ -1999,19 +2075,20 @@ func (vs *DefaultValueStore) outPushReplicationPass() {
 		go func(g uint32) {
 			list := vs.outPushReplicationLists[g]
 			valbuf := vs.outPushReplicationValBufs[g]
-			for p := uint32(sp + g); p < partitions && atomic.LoadUint32(&vs.outPushReplicationAbort) == 0; p += uint32(vs.outPushReplicationWorkers) {
+			spg := uint32(sp + g)
+			for p := spg; p < partitions && atomic.LoadUint32(&vs.outPushReplicationAbort) == 0; p += uint32(vs.outPushReplicationWorkers) {
 				if vs.ring.ID() != ringID {
 					break
 				}
-				if vs.ring.Responsible(p) {
+				if !vs.ring.Responsible(p) {
 					f(p, list, valbuf)
 				}
 			}
-			for p := uint32(g); p < sp && atomic.LoadUint32(&vs.outPushReplicationAbort) == 0; p += uint32(vs.outPushReplicationWorkers) {
+			for p := uint32(g); p < spg && atomic.LoadUint32(&vs.outPushReplicationAbort) == 0; p += uint32(vs.outPushReplicationWorkers) {
 				if vs.ring.ID() != ringID {
 					break
 				}
-				if vs.ring.Responsible(p) {
+				if !vs.ring.Responsible(p) {
 					f(p, list, valbuf)
 				}
 			}
@@ -2298,7 +2375,7 @@ func (bsam *bulkSetAckMsg) WriteContent(w io.Writer) (uint64, error) {
 }
 
 func (bsam *bulkSetAckMsg) Done() {
-	bsam.vs.freeOutBulkSetAckChan <- bsam
+	bsam.vs.outBulkSetAckChan <- bsam
 }
 
 func (bsam *bulkSetAckMsg) add(keyA uint64, keyB uint64, timestamp uint64) bool {
