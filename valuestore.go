@@ -1022,7 +1022,7 @@ func (vs *DefaultValueStore) Delete(keyA uint64, keyB uint64, timestamp uint64) 
 	vwr.keyA = keyA
 	vwr.keyB = keyB
 	vwr.timestamp = timestamp | 1
-	vwr.value = nil
+	vwr.value = _EMPTY_BYTE_ARRAY
 	vs.pendingVWRChans[i] <- vwr
 	err := <-vwr.errChan
 	previousTimestamp := vwr.timestamp
@@ -1225,7 +1225,7 @@ func (vs *DefaultValueStore) memWriter(pendingVWRChan chan *valueWriteReq) {
 			// Special case for push replication success. We're removing the
 			// local entry for the item.
 			previousTimestamp = vs.vlm.Set(vwr.keyA, vwr.keyB, vwr.timestamp, 0, 0, 0, true)
-			if previousTimestamp <= vwr.timestamp {
+			if previousTimestamp != 0 && previousTimestamp <= vwr.timestamp {
 				saved = true
 			}
 		} else {
@@ -1433,8 +1433,9 @@ func (vs *DefaultValueStore) recovery() {
 					if wr.offset == 0 {
 						// Special case for push replication; indicates the
 						// item was pushed and removed locally.
-						if vs.vlm.Set(wr.keyA, wr.keyB, wr.timestamp, 0, 0, 0, true) <= wr.timestamp {
-							atomic.AddInt64(&count, 1)
+						pts := vs.vlm.Set(wr.keyA, wr.keyB, wr.timestamp, 0, 0, 0, true)
+						if pts != 0 && pts <= wr.timestamp {
+							atomic.AddInt64(&count, -1)
 						}
 					} else if vs.vlm.Set(wr.keyA, wr.keyB, wr.timestamp, wr.blockID, wr.offset, wr.length, false) < wr.timestamp {
 						atomic.AddInt64(&count, 1)
