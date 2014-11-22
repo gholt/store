@@ -95,13 +95,13 @@ func createValuesFile(vs *DefaultValueStore) *valuesFile {
 	return vf
 }
 
-func (vf *valuesFile) timestamp() int64 {
+func (vf *valuesFile) timestampnano() int64 {
 	return vf.bts
 }
 
-func (vf *valuesFile) read(keyA uint64, keyB uint64, timestamp uint64, offset uint32, length uint32, value []byte) (uint64, []byte, error) {
-	if timestamp&1 == 1 {
-		return timestamp, value, ErrNotFound
+func (vf *valuesFile) read(keyA uint64, keyB uint64, timestampbits uint64, offset uint32, length uint32, value []byte) (uint64, []byte, error) {
+	if timestampbits&_TSB_DELETION != 0 {
+		return timestampbits, value, ErrNotFound
 	}
 	i := int(keyA>>1) % len(vf.readerFPs)
 	vf.readerLocks[i].Lock()
@@ -116,10 +116,10 @@ func (vf *valuesFile) read(keyA uint64, keyB uint64, timestamp uint64, offset ui
 	}
 	if _, err := io.ReadFull(vf.readerFPs[i], value[len(value)-int(length):]); err != nil {
 		vf.readerLocks[i].Unlock()
-		return timestamp, value, err
+		return timestampbits, value, err
 	}
 	vf.readerLocks[i].Unlock()
-	return timestamp, value, nil
+	return timestampbits, value, nil
 }
 
 func (vf *valuesFile) write(vm *valuesMem) {

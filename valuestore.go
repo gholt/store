@@ -15,11 +15,19 @@
 // are usually created by a hashing function of the key name, but that duty is
 // left outside this package.
 //
-// Each modification is marked with a uint64 timestamp that is equivalent to
-// uint64(time.Now().UnixNano()). However, the last bit is used to indicate
-// deletion versus an actual value. This is important to allow deletions of
-// specific values at any time, without having the possibility of deleting any
-// newer values (e.g. expiring values).
+// Each modification is recorded with an int64 timestamp that is number of
+// microseconds since the Unix epoch (see
+// github.com/gholt/brimtime.TimeToUnixMicro). With a write and delete for the
+// exact same timestamp, the delete wins. This allows a delete to be issued for
+// a specific write without fear of deleting any newer write.
+//
+// Internally, each modification is stored with a uint64 timestamp that is
+// equivalent to (brimtime.TimeToUnixMicro(time.Now())<<8) with the lowest 8
+// bits used to indicate deletions and other bookkeeping items. This means that
+// the allowable time range is 1970-01-01 00:00:00 +0000 UTC (+1 microsecond
+// because all zeroes indicates a missing item) to 4253-05-31 22:20:37.927935
+// +0000 UTC. There are constants TIMESTAMP_MIN and TIMESTAMP_MAX available for
+// bounding usage.
 //
 // There are background tasks for:
 //
@@ -70,10 +78,30 @@ import (
 	"time"
 
 	"github.com/gholt/brimtext"
+	"github.com/gholt/brimtime"
 	"github.com/gholt/brimutil"
 	"github.com/gholt/experimental-ring"
 	"github.com/gholt/experimental-valuelocmap"
 	"github.com/spaolacci/murmur3"
+)
+
+const (
+	_TSB_UTIL_BITS = 8
+	_TSB_INACTIVE  = 0xff
+	_TSB_DELETION  = 0x80
+	// _TSB_DO_NOT_REPLICATE is a slightly interesting bit in that it is used
+	// to indicate an item that did not belong in this valuestore (according to
+	// the ring) and we got an acknowledgement from another valuestore that
+	// they had stored the item. However, all _TSB_DO_NOT_REPLICATE items are
+	// removed from memory with each discard pass because this valuestore may
+	// end up being responsible at some point due to a ring change and would
+	// therefore need to accept the items again and acknowledge their storage.
+	_TSB_DO_NOT_REPLICATE = 0x01
+)
+
+const (
+	TIMESTAMP_MIN = int64(uint64(1) << _TSB_UTIL_BITS)
+	TIMESTAMP_MAX = int64(uint64(math.MaxUint64) >> _TSB_UTIL_BITS)
 )
 
 // ValueStore is an interface for a disk-backed data structure that stores
@@ -81,10 +109,10 @@ import (
 //
 // For documentation on each of these functions, see the DefaultValueStore.
 type ValueStore interface {
-	Lookup(keyA uint64, keyB uint64) (uint64, uint32, error)
-	Read(keyA uint64, keyB uint64, value []byte) (uint64, []byte, error)
-	Write(keyA uint64, keyB uint64, timestamp uint64, value []byte) (uint64, error)
-	Delete(keyA uint64, keyB uint64, timestamp uint64) (uint64, error)
+	Lookup(keyA uint64, keyB uint64) (int64, uint32, error)
+	Read(keyA uint64, keyB uint64, value []byte) (int64, []byte, error)
+	Write(keyA uint64, keyB uint64, timestamp int64, value []byte) (int64, error)
+	Delete(keyA uint64, keyB uint64, timestamp int64) (int64, error)
 	EnableDiscard()
 	DisableDiscard()
 	DiscardPass()
@@ -273,7 +301,7 @@ func resolveConfig(opts ...func(*config)) *config {
 	if cfg.pageSize < cfg.maxValueSize+cfg.checksumInterval {
 		cfg.pageSize = cfg.maxValueSize + cfg.checksumInterval
 	}
-	// Absolute minimum: timestamp leader plus at least one TOC entry
+	// Absolute minimum: timestampnano leader plus at least one TOC entry
 	if cfg.pageSize < 40 {
 		cfg.pageSize = 40
 	}
@@ -621,11 +649,11 @@ type DefaultValueStore struct {
 }
 
 type valueWriteReq struct {
-	keyA      uint64
-	keyB      uint64
-	timestamp uint64
-	value     []byte
-	errChan   chan error
+	keyA          uint64
+	keyB          uint64
+	timestampbits uint64
+	value         []byte
+	errChan       chan error
 }
 
 var enableValueWriteReq *valueWriteReq = &valueWriteReq{}
@@ -633,8 +661,8 @@ var disableValueWriteReq *valueWriteReq = &valueWriteReq{}
 var flushValueWriteReq *valueWriteReq = &valueWriteReq{}
 
 type valueLocBlock interface {
-	timestamp() int64
-	read(keyA uint64, keyB uint64, timestamp uint64, offset uint32, length uint32, value []byte) (uint64, []byte, error)
+	timestampnano() int64
+	read(keyA uint64, keyB uint64, timestampbits uint64, offset uint32, length uint32, value []byte) (uint64, []byte, error)
 }
 
 type valueStoreStats struct {
@@ -737,7 +765,7 @@ func New(opts ...func(*config)) *DefaultValueStore {
 		vlm:                         vlm,
 		workers:                     cfg.workers,
 		discardInterval:             cfg.discardInterval,
-		replicationIgnoreRecent:     uint64(cfg.replicationIgnoreRecent) * uint64(time.Second),
+		replicationIgnoreRecent:     (uint64(cfg.replicationIgnoreRecent) * uint64(time.Second) / 1000) << _TSB_UTIL_BITS,
 		outPullReplicationWorkers:   cfg.outPullReplicationWorkers,
 		outPullReplicationIteration: uint16(cfg.rand.Uint32()),
 		outPullReplicationInterval:  cfg.outPullReplicationInterval,
@@ -747,7 +775,7 @@ func New(opts ...func(*config)) *DefaultValueStore {
 		pageSize:                    uint32(cfg.pageSize),
 		minValueAlloc:               cfg.minValueAlloc,
 		writePagesPerWorker:         cfg.writePagesPerWorker,
-		tombstoneAge:                uint64(cfg.tombstoneAge) * uint64(time.Second),
+		tombstoneAge:                (uint64(cfg.tombstoneAge) * uint64(time.Second) / 1000) << _TSB_UTIL_BITS,
 		valuesFileSize:              uint32(cfg.valuesFileSize),
 		valuesFileReaders:           cfg.valuesFileReaders,
 		checksumInterval:            uint32(cfg.checksumInterval),
@@ -960,74 +988,85 @@ func (vs *DefaultValueStore) Flush() {
 	<-vs.flushedChan
 }
 
-// Lookup will return timestamp, length, err for keyA, keyB.
+// Lookup will return timestampmicro, length, err for keyA, keyB.
 //
-// Note that err == ErrNotFound with timestamp == 0 indicates keyA, keyB was
-// not known at all whereas err == ErrNotFound with timestamp != 0 (also
-// timestamp & 1 == 1) indicates keyA, keyB was known and had a deletion marker
-// (aka tombstone).
-func (vs *DefaultValueStore) Lookup(keyA uint64, keyB uint64) (uint64, uint32, error) {
-	timestamp, id, _, length := vs.vlm.Get(keyA, keyB)
-	if id == 0 || timestamp&1 == 1 {
-		return timestamp, 0, ErrNotFound
+// Note that err == ErrNotFound with timestampmicro == 0 indicates keyA, keyB
+// was not known at all whereas err == ErrNotFound with timestampmicro != 0
+// indicates keyA, keyB was known and had a deletion marker (aka tombstone).
+func (vs *DefaultValueStore) Lookup(keyA uint64, keyB uint64) (int64, uint32,
+	error) {
+	timestampbits, id, _, length := vs.vlm.Get(keyA, keyB)
+	if id == 0 || timestampbits&_TSB_DELETION != 0 {
+		return int64(timestampbits >> _TSB_UTIL_BITS), 0, ErrNotFound
 	}
-	return timestamp, length, nil
+	return int64(timestampbits >> _TSB_UTIL_BITS), length, nil
 }
 
-// Read will return timestamp, value, err for keyA, keyB; if an incoming value
-// is provided, the read value will be appended to it and the whole returned
-// (useful to reuse an existing []byte).
+// Read will return timestampmicro, value, err for keyA, keyB; if an incoming
+// value is provided, the read value will be appended to it and the whole
+// returned (useful to reuse an existing []byte).
 //
-// Note that err == ErrNotFound with timestamp == 0 indicates keyA, keyB was
-// not known at all whereas err == ErrNotFound with timestamp != 0 (also
-// timestamp & 1 == 1) indicates keyA, keyB was known and had a deletion marker
-// (aka tombstone).
-func (vs *DefaultValueStore) Read(keyA uint64, keyB uint64, value []byte) (uint64, []byte, error) {
-	timestamp, id, offset, length := vs.vlm.Get(keyA, keyB)
-	if id == 0 || timestamp&1 == 1 {
-		return timestamp, value, ErrNotFound
+// Note that err == ErrNotFound with timestampmicro == 0 indicates keyA, keyB
+// was not known at all whereas err == ErrNotFound with timestampmicro != 0
+// indicates keyA, keyB was known and had a deletion marker (aka tombstone).
+func (vs *DefaultValueStore) Read(keyA uint64, keyB uint64, value []byte) (int64, []byte, error) {
+	timestampbits, value, err := vs.read(keyA, keyB, value)
+	return int64(timestampbits >> _TSB_UTIL_BITS), value, err
+}
+
+func (vs *DefaultValueStore) read(keyA uint64, keyB uint64, value []byte) (uint64, []byte, error) {
+	timestampbits, id, offset, length := vs.vlm.Get(keyA, keyB)
+	if id == 0 || timestampbits&_TSB_DELETION != 0 {
+		return timestampbits, value, ErrNotFound
 	}
-	return vs.valueLocBlock(id).read(keyA, keyB, timestamp, offset, length, value)
+	return vs.valueLocBlock(id).read(keyA, keyB, timestampbits, offset, length, value)
 }
 
 var _EMPTY_BYTE_ARRAY []byte = []byte{}
 
-// Write stores timestamp & 0xfffffffffffffffe (lowest bit zeroed), value for
-// keyA, keyB or returns any error; a newer timestamp already in place is not
-// reported as an error.
-func (vs *DefaultValueStore) Write(keyA uint64, keyB uint64, timestamp uint64, value []byte) (uint64, error) {
-	i := int(keyA>>1) % len(vs.freeVWRChans)
-	vwr := <-vs.freeVWRChans[i]
-	vwr.keyA = keyA
-	vwr.keyB = keyB
-	vwr.timestamp = timestamp & 0xfffffffffffffffe
-	if value == nil {
-		vwr.value = _EMPTY_BYTE_ARRAY
-	} else {
-		vwr.value = value
+// Write stores timestampmicro, value for keyA, keyB and returns the previously
+// stored timestampmicro or returns any error; a newer timestampmicro already
+// in place is not reported as an error. Note that with a write and a delete
+// for the exact same timestampmicro, the delete wins.
+func (vs *DefaultValueStore) Write(keyA uint64, keyB uint64, timestampmicro int64, value []byte) (int64, error) {
+	if timestampmicro < TIMESTAMP_MIN {
+		return 0, fmt.Errorf("timestamp %d < %d", timestampmicro, TIMESTAMP_MIN)
 	}
-	vs.pendingVWRChans[i] <- vwr
-	err := <-vwr.errChan
-	previousTimestamp := vwr.timestamp
-	vwr.value = nil
-	vs.freeVWRChans[i] <- vwr
-	return previousTimestamp, err
+	if timestampmicro > TIMESTAMP_MAX {
+		return 0, fmt.Errorf("timestamp %d > %d", timestampmicro, TIMESTAMP_MAX)
+	}
+	timestampbits, err := vs.write(keyA, keyB, uint64(timestampmicro)<<_TSB_UTIL_BITS, value)
+	return int64(timestampbits >> _TSB_UTIL_BITS), err
 }
 
-// Delete stores timestamp | 1 for keyA, keyB or returns any error; a newer
-// timestamp already in place is not reported as an error.
-func (vs *DefaultValueStore) Delete(keyA uint64, keyB uint64, timestamp uint64) (uint64, error) {
+func (vs *DefaultValueStore) write(keyA uint64, keyB uint64, timestampbits uint64, value []byte) (uint64, error) {
 	i := int(keyA>>1) % len(vs.freeVWRChans)
 	vwr := <-vs.freeVWRChans[i]
 	vwr.keyA = keyA
 	vwr.keyB = keyB
-	vwr.timestamp = timestamp | 1
-	vwr.value = _EMPTY_BYTE_ARRAY
+	vwr.timestampbits = timestampbits
+	vwr.value = value
 	vs.pendingVWRChans[i] <- vwr
 	err := <-vwr.errChan
-	previousTimestamp := vwr.timestamp
+	ptimestampbits := vwr.timestampbits
+	vwr.value = nil
 	vs.freeVWRChans[i] <- vwr
-	return previousTimestamp, err
+	return ptimestampbits, err
+}
+
+// Delete stores timestampmicro for keyA, keyB and returns the previously
+// stored timestampmicro or returns any error; a newer timestampmicro already
+// in place is not reported as an error. Note that with a write and a delete
+// for the exact same timestampmicro, the delete wins.
+func (vs *DefaultValueStore) Delete(keyA uint64, keyB uint64, timestampmicro int64) (int64, error) {
+	if timestampmicro < TIMESTAMP_MIN {
+		return 0, fmt.Errorf("timestamp %d < %d", timestampmicro, TIMESTAMP_MIN)
+	}
+	if timestampmicro > TIMESTAMP_MAX {
+		return 0, fmt.Errorf("timestamp %d > %d", timestampmicro, TIMESTAMP_MAX)
+	}
+	ptimestampbits, err := vs.write(keyA, keyB, (uint64(timestampmicro)<<_TSB_UTIL_BITS)|_TSB_DELETION, nil)
+	return int64(ptimestampbits >> _TSB_UTIL_BITS), err
 }
 
 // GatherStats returns overall information about the state of the ValueStore.
@@ -1070,14 +1109,14 @@ func (vs *DefaultValueStore) GatherStats(debug bool) (uint64, uint64, fmt.String
 		stats.pageSize = vs.pageSize
 		stats.minValueAlloc = vs.minValueAlloc
 		stats.writePagesPerWorker = vs.writePagesPerWorker
-		stats.tombstoneAge = int(vs.tombstoneAge / uint64(time.Second))
+		stats.tombstoneAge = int((vs.tombstoneAge >> _TSB_UTIL_BITS) * 1000 / uint64(time.Second))
 		stats.valuesFileSize = vs.valuesFileSize
 		stats.valuesFileReaders = vs.valuesFileReaders
 		stats.checksumInterval = vs.checksumInterval
 		stats.replicationIgnoreRecent = int(vs.replicationIgnoreRecent / uint64(time.Second))
-		stats.vlmCount, stats.vlmLength, stats.vlmDebugInfo = vs.vlm.GatherStats(true)
+		stats.vlmCount, stats.vlmLength, stats.vlmDebugInfo = vs.vlm.GatherStats(_TSB_INACTIVE, true)
 	} else {
-		stats.vlmCount, stats.vlmLength, stats.vlmDebugInfo = vs.vlm.GatherStats(false)
+		stats.vlmCount, stats.vlmLength, stats.vlmDebugInfo = vs.vlm.GatherStats(_TSB_INACTIVE, false)
 	}
 	return stats.vlmCount, stats.vlmLength, stats
 }
@@ -1110,22 +1149,18 @@ func (vs *DefaultValueStore) memClearer(freeableVMChan chan *valuesMem) {
 			continue
 		}
 		vf := vs.valueLocBlock(vm.vfID)
-		if tb != nil && tbTS != vf.timestamp() {
+		if tb != nil && tbTS != vf.timestampnano() {
 			vs.pendingTOCBlockChan <- tb
 			tb = nil
 		}
 		for vmTOCOffset := 0; vmTOCOffset < len(vm.toc); vmTOCOffset += 32 {
 			keyA := binary.BigEndian.Uint64(vm.toc[vmTOCOffset:])
 			keyB := binary.BigEndian.Uint64(vm.toc[vmTOCOffset+8:])
-			timestamp := binary.BigEndian.Uint64(vm.toc[vmTOCOffset+16:])
+			timestampbits := binary.BigEndian.Uint64(vm.toc[vmTOCOffset+16:])
 			vmMemOffset := binary.BigEndian.Uint32(vm.toc[vmTOCOffset+24:])
 			length := binary.BigEndian.Uint32(vm.toc[vmTOCOffset+28:])
-			// vmMemOffset == MaxUint32 is the special case for push
-			// replication; indicates the item was pushed and removed locally.
-			if vmMemOffset != math.MaxUint32 {
-				if vs.vlm.Set(keyA, keyB, timestamp, vm.vfID, vm.vfOffset+vmMemOffset, length, true) != timestamp {
-					continue
-				}
+			if vs.vlm.Set(keyA, keyB, timestampbits, vm.vfID, vm.vfOffset+vmMemOffset, length, true) != timestampbits {
+				continue
 			}
 			if tb != nil && tbOffset+32 > cap(tb) {
 				vs.pendingTOCBlockChan <- tb
@@ -1133,7 +1168,7 @@ func (vs *DefaultValueStore) memClearer(freeableVMChan chan *valuesMem) {
 			}
 			if tb == nil {
 				tb = <-vs.freeTOCBlockChan
-				tbTS = vf.timestamp()
+				tbTS = vf.timestampnano()
 				tb = tb[:8]
 				binary.BigEndian.PutUint64(tb, uint64(tbTS))
 				tbOffset = 8
@@ -1141,18 +1176,9 @@ func (vs *DefaultValueStore) memClearer(freeableVMChan chan *valuesMem) {
 			tb = tb[:tbOffset+32]
 			binary.BigEndian.PutUint64(tb[tbOffset:], keyA)
 			binary.BigEndian.PutUint64(tb[tbOffset+8:], keyB)
-			binary.BigEndian.PutUint64(tb[tbOffset+16:], timestamp)
-			if vmMemOffset == math.MaxUint32 {
-				// Special case for push replication; indicates the item was
-				// pushed and removed locally. We use 0 as the file offset
-				// because there always is a header therefore no "real" value
-				// references 0.
-				binary.BigEndian.PutUint32(tb[tbOffset+24:], 0)
-				binary.BigEndian.PutUint32(tb[tbOffset+28:], 0)
-			} else {
-				binary.BigEndian.PutUint32(tb[tbOffset+24:], vm.vfOffset+vmMemOffset)
-				binary.BigEndian.PutUint32(tb[tbOffset+28:], length)
-			}
+			binary.BigEndian.PutUint64(tb[tbOffset+16:], timestampbits)
+			binary.BigEndian.PutUint32(tb[tbOffset+24:], vm.vfOffset+vmMemOffset)
+			binary.BigEndian.PutUint32(tb[tbOffset+28:], length)
 			tbOffset += 32
 		}
 		vm.discardLock.Lock()
@@ -1219,35 +1245,14 @@ func (vs *DefaultValueStore) memWriter(pendingVWRChan chan *valueWriteReq) {
 				vm.values[i] = 0
 			}
 		}
-		saved := false
-		var previousTimestamp uint64
-		if vwr.value == nil {
-			// Special case for push replication success. We're removing the
-			// local entry for the item.
-			previousTimestamp = vs.vlm.Set(vwr.keyA, vwr.keyB, vwr.timestamp, 0, 0, 0, true)
-			if previousTimestamp != 0 && previousTimestamp <= vwr.timestamp {
-				saved = true
-			}
-		} else {
-			previousTimestamp = vs.vlm.Set(vwr.keyA, vwr.keyB, vwr.timestamp, vm.id, uint32(vmMemOffset), uint32(length), false)
-			if previousTimestamp < vwr.timestamp {
-				saved = true
-			}
-		}
-		if saved {
+		ptimestampbits := vs.vlm.Set(vwr.keyA, vwr.keyB, vwr.timestampbits, vm.id, uint32(vmMemOffset), uint32(length), false)
+		if ptimestampbits < vwr.timestampbits {
 			vm.toc = vm.toc[:vmTOCOffset+32]
 			binary.BigEndian.PutUint64(vm.toc[vmTOCOffset:], vwr.keyA)
 			binary.BigEndian.PutUint64(vm.toc[vmTOCOffset+8:], vwr.keyB)
-			binary.BigEndian.PutUint64(vm.toc[vmTOCOffset+16:], vwr.timestamp)
-			if vwr.value == nil {
-				// Special case for push replication success. We're saving the
-				// fact that we removed the local entry for the item.
-				binary.BigEndian.PutUint32(vm.toc[vmTOCOffset+24:], math.MaxUint32)
-				binary.BigEndian.PutUint32(vm.toc[vmTOCOffset+28:], 0)
-			} else {
-				binary.BigEndian.PutUint32(vm.toc[vmTOCOffset+24:], uint32(vmMemOffset))
-				binary.BigEndian.PutUint32(vm.toc[vmTOCOffset+28:], uint32(length))
-			}
+			binary.BigEndian.PutUint64(vm.toc[vmTOCOffset+16:], vwr.timestampbits)
+			binary.BigEndian.PutUint32(vm.toc[vmTOCOffset+24:], uint32(vmMemOffset))
+			binary.BigEndian.PutUint32(vm.toc[vmTOCOffset+28:], uint32(length))
 			vmTOCOffset += 32
 			vmMemOffset += alloc
 		} else {
@@ -1255,7 +1260,7 @@ func (vs *DefaultValueStore) memWriter(pendingVWRChan chan *valueWriteReq) {
 			vm.values = vm.values[:vmMemOffset]
 			vm.discardLock.Unlock()
 		}
-		vwr.timestamp = previousTimestamp
+		vwr.timestampbits = ptimestampbits
 		vwr.errChan <- nil
 	}
 }
@@ -1358,10 +1363,10 @@ func (vs *DefaultValueStore) tocWriter() {
 				}
 				offsetB += uint64(len(t) - 8)
 			default:
-				// An assumption is made here: If the timestamp for this toc
-				// block doesn't match the last two seen timestamps then we
-				// expect no more toc blocks for the oldest timestamp and can
-				// close that toc file.
+				// An assumption is made here: If the timestampnano for this
+				// toc block doesn't match the last two seen timestampnanos
+				// then we expect no more toc blocks for the oldest
+				// timestampnano and can close that toc file.
 				if writerB != nil {
 					binary.BigEndian.PutUint64(term[4:], offsetB)
 					if _, err := writerB.Write(term); err != nil {
@@ -1407,13 +1412,17 @@ func (vs *DefaultValueStore) recovery() {
 	fromDiskCount := 0
 	count := int64(0)
 	type writeReq struct {
-		keyA      uint64
-		keyB      uint64
-		timestamp uint64
-		blockID   uint32
-		offset    uint32
-		length    uint32
+		keyA          uint64
+		keyB          uint64
+		timestampbits uint64
+		blockID       uint32
+		offset        uint32
+		length        uint32
 	}
+	// TODO: Need to change this whole thing to ensure multiple entries for the
+	// same key get added in the same order and, more specifically, that
+	// _TS_DO_NOT_REPLICATE marked items remove said items from memory (that
+	// are possibly readded with later items not marked _TS_DO_NOT_REPLICATE).
 	pendingChan := make(chan []writeReq, vs.workers)
 	freeChan := make(chan []writeReq, cap(pendingChan)*2)
 	for i := 0; i < cap(freeChan); i++ {
@@ -1430,14 +1439,7 @@ func (vs *DefaultValueStore) recovery() {
 				}
 				for i := len(wrs) - 1; i >= 0; i-- {
 					wr := &wrs[i]
-					if wr.offset == 0 {
-						// Special case for push replication; indicates the
-						// item was pushed and removed locally.
-						pts := vs.vlm.Set(wr.keyA, wr.keyB, wr.timestamp, 0, 0, 0, true)
-						if pts != 0 && pts <= wr.timestamp {
-							atomic.AddInt64(&count, -1)
-						}
-					} else if vs.vlm.Set(wr.keyA, wr.keyB, wr.timestamp, wr.blockID, wr.offset, wr.length, false) < wr.timestamp {
+					if vs.vlm.Set(wr.keyA, wr.keyB, wr.timestampbits, wr.blockID, wr.offset, wr.length, false) < wr.timestampbits {
 						atomic.AddInt64(&count, 1)
 					}
 				}
@@ -1456,11 +1458,11 @@ func (vs *DefaultValueStore) recovery() {
 		}
 		bts := int64(0)
 		if bts, err = strconv.ParseInt(names[i][:len(names[i])-len(".valuestoc")], 10, 64); err != nil {
-			vs.logError.Printf("bad timestamp name: %#v\n", names[i])
+			vs.logError.Printf("bad timestamp in name: %#v\n", names[i])
 			continue
 		}
 		if bts == 0 {
-			vs.logError.Printf("bad timestamp name: %#v\n", names[i])
+			vs.logError.Printf("bad timestamp in name: %#v\n", names[i])
 			continue
 		}
 		vf := newValuesFile(vs, bts)
@@ -1521,7 +1523,7 @@ func (vs *DefaultValueStore) recovery() {
 					wr := &wrs[wix]
 					wr.keyA = binary.BigEndian.Uint64(overflow)
 					wr.keyB = binary.BigEndian.Uint64(overflow[8:])
-					wr.timestamp = binary.BigEndian.Uint64(overflow[16:])
+					wr.timestampbits = binary.BigEndian.Uint64(overflow[16:])
 					wr.blockID = vf.id
 					wr.offset = binary.BigEndian.Uint32(overflow[24:])
 					wr.length = binary.BigEndian.Uint32(overflow[28:])
@@ -1541,7 +1543,7 @@ func (vs *DefaultValueStore) recovery() {
 					wr := &wrs[wix]
 					wr.keyA = binary.BigEndian.Uint64(buf[i:])
 					wr.keyB = binary.BigEndian.Uint64(buf[i+8:])
-					wr.timestamp = binary.BigEndian.Uint64(buf[i+16:])
+					wr.timestampbits = binary.BigEndian.Uint64(buf[i+16:])
 					wr.blockID = vf.id
 					wr.offset = binary.BigEndian.Uint32(buf[i+24:])
 					wr.length = binary.BigEndian.Uint32(buf[i+28:])
@@ -1590,16 +1592,19 @@ func (vs *DefaultValueStore) inPullReplication() {
 	for {
 		prm := <-vs.inPullReplicationChan
 		k = k[:0]
-		cutoff := prm.timestampCutoff()
-		tombstoneCutoff := uint64(time.Now().UnixNano()) - vs.tombstoneAge
+		cutoff := prm.cutoff()
+		tombstoneCutoff := (uint64(brimtime.TimeToUnixMicro(time.Now())) << _TSB_UTIL_BITS) - vs.tombstoneAge
 		ktbf := prm.ktBloomFilter()
 		l := int64(_GLH_OUT_BULK_SET_MSG_SIZE)
-		vs.vlm.ScanCallback(prm.rangeStart(), prm.rangeStop(), func(keyA uint64, keyB uint64, timestamp uint64, length uint32) {
-			if l > 0 && timestamp < cutoff && !ktbf.mayHave(keyA, keyB, timestamp) {
-				if timestamp&1 == 0 || timestamp >= tombstoneCutoff {
-					k = append(k, keyA, keyB)
-					// bsm: keyA:8, keyB:8, timestamp:8, length:4, value:n
-					l -= 28 + int64(length)
+		vs.vlm.ScanCallback(prm.rangeStart(), prm.rangeStop(), func(keyA uint64, keyB uint64, timestampbits uint64, length uint32) {
+			if l > 0 {
+				if timestampbits&_TSB_DO_NOT_REPLICATE == 0 && timestampbits < cutoff && (timestampbits&_TSB_DELETION == 0 || timestampbits >= tombstoneCutoff) {
+					if !ktbf.mayHave(keyA, keyB, timestampbits) {
+						k = append(k, keyA, keyB)
+						// bsm: keyA:8, keyB:8, timestampbits:8, length:4,
+						//      value:n
+						l -= 28 + int64(length)
+					}
 				}
 			}
 		})
@@ -1610,7 +1615,7 @@ func (vs *DefaultValueStore) inPullReplication() {
 			var t uint64
 			var err error
 			for i := 0; i < len(k); i += 2 {
-				t, v, err = vs.Read(k[i], k[i+1], v[:0])
+				t, v, err = vs.read(k[i], k[i+1], v[:0])
 				if err == ErrNotFound {
 					if t == 0 {
 						continue
@@ -1618,12 +1623,16 @@ func (vs *DefaultValueStore) inPullReplication() {
 				} else if err != nil {
 					continue
 				}
-				if !bsm.add(k[i], k[i+1], t, v) {
-					break
+				if t&_TSB_DO_NOT_REPLICATE == 0 {
+					if !bsm.add(k[i], k[i+1], t, v) {
+						break
+					}
 				}
 			}
-			if !vs.ring.MsgToNode(nodeID, bsm) {
-				bsm.Done()
+			if len(bsm.body) > 0 {
+				if !vs.ring.MsgToNode(nodeID, bsm) {
+					bsm.Done()
+				}
 			}
 		}
 	}
@@ -1638,18 +1647,22 @@ func (vs *DefaultValueStore) inBulkSet() {
 		}
 		body := bsm.body
 		var err error
+		rid := vs.ring.ID()
+		sppower := 64 - vs.ring.PartitionPower()
 		for len(body) > 0 {
 			keyA := binary.BigEndian.Uint64(body)
 			keyB := binary.BigEndian.Uint64(body[8:])
-			timestamp := binary.BigEndian.Uint64(body[16:])
+			timestampbits := binary.BigEndian.Uint64(body[16:])
 			l := binary.BigEndian.Uint32(body[24:])
-			if timestamp&1 == 0 {
-				_, err = vs.Write(keyA, keyB, timestamp, body[28:28+l])
-			} else {
-				_, err = vs.Delete(keyA, keyB, timestamp)
-			}
+			_, err = vs.write(keyA, keyB, timestampbits, body[28:28+l])
 			if bsam != nil && err == nil {
-				bsam.add(keyA, keyB, timestamp)
+				if rid != vs.ring.ID() {
+					rid = vs.ring.ID()
+					sppower = 64 - vs.ring.PartitionPower()
+				}
+				if vs.ring.Responsible(uint32(keyA >> sppower)) {
+					bsam.add(keyA, keyB, timestampbits)
+				}
 			}
 			body = body[28+l:]
 		}
@@ -1666,25 +1679,17 @@ func (vs *DefaultValueStore) inBulkSetAck() {
 	for {
 		bsam := <-vs.inBulkSetAckChan
 		rid := vs.ring.ID()
-		ppower := vs.ring.PartitionPower()
+		sppower := 64 - vs.ring.PartitionPower()
 		b := bsam.body
 		l := len(b)
 		for o := 0; o < l; o += 24 {
 			if rid != vs.ring.ID() {
 				rid = vs.ring.ID()
-				ppower = vs.ring.PartitionPower()
+				sppower = 64 - vs.ring.PartitionPower()
 			}
 			keyA := binary.BigEndian.Uint64(b[o:])
-			if !vs.ring.Responsible(uint32(keyA >> (64 - ppower))) {
-				i := int(keyA>>1) % len(vs.freeVWRChans)
-				vwr := <-vs.freeVWRChans[i]
-				vwr.keyA = keyA
-				vwr.keyB = binary.BigEndian.Uint64(b[o+8:])
-				vwr.timestamp = binary.BigEndian.Uint64(b[o+16:])
-				vwr.value = nil
-				vs.pendingVWRChans[i] <- vwr
-				<-vwr.errChan
-				vs.freeVWRChans[i] <- vwr
+			if !vs.ring.Responsible(uint32(keyA >> sppower)) {
+				vs.write(keyA, binary.BigEndian.Uint64(b[o+8:]), binary.BigEndian.Uint64(b[o+16:])|_TSB_DELETION|_TSB_DO_NOT_REPLICATE, nil)
 			}
 		}
 		vs.freeInBulkSetAckChan <- bsam
@@ -1906,7 +1911,8 @@ func (vs *DefaultValueStore) discardPass() {
 			vs.logDebug.Printf("discard pass took %s", time.Now().Sub(begin))
 		}()
 	}
-	vs.vlm.DiscardTombstones(uint64(time.Now().UnixNano()) - vs.tombstoneAge)
+	vs.vlm.Discard(_TSB_DO_NOT_REPLICATE, math.MaxUint64)
+	vs.vlm.Discard(_TSB_DELETION, (uint64(brimtime.TimeToUnixMicro(time.Now()))<<_TSB_UTIL_BITS)-vs.tombstoneAge)
 }
 
 const _GLH_BLOOM_FILTER_N = 1000000
@@ -1940,17 +1946,16 @@ func (vs *DefaultValueStore) outPullReplicationPass() {
 		for vs.vlm.ScanCount(start, start+(pullSize-1), _GLH_BLOOM_FILTER_N) >= _GLH_BLOOM_FILTER_N {
 			pullSize /= 2
 		}
-		cutoff := uint64(time.Now().UnixNano()) - vs.replicationIgnoreRecent
-		tombstoneCutoff := uint64(time.Now().UnixNano()) - vs.tombstoneAge
+		timestampbitsnow := uint64(brimtime.TimeToUnixMicro(time.Now())) << _TSB_UTIL_BITS
+		cutoff := timestampbitsnow - vs.replicationIgnoreRecent
+		tombstoneCutoff := timestampbitsnow - vs.tombstoneAge
 		substart := start
 		substop := start + (pullSize - 1)
 		for {
 			ktbf.reset(vs.outPullReplicationIteration)
-			vs.vlm.ScanCallback(substart, substop, func(keyA uint64, keyB uint64, timestamp uint64, length uint32) {
-				if timestamp < cutoff {
-					if timestamp&1 == 0 || timestamp >= tombstoneCutoff {
-						ktbf.add(keyA, keyB, timestamp)
-					}
+			vs.vlm.ScanCallback(substart, substop, func(keyA uint64, keyB uint64, timestampbits uint64, length uint32) {
+				if timestampbits&_TSB_DO_NOT_REPLICATE == 0 && timestampbits < cutoff && (timestampbits&_TSB_DELETION == 0 || timestampbits >= tombstoneCutoff) {
+					ktbf.add(keyA, keyB, timestampbits)
 				}
 			})
 			if atomic.LoadUint32(&vs.outPullReplicationAbort) != 0 {
@@ -2022,17 +2027,19 @@ func (vs *DefaultValueStore) outPushReplicationPass() {
 		for vs.vlm.ScanCount(start, start+(pullSize-1), _GLH_BLOOM_FILTER_N) >= _GLH_BLOOM_FILTER_N {
 			pullSize /= 2
 		}
-		cutoff := uint64(time.Now().UnixNano()) - vs.replicationIgnoreRecent
-		tombstoneCutoff := uint64(time.Now().UnixNano()) - vs.tombstoneAge
+		timestampbitsnow := uint64(brimtime.TimeToUnixMicro(time.Now())) << _TSB_UTIL_BITS
+		cutoff := timestampbitsnow - vs.replicationIgnoreRecent
+		tombstoneCutoff := timestampbitsnow - vs.tombstoneAge
 		substart := start
 		substop := start + (pullSize - 1)
 		for {
 			l := int64(_GLH_OUT_BULK_SET_MSG_SIZE)
-			vs.vlm.ScanCallback(substart, substop, func(keyA uint64, keyB uint64, timestamp uint64, length uint32) {
-				if l > 0 && timestamp < cutoff {
-					if timestamp&1 == 0 || timestamp >= tombstoneCutoff {
+			vs.vlm.ScanCallback(substart, substop, func(keyA uint64, keyB uint64, timestampbits uint64, length uint32) {
+				if l > 0 {
+					if timestampbits&_TSB_DO_NOT_REPLICATE == 0 && timestampbits < cutoff && (timestampbits&_TSB_DELETION == 0 || timestampbits >= tombstoneCutoff) {
 						list = append(list, keyA, keyB)
-						// bsm: keyA:8, keyB:8, timestamp:8, length:4, value:n
+						// bsm: keyA:8, keyB:8, timestampbits:8, length:4,
+						//      value:n
 						l -= 28 + int64(length)
 					}
 				}
@@ -2043,19 +2050,21 @@ func (vs *DefaultValueStore) outPushReplicationPass() {
 			if len(list) > 0 {
 				bsm := vs.newOutBulkSetMsg()
 				binary.BigEndian.PutUint64(bsm.header, vs.ring.NodeID())
-				var t uint64
+				var timestampbits uint64
 				var err error
 				for i := 0; i < len(list); i += 2 {
-					t, valbuf, err = vs.Read(list[i], list[i+1], valbuf[:0])
+					timestampbits, valbuf, err = vs.read(list[i], list[i+1], valbuf[:0])
 					if err == ErrNotFound {
-						if t == 0 {
+						if timestampbits == 0 {
 							continue
 						}
 					} else if err != nil {
 						continue
 					}
-					if !bsm.add(list[i], list[i+1], t, valbuf) {
-						break
+					if timestampbits&_TSB_DO_NOT_REPLICATE == 0 && timestampbits < cutoff && (timestampbits&_TSB_DELETION == 0 || timestampbits >= tombstoneCutoff) {
+						if !bsm.add(list[i], list[i+1], timestampbits, valbuf) {
+							break
+						}
 					}
 				}
 				if !vs.ring.MsgToOtherReplicas(ringID, p, bsm) {
@@ -2148,12 +2157,12 @@ func (vs *DefaultValueStore) newInPullReplicationMsg(r io.Reader, l uint64) (uin
 	return l, nil
 }
 
-func (vs *DefaultValueStore) newOutPullReplicationMsg(ringID uint64, partition uint32, timestampCutoff uint64, rangeStart uint64, rangeStop uint64, ktbf *ktBloomFilter) *pullReplicationMsg {
+func (vs *DefaultValueStore) newOutPullReplicationMsg(ringID uint64, partition uint32, cutoff uint64, rangeStart uint64, rangeStop uint64, ktbf *ktBloomFilter) *pullReplicationMsg {
 	prm := <-vs.outPullReplicationChan
 	binary.BigEndian.PutUint64(prm.header, vs.ring.NodeID())
 	binary.BigEndian.PutUint64(prm.header[8:], ringID)
 	binary.BigEndian.PutUint32(prm.header[16:], partition)
-	binary.BigEndian.PutUint64(prm.header[20:], timestampCutoff)
+	binary.BigEndian.PutUint64(prm.header[20:], cutoff)
 	binary.BigEndian.PutUint64(prm.header[28:], rangeStart)
 	binary.BigEndian.PutUint64(prm.header[36:], rangeStop)
 	ktbf.toMsg(prm, pullReplicationMsgHeaderBytes)
@@ -2180,7 +2189,7 @@ func (prm *pullReplicationMsg) partition() uint32 {
 	return binary.BigEndian.Uint32(prm.header[16:])
 }
 
-func (prm *pullReplicationMsg) timestampCutoff() uint64 {
+func (prm *pullReplicationMsg) cutoff() uint64 {
 	return binary.BigEndian.Uint64(prm.header[20:])
 }
 
@@ -2306,7 +2315,7 @@ func (bsm *bulkSetMsg) nodeID() uint64 {
 	return binary.BigEndian.Uint64(bsm.header)
 }
 
-func (bsm *bulkSetMsg) add(keyA uint64, keyB uint64, timestamp uint64, value []byte) bool {
+func (bsm *bulkSetMsg) add(keyA uint64, keyB uint64, timestampbits uint64, value []byte) bool {
 	o := len(bsm.body)
 	if o+len(value)+28 >= cap(bsm.body) {
 		return false
@@ -2314,7 +2323,7 @@ func (bsm *bulkSetMsg) add(keyA uint64, keyB uint64, timestamp uint64, value []b
 	bsm.body = bsm.body[:o+len(value)+28]
 	binary.BigEndian.PutUint64(bsm.body[o:], keyA)
 	binary.BigEndian.PutUint64(bsm.body[o+8:], keyB)
-	binary.BigEndian.PutUint64(bsm.body[o+16:], timestamp)
+	binary.BigEndian.PutUint64(bsm.body[o+16:], timestampbits)
 	binary.BigEndian.PutUint32(bsm.body[o+24:], uint32(len(value)))
 	copy(bsm.body[o+28:], value)
 	return true
@@ -2379,7 +2388,7 @@ func (bsam *bulkSetAckMsg) Done() {
 	bsam.vs.outBulkSetAckChan <- bsam
 }
 
-func (bsam *bulkSetAckMsg) add(keyA uint64, keyB uint64, timestamp uint64) bool {
+func (bsam *bulkSetAckMsg) add(keyA uint64, keyB uint64, timestampbits uint64) bool {
 	o := len(bsam.body)
 	if o+24 >= cap(bsam.body) {
 		return false
@@ -2387,6 +2396,6 @@ func (bsam *bulkSetAckMsg) add(keyA uint64, keyB uint64, timestamp uint64) bool 
 	bsam.body = bsam.body[:o+24]
 	binary.BigEndian.PutUint64(bsam.body[o:], keyA)
 	binary.BigEndian.PutUint64(bsam.body[o+8:], keyB)
-	binary.BigEndian.PutUint64(bsam.body[o+16:], timestamp)
+	binary.BigEndian.PutUint64(bsam.body[o+16:], timestampbits)
 	return true
 }
