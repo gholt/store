@@ -1398,19 +1398,12 @@ func (vs *DefaultValueStore) tocWriter() {
 	}
 }
 
+const _GLH_RECOVERY_BATCH_SIZE = 1024 * 1024
+
 func (vs *DefaultValueStore) recovery() {
 	start := time.Now()
-	dfp, err := os.Open(vs.pathtoc)
-	if err != nil {
-		panic(err)
-	}
-	names, err := dfp.Readdirnames(-1)
-	if err != nil {
-		panic(err)
-	}
-	sort.Strings(names)
 	fromDiskCount := 0
-	count := int64(0)
+	causedChangeCount := int64(0)
 	type writeReq struct {
 		keyA          uint64
 		keyB          uint64
@@ -1419,65 +1412,84 @@ func (vs *DefaultValueStore) recovery() {
 		offset        uint32
 		length        uint32
 	}
-	// TODO: Need to change this whole thing to ensure multiple entries for the
-	// same key get added in the same order and, more specifically, that
-	// _TS_DO_NOT_REPLICATE marked items remove said items from memory (that
-	// are possibly readded with later items not marked _TS_DO_NOT_REPLICATE).
-	pendingChan := make(chan []writeReq, vs.workers)
-	freeChan := make(chan []writeReq, cap(pendingChan)*2)
-	for i := 0; i < cap(freeChan); i++ {
-		freeChan <- make([]writeReq, 0, 65536)
+	workers := 2
+	workersShift := uint64(63)
+	for workers < vs.workers {
+		workers *= 2
+		workersShift--
+	}
+	pendingBatchChans := make([]chan []writeReq, workers)
+	freeBatchChans := make([]chan []writeReq, len(pendingBatchChans))
+	for i := 0; i < len(pendingBatchChans); i++ {
+		pendingBatchChans[i] = make(chan []writeReq, 4)
+		freeBatchChans[i] = make(chan []writeReq, 4)
+		for j := 0; j < cap(freeBatchChans[i]); j++ {
+			freeBatchChans[i] <- make([]writeReq, _GLH_RECOVERY_BATCH_SIZE)
+		}
 	}
 	wg := &sync.WaitGroup{}
-	wg.Add(cap(pendingChan))
-	for i := 0; i < cap(pendingChan); i++ {
-		go func() {
+	wg.Add(len(pendingBatchChans))
+	for i := 0; i < len(pendingBatchChans); i++ {
+		go func(pendingBatchChan chan []writeReq, freeBatchChan chan []writeReq) {
 			for {
-				wrs := <-pendingChan
-				if wrs == nil {
+				batch := <-pendingBatchChan
+				if batch == nil {
 					break
 				}
-				for i := len(wrs) - 1; i >= 0; i-- {
-					wr := &wrs[i]
-					if vs.vlm.Set(wr.keyA, wr.keyB, wr.timestampbits, wr.blockID, wr.offset, wr.length, false) < wr.timestampbits {
-						atomic.AddInt64(&count, 1)
+				for j := 0; j < len(batch); j++ {
+					wr := &batch[j]
+					if vs.logDebug != nil {
+						if vs.vlm.Set(wr.keyA, wr.keyB, wr.timestampbits, wr.blockID, wr.offset, wr.length, false) < wr.timestampbits {
+							atomic.AddInt64(&causedChangeCount, 1)
+						}
+					} else {
+						vs.vlm.Set(wr.keyA, wr.keyB, wr.timestampbits, wr.blockID, wr.offset, wr.length, false)
 					}
 				}
-				freeChan <- wrs[:0]
+				freeBatchChan <- batch
 			}
 			wg.Done()
-		}()
+		}(pendingBatchChans[i], freeBatchChans[i])
 	}
-	wrs := <-freeChan
-	wix := 0
-	maxwix := cap(wrs) - 1
-	wrs = wrs[:maxwix+1]
+	fromDiskBuf := make([]byte, vs.checksumInterval+4)
+	fromDiskOverflow := make([]byte, 0, 32)
+	batches := make([][]writeReq, len(freeBatchChans))
+	batchesPos := make([]int, len(batches))
+	fp, err := os.Open(vs.pathtoc)
+	if err != nil {
+		panic(err)
+	}
+	names, err := fp.Readdirnames(-1)
+	fp.Close()
+	if err != nil {
+		panic(err)
+	}
+	sort.Strings(names)
 	for i := len(names) - 1; i >= 0; i-- {
 		if !strings.HasSuffix(names[i], ".valuestoc") {
 			continue
 		}
-		bts := int64(0)
-		if bts, err = strconv.ParseInt(names[i][:len(names[i])-len(".valuestoc")], 10, 64); err != nil {
+		namets := int64(0)
+		if namets, err = strconv.ParseInt(names[i][:len(names[i])-len(".valuestoc")], 10, 64); err != nil {
 			vs.logError.Printf("bad timestamp in name: %#v\n", names[i])
 			continue
 		}
-		if bts == 0 {
+		if namets == 0 {
 			vs.logError.Printf("bad timestamp in name: %#v\n", names[i])
 			continue
 		}
-		vf := newValuesFile(vs, bts)
+		vf := newValuesFile(vs, namets)
 		fp, err := os.Open(path.Join(vs.pathtoc, names[i]))
 		if err != nil {
 			vs.logError.Printf("error opening %s: %s\n", names[i], err)
 			continue
 		}
-		buf := make([]byte, vs.checksumInterval+4)
 		checksumFailures := 0
-		overflow := make([]byte, 0, 32)
 		first := true
 		terminated := false
+		fromDiskOverflow = fromDiskOverflow[:0]
 		for {
-			n, err := io.ReadFull(fp, buf)
+			n, err := io.ReadFull(fp, fromDiskBuf)
 			if n < 4 {
 				if err != io.EOF && err != io.ErrUnexpectedEOF {
 					vs.logError.Printf("error reading %s: %s\n", names[i], err)
@@ -1485,78 +1497,82 @@ func (vs *DefaultValueStore) recovery() {
 				break
 			}
 			n -= 4
-			if murmur3.Sum32(buf[:n]) != binary.BigEndian.Uint32(buf[n:]) {
+			if murmur3.Sum32(fromDiskBuf[:n]) != binary.BigEndian.Uint32(fromDiskBuf[n:]) {
 				checksumFailures++
 			} else {
-				i := 0
+				j := 0
 				if first {
-					if !bytes.Equal(buf[:28], []byte("VALUESTORETOC v0            ")) {
+					if !bytes.Equal(fromDiskBuf[:28], []byte("VALUESTORETOC v0            ")) {
 						vs.logError.Printf("bad header: %s\n", names[i])
 						break
 					}
-					if binary.BigEndian.Uint32(buf[28:]) != vs.checksumInterval {
+					if binary.BigEndian.Uint32(fromDiskBuf[28:]) != vs.checksumInterval {
 						vs.logError.Printf("bad header checksum interval: %s\n", names[i])
 						break
 					}
-					i += 32
+					j += 32
 					first = false
 				}
 				if n < int(vs.checksumInterval) {
-					if binary.BigEndian.Uint32(buf[n-16:]) != 0 {
+					if binary.BigEndian.Uint32(fromDiskBuf[n-16:]) != 0 {
 						vs.logError.Printf("bad terminator size marker: %s\n", names[i])
 						break
 					}
-					if !bytes.Equal(buf[n-4:n], []byte("TERM")) {
+					if !bytes.Equal(fromDiskBuf[n-4:n], []byte("TERM")) {
 						vs.logError.Printf("bad terminator: %s\n", names[i])
 						break
 					}
 					n -= 16
 					terminated = true
 				}
-				if len(overflow) > 0 {
-					i += 32 - len(overflow)
-					overflow = append(overflow, buf[i-32+len(overflow):i]...)
-					if wrs == nil {
-						wrs = (<-freeChan)[:maxwix+1]
-						wix = 0
+				if len(fromDiskOverflow) > 0 {
+					j += 32 - len(fromDiskOverflow)
+					fromDiskOverflow = append(fromDiskOverflow, fromDiskBuf[j-32+len(fromDiskOverflow):j]...)
+					keyA := binary.BigEndian.Uint64(fromDiskOverflow)
+					k := keyA >> workersShift
+					if batches[k] == nil {
+						batches[k] = <-freeBatchChans[k]
+						batchesPos[k] = 0
 					}
-					wr := &wrs[wix]
-					wr.keyA = binary.BigEndian.Uint64(overflow)
-					wr.keyB = binary.BigEndian.Uint64(overflow[8:])
-					wr.timestampbits = binary.BigEndian.Uint64(overflow[16:])
+					wr := &batches[k][batchesPos[k]]
+					wr.keyA = keyA
+					wr.keyB = binary.BigEndian.Uint64(fromDiskOverflow[8:])
+					wr.timestampbits = binary.BigEndian.Uint64(fromDiskOverflow[16:])
 					wr.blockID = vf.id
-					wr.offset = binary.BigEndian.Uint32(overflow[24:])
-					wr.length = binary.BigEndian.Uint32(overflow[28:])
-					wix++
-					if wix > maxwix {
-						pendingChan <- wrs
-						wrs = nil
+					wr.offset = binary.BigEndian.Uint32(fromDiskOverflow[24:])
+					wr.length = binary.BigEndian.Uint32(fromDiskOverflow[28:])
+					batchesPos[k]++
+					if batchesPos[k] >= _GLH_RECOVERY_BATCH_SIZE {
+						pendingBatchChans[k] <- batches[k]
+						batches[k] = nil
 					}
 					fromDiskCount++
-					overflow = overflow[:0]
+					fromDiskOverflow = fromDiskOverflow[:0]
 				}
-				for ; i+32 <= n; i += 32 {
-					if wrs == nil {
-						wrs = (<-freeChan)[:maxwix+1]
-						wix = 0
+				for ; j+32 <= n; j += 32 {
+					keyA := binary.BigEndian.Uint64(fromDiskBuf[j:])
+					k := keyA >> workersShift
+					if batches[k] == nil {
+						batches[k] = <-freeBatchChans[k]
+						batchesPos[k] = 0
 					}
-					wr := &wrs[wix]
-					wr.keyA = binary.BigEndian.Uint64(buf[i:])
-					wr.keyB = binary.BigEndian.Uint64(buf[i+8:])
-					wr.timestampbits = binary.BigEndian.Uint64(buf[i+16:])
+					wr := &batches[k][batchesPos[k]]
+					wr.keyA = keyA
+					wr.keyB = binary.BigEndian.Uint64(fromDiskBuf[j+8:])
+					wr.timestampbits = binary.BigEndian.Uint64(fromDiskBuf[j+16:])
 					wr.blockID = vf.id
-					wr.offset = binary.BigEndian.Uint32(buf[i+24:])
-					wr.length = binary.BigEndian.Uint32(buf[i+28:])
-					wix++
-					if wix > maxwix {
-						pendingChan <- wrs
-						wrs = nil
+					wr.offset = binary.BigEndian.Uint32(fromDiskBuf[j+24:])
+					wr.length = binary.BigEndian.Uint32(fromDiskBuf[j+28:])
+					batchesPos[k]++
+					if batchesPos[k] >= _GLH_RECOVERY_BATCH_SIZE {
+						pendingBatchChans[k] <- batches[k]
+						batches[k] = nil
 					}
 					fromDiskCount++
 				}
-				if i != n {
-					overflow = overflow[:n-i]
-					copy(overflow, buf[i:])
+				if j != n {
+					fromDiskOverflow = fromDiskOverflow[:n-j]
+					copy(fromDiskOverflow, fromDiskBuf[j:])
 				}
 			}
 			if err != nil && err != io.EOF && err != io.ErrUnexpectedEOF {
@@ -1572,17 +1588,17 @@ func (vs *DefaultValueStore) recovery() {
 			vs.logWarning.Printf("%d checksum failures for %s\n", checksumFailures, names[i])
 		}
 	}
-	if wix > 0 {
-		pendingChan <- wrs[:wix]
-	}
-	for i := 0; i < cap(pendingChan); i++ {
-		pendingChan <- nil
+	for i := 0; i < len(batches); i++ {
+		if batches[i] != nil {
+			pendingBatchChans[i] <- batches[i][:batchesPos[i]]
+		}
+		pendingBatchChans[i] <- nil
 	}
 	wg.Wait()
-	if fromDiskCount > 0 {
+	if vs.logDebug != nil {
 		dur := time.Now().Sub(start)
 		valueCount, valueLength, _ := vs.GatherStats(false)
-		vs.logInfo.Printf("%d key locations loaded in %s, %.0f/s; %d caused change; %d resulting locations referencing %d bytes.\n", fromDiskCount, dur, float64(fromDiskCount)/(float64(dur)/float64(time.Second)), count, valueCount, valueLength)
+		vs.logInfo.Printf("%d key locations loaded in %s, %.0f/s; %d caused change; %d resulting locations referencing %d bytes.\n", fromDiskCount, dur, float64(fromDiskCount)/(float64(dur)/float64(time.Second)), causedChangeCount, valueCount, valueLength)
 	}
 }
 
