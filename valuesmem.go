@@ -15,8 +15,6 @@ type valuesMem struct {
 	discardLock sync.RWMutex
 }
 
-var flushValuesMem *valuesMem = &valuesMem{}
-
 func (vm *valuesMem) timestampnano() int64 {
 	return math.MaxInt64
 }

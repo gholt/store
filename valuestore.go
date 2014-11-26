@@ -659,6 +659,7 @@ type valueWriteReq struct {
 var enableValueWriteReq *valueWriteReq = &valueWriteReq{}
 var disableValueWriteReq *valueWriteReq = &valueWriteReq{}
 var flushValueWriteReq *valueWriteReq = &valueWriteReq{}
+var flushValuesMem *valuesMem = &valuesMem{}
 
 type valueLocBlock interface {
 	timestampnano() int64
@@ -1438,6 +1439,9 @@ func (vs *DefaultValueStore) recovery() {
 				}
 				for j := 0; j < len(batch); j++ {
 					wr := &batch[j]
+					if wr.timestampbits&_TSB_DO_NOT_REPLICATE != 0 {
+						wr.blockID = 0
+					}
 					if vs.logDebug != nil {
 						if vs.vlm.Set(wr.keyA, wr.keyB, wr.timestampbits, wr.blockID, wr.offset, wr.length, false) < wr.timestampbits {
 							atomic.AddInt64(&causedChangeCount, 1)
@@ -1465,7 +1469,7 @@ func (vs *DefaultValueStore) recovery() {
 		panic(err)
 	}
 	sort.Strings(names)
-	for i := len(names) - 1; i >= 0; i-- {
+	for i := 0; i < len(names); i++ {
 		if !strings.HasSuffix(names[i], ".valuestoc") {
 			continue
 		}
