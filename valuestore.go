@@ -89,14 +89,12 @@ const (
 	_TSB_UTIL_BITS = 8
 	_TSB_INACTIVE  = 0xff
 	_TSB_DELETION  = 0x80
-	// _TSB_DO_NOT_REPLICATE is a slightly interesting bit in that it is used
-	// to indicate an item that did not belong in this valuestore (according to
-	// the ring) and we got an acknowledgement from another valuestore that
-	// they had stored the item. However, all _TSB_DO_NOT_REPLICATE items are
-	// removed from memory with each discard pass because this valuestore may
-	// end up being responsible at some point due to a ring change and would
-	// therefore need to accept the items again and acknowledge their storage.
-	_TSB_DO_NOT_REPLICATE = 0x01
+	// _TSB_LOCAL_REMOVAL indicates an item to be removed locally due to push
+	// replication (local store wasn't considered responsible for the item
+	// according to the ring) or a deletion marker expiration. An item marked
+	// for local removal will be retained in memory until the local removal
+	// marker is written to disk.
+	_TSB_LOCAL_REMOVAL = 0x01
 )
 
 const (
@@ -916,7 +914,6 @@ func (vs *DefaultValueStore) EnableWrites() {
 // DisableDiscard will stop any discard passes until EnableDiscard is called. A
 // discard pass removes expired tombstones (deletion markers).
 func (vs *DefaultValueStore) DisableDiscard() {
-	atomic.StoreUint32(&vs.discardAbort, 1)
 	c := make(chan struct{}, 1)
 	vs.discardNotifyChan <- &backgroundNotification{
 		disable:  true,
@@ -939,7 +936,6 @@ func (vs *DefaultValueStore) EnableDiscard() {
 // DisableOutPullReplication will stop any outgoing pull replication requests
 // until EnableOutPullReplication is called.
 func (vs *DefaultValueStore) DisableOutPullReplication() {
-	atomic.StoreUint32(&vs.outPullReplicationAbort, 1)
 	c := make(chan struct{}, 1)
 	vs.outPullReplicationNotifyChan <- &backgroundNotification{
 		disable:  true,
@@ -961,7 +957,6 @@ func (vs *DefaultValueStore) EnableOutPullReplication() {
 // DisableOutPushReplication will stop any outgoing push replication requests
 // until EnableOutPushReplication is called.
 func (vs *DefaultValueStore) DisableOutPushReplication() {
-	atomic.StoreUint32(&vs.outPushReplicationAbort, 1)
 	c := make(chan struct{}, 1)
 	vs.outPushReplicationNotifyChan <- &backgroundNotification{
 		disable:  true,
@@ -1158,9 +1153,15 @@ func (vs *DefaultValueStore) memClearer(freeableVMChan chan *valuesMem) {
 			keyA := binary.BigEndian.Uint64(vm.toc[vmTOCOffset:])
 			keyB := binary.BigEndian.Uint64(vm.toc[vmTOCOffset+8:])
 			timestampbits := binary.BigEndian.Uint64(vm.toc[vmTOCOffset+16:])
-			vmMemOffset := binary.BigEndian.Uint32(vm.toc[vmTOCOffset+24:])
-			length := binary.BigEndian.Uint32(vm.toc[vmTOCOffset+28:])
-			if vs.vlm.Set(keyA, keyB, timestampbits, vm.vfID, vm.vfOffset+vmMemOffset, length, true) != timestampbits {
+			var blockID uint32
+			var offset uint32
+			var length uint32
+			if timestampbits&_TSB_LOCAL_REMOVAL == 0 {
+				blockID = vm.vfID
+				offset = vm.vfOffset + binary.BigEndian.Uint32(vm.toc[vmTOCOffset+24:])
+				length = binary.BigEndian.Uint32(vm.toc[vmTOCOffset+28:])
+			}
+			if vs.vlm.Set(keyA, keyB, timestampbits, blockID, offset, length, true) > timestampbits {
 				continue
 			}
 			if tb != nil && tbOffset+32 > cap(tb) {
@@ -1178,7 +1179,7 @@ func (vs *DefaultValueStore) memClearer(freeableVMChan chan *valuesMem) {
 			binary.BigEndian.PutUint64(tb[tbOffset:], keyA)
 			binary.BigEndian.PutUint64(tb[tbOffset+8:], keyB)
 			binary.BigEndian.PutUint64(tb[tbOffset+16:], timestampbits)
-			binary.BigEndian.PutUint32(tb[tbOffset+24:], vm.vfOffset+vmMemOffset)
+			binary.BigEndian.PutUint32(tb[tbOffset+24:], offset)
 			binary.BigEndian.PutUint32(tb[tbOffset+28:], length)
 			tbOffset += 32
 		}
@@ -1402,6 +1403,9 @@ func (vs *DefaultValueStore) tocWriter() {
 const _GLH_RECOVERY_BATCH_SIZE = 1024 * 1024
 
 func (vs *DefaultValueStore) recovery() {
+	// TODO: Needs to handle expired deletion markers.
+	glhDebug := vs.logDebug
+	vs.logDebug = vs.logInfo
 	start := time.Now()
 	fromDiskCount := 0
 	causedChangeCount := int64(0)
@@ -1413,12 +1417,7 @@ func (vs *DefaultValueStore) recovery() {
 		offset        uint32
 		length        uint32
 	}
-	workers := 2
-	workersShift := uint64(63)
-	for workers < vs.workers {
-		workers *= 2
-		workersShift--
-	}
+	workers := uint64(vs.workers)
 	pendingBatchChans := make([]chan []writeReq, workers)
 	freeBatchChans := make([]chan []writeReq, len(pendingBatchChans))
 	for i := 0; i < len(pendingBatchChans); i++ {
@@ -1439,7 +1438,7 @@ func (vs *DefaultValueStore) recovery() {
 				}
 				for j := 0; j < len(batch); j++ {
 					wr := &batch[j]
-					if wr.timestampbits&_TSB_DO_NOT_REPLICATE != 0 {
+					if wr.timestampbits&_TSB_LOCAL_REMOVAL != 0 {
 						wr.blockID = 0
 					}
 					if vs.logDebug != nil {
@@ -1532,15 +1531,15 @@ func (vs *DefaultValueStore) recovery() {
 				if len(fromDiskOverflow) > 0 {
 					j += 32 - len(fromDiskOverflow)
 					fromDiskOverflow = append(fromDiskOverflow, fromDiskBuf[j-32+len(fromDiskOverflow):j]...)
-					keyA := binary.BigEndian.Uint64(fromDiskOverflow)
-					k := keyA >> workersShift
+					keyB := binary.BigEndian.Uint64(fromDiskOverflow[8:])
+					k := keyB % workers
 					if batches[k] == nil {
 						batches[k] = <-freeBatchChans[k]
 						batchesPos[k] = 0
 					}
 					wr := &batches[k][batchesPos[k]]
-					wr.keyA = keyA
-					wr.keyB = binary.BigEndian.Uint64(fromDiskOverflow[8:])
+					wr.keyA = binary.BigEndian.Uint64(fromDiskOverflow)
+					wr.keyB = keyB
 					wr.timestampbits = binary.BigEndian.Uint64(fromDiskOverflow[16:])
 					wr.blockID = vf.id
 					wr.offset = binary.BigEndian.Uint32(fromDiskOverflow[24:])
@@ -1554,15 +1553,15 @@ func (vs *DefaultValueStore) recovery() {
 					fromDiskOverflow = fromDiskOverflow[:0]
 				}
 				for ; j+32 <= n; j += 32 {
-					keyA := binary.BigEndian.Uint64(fromDiskBuf[j:])
-					k := keyA >> workersShift
+					keyB := binary.BigEndian.Uint64(fromDiskBuf[j+8:])
+					k := keyB % workers
 					if batches[k] == nil {
 						batches[k] = <-freeBatchChans[k]
 						batchesPos[k] = 0
 					}
 					wr := &batches[k][batchesPos[k]]
-					wr.keyA = keyA
-					wr.keyB = binary.BigEndian.Uint64(fromDiskBuf[j+8:])
+					wr.keyA = binary.BigEndian.Uint64(fromDiskBuf[j:])
+					wr.keyB = keyB
 					wr.timestampbits = binary.BigEndian.Uint64(fromDiskBuf[j+16:])
 					wr.blockID = vf.id
 					wr.offset = binary.BigEndian.Uint32(fromDiskBuf[j+24:])
@@ -1604,6 +1603,7 @@ func (vs *DefaultValueStore) recovery() {
 		valueCount, valueLength, _ := vs.GatherStats(false)
 		vs.logInfo.Printf("%d key locations loaded in %s, %.0f/s; %d caused change; %d resulting locations referencing %d bytes.\n", fromDiskCount, dur, float64(fromDiskCount)/(float64(dur)/float64(time.Second)), causedChangeCount, valueCount, valueLength)
 	}
+	vs.logDebug = glhDebug
 }
 
 func (vs *DefaultValueStore) inPullReplication() {
@@ -1618,7 +1618,7 @@ func (vs *DefaultValueStore) inPullReplication() {
 		l := int64(_GLH_OUT_BULK_SET_MSG_SIZE)
 		vs.vlm.ScanCallback(prm.rangeStart(), prm.rangeStop(), func(keyA uint64, keyB uint64, timestampbits uint64, length uint32) {
 			if l > 0 {
-				if timestampbits&_TSB_DO_NOT_REPLICATE == 0 && timestampbits < cutoff && (timestampbits&_TSB_DELETION == 0 || timestampbits >= tombstoneCutoff) {
+				if timestampbits&_TSB_LOCAL_REMOVAL == 0 && timestampbits < cutoff && (timestampbits&_TSB_DELETION == 0 || timestampbits >= tombstoneCutoff) {
 					if !ktbf.mayHave(keyA, keyB, timestampbits) {
 						k = append(k, keyA, keyB)
 						// bsm: keyA:8, keyB:8, timestampbits:8, length:4,
@@ -1643,7 +1643,7 @@ func (vs *DefaultValueStore) inPullReplication() {
 				} else if err != nil {
 					continue
 				}
-				if t&_TSB_DO_NOT_REPLICATE == 0 {
+				if t&_TSB_LOCAL_REMOVAL == 0 {
 					if !bsm.add(k[i], k[i+1], t, v) {
 						break
 					}
@@ -1709,7 +1709,7 @@ func (vs *DefaultValueStore) inBulkSetAck() {
 			}
 			keyA := binary.BigEndian.Uint64(b[o:])
 			if !vs.ring.Responsible(uint32(keyA >> sppower)) {
-				vs.write(keyA, binary.BigEndian.Uint64(b[o+8:]), binary.BigEndian.Uint64(b[o+16:])|_TSB_DELETION|_TSB_DO_NOT_REPLICATE, nil)
+				vs.write(keyA, binary.BigEndian.Uint64(b[o+8:]), binary.BigEndian.Uint64(b[o+16:])|_TSB_LOCAL_REMOVAL, nil)
 			}
 		}
 		vs.freeInBulkSetAckChan <- bsam
@@ -1830,6 +1830,7 @@ func (vs *DefaultValueStore) discardLauncher() {
 				continue
 			}
 			if notification.disable {
+				atomic.StoreUint32(&vs.discardAbort, 1)
 				enabled = false
 				notification.doneChan <- struct{}{}
 				continue
@@ -1870,6 +1871,7 @@ func (vs *DefaultValueStore) outPullReplicationLauncher() {
 				continue
 			}
 			if notification.disable {
+				atomic.StoreUint32(&vs.outPullReplicationAbort, 1)
 				enabled = false
 				notification.doneChan <- struct{}{}
 				continue
@@ -1910,6 +1912,7 @@ func (vs *DefaultValueStore) outPushReplicationLauncher() {
 				continue
 			}
 			if notification.disable {
+				atomic.StoreUint32(&vs.outPushReplicationAbort, 1)
 				enabled = false
 				notification.doneChan <- struct{}{}
 				continue
@@ -1931,7 +1934,6 @@ func (vs *DefaultValueStore) discardPass() {
 			vs.logDebug.Printf("discard pass took %s", time.Now().Sub(begin))
 		}()
 	}
-	vs.vlm.Discard(_TSB_DO_NOT_REPLICATE, math.MaxUint64)
 	vs.vlm.Discard(_TSB_DELETION, (uint64(brimtime.TimeToUnixMicro(time.Now()))<<_TSB_UTIL_BITS)-vs.tombstoneAge)
 }
 
@@ -1939,14 +1941,14 @@ const _GLH_BLOOM_FILTER_N = 1000000
 const _GLH_BLOOM_FILTER_P = 0.001
 
 func (vs *DefaultValueStore) outPullReplicationPass() {
+	if vs.ring == nil {
+		return
+	}
 	if vs.logDebug != nil {
 		begin := time.Now()
 		defer func() {
 			vs.logDebug.Printf("out pull replication pass took %s", time.Now().Sub(begin))
 		}()
-	}
-	if vs.ring == nil {
-		return
 	}
 	if vs.outPullReplicationIteration == math.MaxUint16 {
 		vs.outPullReplicationIteration = 0
@@ -1971,10 +1973,10 @@ func (vs *DefaultValueStore) outPullReplicationPass() {
 		tombstoneCutoff := timestampbitsnow - vs.tombstoneAge
 		substart := start
 		substop := start + (pullSize - 1)
-		for {
+		for atomic.LoadUint32(&vs.outPullReplicationAbort) == 0 {
 			ktbf.reset(vs.outPullReplicationIteration)
 			vs.vlm.ScanCallback(substart, substop, func(keyA uint64, keyB uint64, timestampbits uint64, length uint32) {
-				if timestampbits&_TSB_DO_NOT_REPLICATE == 0 && timestampbits < cutoff && (timestampbits&_TSB_DELETION == 0 || timestampbits >= tombstoneCutoff) {
+				if timestampbits&_TSB_LOCAL_REMOVAL == 0 && timestampbits < cutoff && (timestampbits&_TSB_DELETION == 0 || timestampbits >= tombstoneCutoff) {
 					ktbf.add(keyA, keyB, timestampbits)
 				}
 			})
@@ -2021,14 +2023,14 @@ func (vs *DefaultValueStore) outPullReplicationPass() {
 }
 
 func (vs *DefaultValueStore) outPushReplicationPass() {
+	if vs.ring == nil {
+		return
+	}
 	if vs.logDebug != nil {
 		begin := time.Now()
 		defer func() {
 			vs.logDebug.Printf("out push replication pass took %s", time.Now().Sub(begin))
 		}()
-	}
-	if vs.ring == nil {
-		return
 	}
 	ringID := vs.ring.ID()
 	partitionPower := vs.ring.PartitionPower()
@@ -2052,11 +2054,11 @@ func (vs *DefaultValueStore) outPushReplicationPass() {
 		tombstoneCutoff := timestampbitsnow - vs.tombstoneAge
 		substart := start
 		substop := start + (pullSize - 1)
-		for {
+		for atomic.LoadUint32(&vs.outPushReplicationAbort) == 0 {
 			l := int64(_GLH_OUT_BULK_SET_MSG_SIZE)
 			vs.vlm.ScanCallback(substart, substop, func(keyA uint64, keyB uint64, timestampbits uint64, length uint32) {
 				if l > 0 {
-					if timestampbits&_TSB_DO_NOT_REPLICATE == 0 && timestampbits < cutoff && (timestampbits&_TSB_DELETION == 0 || timestampbits >= tombstoneCutoff) {
+					if timestampbits&_TSB_LOCAL_REMOVAL == 0 && timestampbits < cutoff && (timestampbits&_TSB_DELETION == 0 || timestampbits >= tombstoneCutoff) {
 						list = append(list, keyA, keyB)
 						// bsm: keyA:8, keyB:8, timestampbits:8, length:4,
 						//      value:n
@@ -2081,11 +2083,15 @@ func (vs *DefaultValueStore) outPushReplicationPass() {
 					} else if err != nil {
 						continue
 					}
-					if timestampbits&_TSB_DO_NOT_REPLICATE == 0 && timestampbits < cutoff && (timestampbits&_TSB_DELETION == 0 || timestampbits >= tombstoneCutoff) {
+					if timestampbits&_TSB_LOCAL_REMOVAL == 0 && timestampbits < cutoff && (timestampbits&_TSB_DELETION == 0 || timestampbits >= tombstoneCutoff) {
 						if !bsm.add(list[i], list[i+1], timestampbits, valbuf) {
 							break
 						}
 					}
+				}
+				if atomic.LoadUint32(&vs.outPushReplicationAbort) != 0 {
+					bsm.Done()
+					break
 				}
 				if !vs.ring.MsgToOtherReplicas(ringID, p, bsm) {
 					bsm.Done()
