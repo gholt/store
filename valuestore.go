@@ -26,8 +26,8 @@
 // bits used to indicate deletions and other bookkeeping items. This means that
 // the allowable time range is 1970-01-01 00:00:00 +0000 UTC (+1 microsecond
 // because all zeroes indicates a missing item) to 4253-05-31 22:20:37.927935
-// +0000 UTC. There are constants TIMESTAMP_MIN and TIMESTAMP_MAX available for
-// bounding usage.
+// +0000 UTC. There are constants TIMESTAMPMICRO_MIN and TIMESTAMPMICRO_MAX
+// available for bounding usage.
 //
 // There are background tasks for:
 //
@@ -36,7 +36,7 @@
 // older value doesn't resurrect a deleted value. But, keeping all tombstones
 // for all time is a waste of resources, so they are discarded over time.
 // OptTombstoneAge controls how long they should be kept and should be set to
-// an amount greater than a few replication passes.
+// an amount greater than several replication passes.
 //
 // * OutPullReplication: This will continually send out pull replication
 // requests for all the partitions the ValueStore is responsible for, as
@@ -98,8 +98,8 @@ const (
 )
 
 const (
-	TIMESTAMP_MIN = int64(uint64(1) << _TSB_UTIL_BITS)
-	TIMESTAMP_MAX = int64(uint64(math.MaxUint64) >> _TSB_UTIL_BITS)
+	TIMESTAMPMICRO_MIN = int64(uint64(1) << _TSB_UTIL_BITS)
+	TIMESTAMPMICRO_MAX = int64(uint64(math.MaxUint64) >> _TSB_UTIL_BITS)
 )
 
 // ValueStore is an interface for a disk-backed data structure that stores
@@ -1025,11 +1025,11 @@ var _EMPTY_BYTE_ARRAY []byte = []byte{}
 // in place is not reported as an error. Note that with a write and a delete
 // for the exact same timestampmicro, the delete wins.
 func (vs *DefaultValueStore) Write(keyA uint64, keyB uint64, timestampmicro int64, value []byte) (int64, error) {
-	if timestampmicro < TIMESTAMP_MIN {
-		return 0, fmt.Errorf("timestamp %d < %d", timestampmicro, TIMESTAMP_MIN)
+	if timestampmicro < TIMESTAMPMICRO_MIN {
+		return 0, fmt.Errorf("timestamp %d < %d", timestampmicro, TIMESTAMPMICRO_MIN)
 	}
-	if timestampmicro > TIMESTAMP_MAX {
-		return 0, fmt.Errorf("timestamp %d > %d", timestampmicro, TIMESTAMP_MAX)
+	if timestampmicro > TIMESTAMPMICRO_MAX {
+		return 0, fmt.Errorf("timestamp %d > %d", timestampmicro, TIMESTAMPMICRO_MAX)
 	}
 	timestampbits, err := vs.write(keyA, keyB, uint64(timestampmicro)<<_TSB_UTIL_BITS, value)
 	return int64(timestampbits >> _TSB_UTIL_BITS), err
@@ -1055,11 +1055,11 @@ func (vs *DefaultValueStore) write(keyA uint64, keyB uint64, timestampbits uint6
 // in place is not reported as an error. Note that with a write and a delete
 // for the exact same timestampmicro, the delete wins.
 func (vs *DefaultValueStore) Delete(keyA uint64, keyB uint64, timestampmicro int64) (int64, error) {
-	if timestampmicro < TIMESTAMP_MIN {
-		return 0, fmt.Errorf("timestamp %d < %d", timestampmicro, TIMESTAMP_MIN)
+	if timestampmicro < TIMESTAMPMICRO_MIN {
+		return 0, fmt.Errorf("timestamp %d < %d", timestampmicro, TIMESTAMPMICRO_MIN)
 	}
-	if timestampmicro > TIMESTAMP_MAX {
-		return 0, fmt.Errorf("timestamp %d > %d", timestampmicro, TIMESTAMP_MAX)
+	if timestampmicro > TIMESTAMPMICRO_MAX {
+		return 0, fmt.Errorf("timestamp %d > %d", timestampmicro, TIMESTAMPMICRO_MAX)
 	}
 	ptimestampbits, err := vs.write(keyA, keyB, (uint64(timestampmicro)<<_TSB_UTIL_BITS)|_TSB_DELETION, nil)
 	return int64(ptimestampbits >> _TSB_UTIL_BITS), err
@@ -1403,9 +1403,6 @@ func (vs *DefaultValueStore) tocWriter() {
 const _GLH_RECOVERY_BATCH_SIZE = 1024 * 1024
 
 func (vs *DefaultValueStore) recovery() {
-	// TODO: Needs to handle expired deletion markers.
-	glhDebug := vs.logDebug
-	vs.logDebug = vs.logInfo
 	start := time.Now()
 	fromDiskCount := 0
 	causedChangeCount := int64(0)
@@ -1603,7 +1600,6 @@ func (vs *DefaultValueStore) recovery() {
 		valueCount, valueLength, _ := vs.GatherStats(false)
 		vs.logInfo.Printf("%d key locations loaded in %s, %.0f/s; %d caused change; %d resulting locations referencing %d bytes.\n", fromDiskCount, dur, float64(fromDiskCount)/(float64(dur)/float64(time.Second)), causedChangeCount, valueCount, valueLength)
 	}
-	vs.logDebug = glhDebug
 }
 
 func (vs *DefaultValueStore) inPullReplication() {
@@ -1927,6 +1923,14 @@ func (vs *DefaultValueStore) outPushReplicationLauncher() {
 	}
 }
 
+const _GLH_DISCARD_BATCH_SIZE = 1024 * 1024
+
+type localRemovalEntry struct {
+	keyA      uint64
+	keyB      uint64
+	timestamp uint64
+}
+
 func (vs *DefaultValueStore) discardPass() {
 	if vs.logDebug != nil {
 		begin := time.Now()
@@ -1934,7 +1938,35 @@ func (vs *DefaultValueStore) discardPass() {
 			vs.logDebug.Printf("discard pass took %s", time.Now().Sub(begin))
 		}()
 	}
-	vs.vlm.Discard(_TSB_DELETION, (uint64(brimtime.TimeToUnixMicro(time.Now()))<<_TSB_UTIL_BITS)-vs.tombstoneAge)
+	vs.vlm.Discard(_TSB_LOCAL_REMOVAL)
+	cutoff := (uint64(brimtime.TimeToUnixMicro(time.Now())) << _TSB_UTIL_BITS) - vs.tombstoneAge
+	localRemovals := make([]localRemovalEntry, _GLH_DISCARD_BATCH_SIZE)
+	var scanStart uint64 = 0
+	for {
+		prevScanStart := scanStart
+		localRemovalsIndex := 0
+		vs.vlm.ScanCallback(scanStart, math.MaxUint64, func(keyA uint64, keyB uint64, timestamp uint64, length uint32) {
+			if scanStart == prevScanStart && timestamp&_TSB_LOCAL_REMOVAL == 0 && timestamp < cutoff {
+				e := &localRemovals[localRemovalsIndex]
+				e.keyA = keyA
+				e.keyB = keyB
+				e.timestamp = timestamp
+				localRemovalsIndex++
+				if localRemovalsIndex == _GLH_DISCARD_BATCH_SIZE {
+					scanStart = keyA
+				}
+			}
+		})
+		// Issue local removals in reverse order to give a much lesser chance
+		// of reissuing a local removal for the same keys on the next pass.
+		for i := localRemovalsIndex - 1; i >= 0; i-- {
+			e := &localRemovals[i]
+			vs.write(e.keyA, e.keyB, e.timestamp|_TSB_LOCAL_REMOVAL, nil)
+		}
+		if scanStart == prevScanStart {
+			break
+		}
+	}
 }
 
 const _GLH_BLOOM_FILTER_N = 1000000
