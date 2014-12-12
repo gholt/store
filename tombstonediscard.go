@@ -188,10 +188,7 @@ func (vs *DefaultValueStore) tombstoneDiscardPassExpiredDeletions() {
 				e.timestamp = timestamp
 				lri++
 			})
-			// Issue local removals in reverse order to give a much lesser
-			// chance of reissuing a local removal for the same keys on the
-			// next pass.
-			for i := lri - 1; i >= 0; i-- {
+			for i := 0; i < lri; i++ {
 				e := &lr[i]
 				vs.write(e.keyA, e.keyB, e.timestamp|_TSB_LOCAL_REMOVAL, nil)
 			}
