@@ -31,12 +31,12 @@
 //
 // There are background tasks for:
 //
-// * Discard: This will discard older tombstones (deletion markers). Tombstones
-// are kept for OptTombstoneAge seconds and are used to ensure a replicated
-// older value doesn't resurrect a deleted value. But, keeping all tombstones
-// for all time is a waste of resources, so they are discarded over time.
-// OptTombstoneAge controls how long they should be kept and should be set to
-// an amount greater than several replication passes.
+// * TombstoneDiscard: This will discard older tombstones (deletion markers).
+// Tombstones are kept for OptTombstoneAge seconds and are used to ensure a
+// replicated older value doesn't resurrect a deleted value. But, keeping all
+// tombstones for all time is a waste of resources, so they are discarded over
+// time. OptTombstoneAge controls how long they should be kept and should be
+// set to an amount greater than several replication passes.
 //
 // * OutPullReplication: This will continually send out pull replication
 // requests for all the partitions the ValueStore is responsible for, as
@@ -110,9 +110,9 @@ type ValueStore interface {
 	Read(keyA uint64, keyB uint64, value []byte) (int64, []byte, error)
 	Write(keyA uint64, keyB uint64, timestamp int64, value []byte) (int64, error)
 	Delete(keyA uint64, keyB uint64, timestamp int64) (int64, error)
-	EnableDiscard()
-	DisableDiscard()
-	DiscardPass()
+	EnableTombstoneDiscard()
+	DisableTombstoneDiscard()
+	TombstoneDiscardPass()
 	EnableOutPullReplication()
 	DisableOutPullReplication()
 	OutPullReplicationPass()
@@ -155,14 +155,11 @@ type DefaultValueStore struct {
 	pageSize                     uint32
 	minValueAlloc                int
 	writePagesPerWorker          int
-	tombstoneAge                 uint64
 	valuesFileSize               uint32
 	valuesFileReaders            int
 	checksumInterval             uint32
 	ring                         ring.MsgRing
-	discardInterval              int
-	discardNotifyChan            chan *backgroundNotification
-	discardAbort                 uint32
+	tombstoneDiscardState        tombstoneDiscardState
 	replicationIgnoreRecent      uint64
 	inPullReplicationChan        chan *pullReplicationMsg
 	freeInPullReplicationChan    chan *pullReplicationMsg
@@ -216,10 +213,10 @@ type backgroundNotification struct {
 // by 128 bit keys.
 //
 // Note that a lot of buffering, multiple cores, and background processes can
-// be in use and therefore DisableDiscard() DisableOutPullReplication()
-// DisableOutPushReplication() DisableWrites() and Flush() should be called
-// prior to the process exiting to ensure all processing is done and the
-// buffers are flushed.
+// be in use and therefore DisableTombstoneDiscard()
+// DisableOutPullReplication() DisableOutPushReplication() DisableWrites() and
+// Flush() should be called prior to the process exiting to ensure all
+// processing is done and the buffers are flushed.
 //
 // You can provide Opt* functions for optional configuration items, such as
 // OptWorkers:
@@ -252,7 +249,6 @@ func New(opts ...func(*config)) *DefaultValueStore {
 		pathtoc:                     cfg.pathtoc,
 		vlm:                         vlm,
 		workers:                     cfg.workers,
-		discardInterval:             cfg.discardInterval,
 		replicationIgnoreRecent:     (uint64(cfg.replicationIgnoreRecent) * uint64(time.Second) / 1000) << _TSB_UTIL_BITS,
 		outPullReplicationWorkers:   cfg.outPullReplicationWorkers,
 		outPullReplicationIteration: uint16(cfg.rand.Uint32()),
@@ -263,7 +259,6 @@ func New(opts ...func(*config)) *DefaultValueStore {
 		pageSize:                    uint32(cfg.pageSize),
 		minValueAlloc:               cfg.minValueAlloc,
 		writePagesPerWorker:         cfg.writePagesPerWorker,
-		tombstoneAge:                (uint64(cfg.tombstoneAge) * uint64(time.Second) / 1000) << _TSB_UTIL_BITS,
 		valuesFileSize:              uint32(cfg.valuesFileSize),
 		valuesFileReaders:           cfg.valuesFileReaders,
 		checksumInterval:            uint32(cfg.checksumInterval),
@@ -370,8 +365,7 @@ func New(opts ...func(*config)) *DefaultValueStore {
 			}
 		}
 	}
-	vs.discardNotifyChan = make(chan *backgroundNotification, 1)
-	go vs.discardLauncher()
+	vs.tombstoneDiscardInit(cfg)
 	vs.outPullReplicationNotifyChan = make(chan *backgroundNotification, 1)
 	go vs.outPullReplicationLauncher()
 	vs.outPushReplicationNotifyChan = make(chan *backgroundNotification, 1)

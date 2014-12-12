@@ -114,7 +114,7 @@ func (vs *DefaultValueStore) outPushReplicationPass() {
 		}
 		timestampbitsnow := uint64(brimtime.TimeToUnixMicro(time.Now())) << _TSB_UTIL_BITS
 		cutoff := timestampbitsnow - vs.replicationIgnoreRecent
-		tombstoneCutoff := timestampbitsnow - vs.tombstoneAge
+		tombstoneCutoff := timestampbitsnow - vs.tombstoneDiscardState.age
 		substart := start
 		substop := start + (pullSize - 1)
 		for atomic.LoadUint32(&vs.outPushReplicationAbort) == 0 {

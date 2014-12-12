@@ -30,7 +30,7 @@ type valueStoreStats struct {
 	path                       string
 	pathtoc                    string
 	workers                    int
-	discardInterval            int
+	tombstoneDiscardInterval   int
 	outPullReplicationWorkers  int
 	outPullReplicationInterval int
 	outPushReplicationWorkers  int
@@ -80,7 +80,7 @@ func (vs *DefaultValueStore) GatherStats(debug bool) (uint64, uint64, fmt.String
 		stats.path = vs.path
 		stats.pathtoc = vs.pathtoc
 		stats.workers = vs.workers
-		stats.discardInterval = vs.discardInterval
+		stats.tombstoneDiscardInterval = vs.tombstoneDiscardState.interval
 		stats.outPullReplicationWorkers = vs.outPullReplicationWorkers
 		stats.outPullReplicationInterval = vs.outPullReplicationInterval
 		stats.outPushReplicationWorkers = vs.outPushReplicationWorkers
@@ -89,7 +89,7 @@ func (vs *DefaultValueStore) GatherStats(debug bool) (uint64, uint64, fmt.String
 		stats.pageSize = vs.pageSize
 		stats.minValueAlloc = vs.minValueAlloc
 		stats.writePagesPerWorker = vs.writePagesPerWorker
-		stats.tombstoneAge = int((vs.tombstoneAge >> _TSB_UTIL_BITS) * 1000 / uint64(time.Second))
+		stats.tombstoneAge = int((vs.tombstoneDiscardState.age >> _TSB_UTIL_BITS) * 1000 / uint64(time.Second))
 		stats.valuesFileSize = vs.valuesFileSize
 		stats.valuesFileReaders = vs.valuesFileReaders
 		stats.checksumInterval = vs.checksumInterval
@@ -124,7 +124,7 @@ func (stats *valueStoreStats) String() string {
 			[]string{"path", stats.path},
 			[]string{"pathtoc", stats.pathtoc},
 			[]string{"workers", fmt.Sprintf("%d", stats.workers)},
-			[]string{"discardInterval", fmt.Sprintf("%d", stats.discardInterval)},
+			[]string{"tombstoneDiscardInterval", fmt.Sprintf("%d", stats.tombstoneDiscardInterval)},
 			[]string{"outPullReplicationWorkers", fmt.Sprintf("%d", stats.outPullReplicationWorkers)},
 			[]string{"outPullReplicationInterval", fmt.Sprintf("%d", stats.outPullReplicationInterval)},
 			[]string{"outPushReplicationWorkers", fmt.Sprintf("%d", stats.outPushReplicationWorkers)},

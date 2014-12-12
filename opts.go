@@ -24,7 +24,7 @@ type config struct {
 	pathtoc                    string
 	vlm                        valuelocmap.ValueLocMap
 	workers                    int
-	discardInterval            int
+	tombstoneDiscardInterval   int
 	outPullReplicationWorkers  int
 	outPullReplicationInterval int
 	outPushReplicationWorkers  int
@@ -51,10 +51,10 @@ func resolveConfig(opts ...func(*config)) *config {
 			cfg.workers = val
 		}
 	}
-	cfg.discardInterval = 60
-	if env := os.Getenv("VALUESTORE_DISCARDINTERVAL"); env != "" {
+	cfg.tombstoneDiscardInterval = 60
+	if env := os.Getenv("VALUESTORE_TOMBSTONEDISCARDINTERVAL"); env != "" {
 		if val, err := strconv.Atoi(env); err == nil {
-			cfg.discardInterval = val
+			cfg.tombstoneDiscardInterval = val
 		}
 	}
 	cfg.outPullReplicationWorkers = cfg.workers
@@ -156,8 +156,8 @@ func resolveConfig(opts ...func(*config)) *config {
 	if cfg.workers < 1 {
 		cfg.workers = 1
 	}
-	if cfg.discardInterval < 1 {
-		cfg.discardInterval = 1
+	if cfg.tombstoneDiscardInterval < 1 {
+		cfg.tombstoneDiscardInterval = 1
 	}
 	if cfg.outPullReplicationWorkers < 1 {
 		cfg.outPullReplicationWorkers = 1
@@ -308,19 +308,19 @@ func OptWorkers(count int) func(*config) {
 	}
 }
 
-// OptDiscardInterval indicates the minimum number of seconds betweeen the
-// starts of discard passes (discarding expired tombstones [deletion markers]).
-// If set to 60 seconds and the passes take 10 seconds to run, they will wait
-// 50 seconds (with a small amount of randomization) between the stop of one
-// run and the start of the next. This is really just meant to keep nearly
-// empty structures from using a lot of resources doing nearly nothing.
+// OptTombstoneDiscardInterval indicates the minimum number of seconds betweeen
+// the starts of discard passes (discarding expired tombstones [deletion
+// markers]). If set to 60 seconds and the passes take 10 seconds to run, they
+// will wait 50 seconds (with a small amount of randomization) between the stop
+// of one run and the start of the next. This is really just meant to keep
+// nearly empty structures from using a lot of resources doing nearly nothing.
 // Normally, you'd want your discard passes to be running constantly so that
 // they are as fast as possible and the load constant. The default of 60
-// seconds is almost always fine. Defaults to env VALUESTORE_DISCARDINTERVAL or
-// 60.
-func OptDiscardInterval(seconds int) func(*config) {
+// seconds is almost always fine. Defaults to env
+// VALUESTORE_TOMBSTONEDISCARDINTERVAL or 60.
+func OptTombstoneDiscardInterval(seconds int) func(*config) {
 	return func(cfg *config) {
-		cfg.discardInterval = seconds
+		cfg.tombstoneDiscardInterval = seconds
 	}
 }
 

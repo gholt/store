@@ -54,7 +54,7 @@ func (vs *DefaultValueStore) inPullReplication() {
 		prm := <-vs.inPullReplicationChan
 		k = k[:0]
 		cutoff := prm.cutoff()
-		tombstoneCutoff := (uint64(brimtime.TimeToUnixMicro(time.Now())) << _TSB_UTIL_BITS) - vs.tombstoneAge
+		tombstoneCutoff := (uint64(brimtime.TimeToUnixMicro(time.Now())) << _TSB_UTIL_BITS) - vs.tombstoneDiscardState.age
 		ktbf := prm.ktBloomFilter()
 		l := int64(_GLH_OUT_BULK_SET_MSG_SIZE)
 		vs.vlm.ScanCallback(prm.rangeStart(), prm.rangeStop(), func(keyA uint64, keyB uint64, timestampbits uint64, length uint32) {
@@ -184,7 +184,7 @@ func (vs *DefaultValueStore) outPullReplicationPass() {
 		}
 		timestampbitsnow := uint64(brimtime.TimeToUnixMicro(time.Now())) << _TSB_UTIL_BITS
 		cutoff := timestampbitsnow - vs.replicationIgnoreRecent
-		tombstoneCutoff := timestampbitsnow - vs.tombstoneAge
+		tombstoneCutoff := timestampbitsnow - vs.tombstoneDiscardState.age
 		substart := start
 		substop := start + (pullSize - 1)
 		for atomic.LoadUint32(&vs.outPullReplicationAbort) == 0 {
