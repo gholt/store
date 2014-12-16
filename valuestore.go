@@ -38,15 +38,14 @@
 // time. OptTombstoneAge controls how long they should be kept and should be
 // set to an amount greater than several replication passes.
 //
-// * OutPullReplication: This will continually send out pull replication
-// requests for all the partitions the ValueStore is responsible for, as
-// determined by the OptMsgRing. The other responsible parties will respond to
-// these requests with data they have that was missing from the pull
-// replication request. Bloom filters are used to reduce bandwidth which has
-// the downside that a very small percentage of items may be missed each pass.
-// A moving salt is used with each bloom filter so that after a few passes
-// there is an exceptionally high probability that all items will be accounted
-// for.
+// * PullReplication: This will continually send out pull replication requests
+// for all the partitions the ValueStore is responsible for, as determined by
+// the OptMsgRing. The other responsible parties will respond to these requests
+// with data they have that was missing from the pull replication request.
+// Bloom filters are used to reduce bandwidth which has the downside that a
+// very small percentage of items may be missed each pass. A moving salt is
+// used with each bloom filter so that after a few passes there is an
+// exceptionally high probability that all items will be accounted for.
 //
 // * OutPushReplication: This will continually send out any data for any
 // partitions the ValueStore is *not* responsible for, as determined by the
@@ -160,16 +159,8 @@ type DefaultValueStore struct {
 	checksumInterval             uint32
 	ring                         ring.MsgRing
 	tombstoneDiscardState        tombstoneDiscardState
+	pullReplicationState         pullReplicationState
 	replicationIgnoreRecent      uint64
-	inPullReplicationChan        chan *pullReplicationMsg
-	freeInPullReplicationChan    chan *pullReplicationMsg
-	outPullReplicationWorkers    int
-	outPullReplicationInterval   int
-	outPullReplicationNotifyChan chan *backgroundNotification
-	outPullReplicationIteration  uint16
-	outPullReplicationAbort      uint32
-	outPullReplicationChan       chan *pullReplicationMsg
-	outPullReplicationKTBFs      []*ktBloomFilter
 	outPushReplicationWorkers    int
 	outPushReplicationInterval   int
 	outPushReplicationNotifyChan chan *backgroundNotification
@@ -238,31 +229,28 @@ func New(opts ...func(*config)) *DefaultValueStore {
 		vlm = valuelocmap.New()
 	}
 	vs := &DefaultValueStore{
-		logCritical:                 cfg.logCritical,
-		logError:                    cfg.logError,
-		logWarning:                  cfg.logWarning,
-		logInfo:                     cfg.logInfo,
-		logDebug:                    cfg.logDebug,
-		rand:                        cfg.rand,
-		valueLocBlocks:              make([]valueLocBlock, math.MaxUint16),
-		path:                        cfg.path,
-		pathtoc:                     cfg.pathtoc,
-		vlm:                         vlm,
-		workers:                     cfg.workers,
-		replicationIgnoreRecent:     (uint64(cfg.replicationIgnoreRecent) * uint64(time.Second) / 1000) << _TSB_UTIL_BITS,
-		outPullReplicationWorkers:   cfg.outPullReplicationWorkers,
-		outPullReplicationIteration: uint16(cfg.rand.Uint32()),
-		outPullReplicationInterval:  cfg.outPullReplicationInterval,
-		outPushReplicationWorkers:   cfg.outPushReplicationWorkers,
-		outPushReplicationInterval:  cfg.outPushReplicationInterval,
-		maxValueSize:                uint32(cfg.maxValueSize),
-		pageSize:                    uint32(cfg.pageSize),
-		minValueAlloc:               cfg.minValueAlloc,
-		writePagesPerWorker:         cfg.writePagesPerWorker,
-		valuesFileSize:              uint32(cfg.valuesFileSize),
-		valuesFileReaders:           cfg.valuesFileReaders,
-		checksumInterval:            uint32(cfg.checksumInterval),
-		ring:                        cfg.ring,
+		logCritical:                cfg.logCritical,
+		logError:                   cfg.logError,
+		logWarning:                 cfg.logWarning,
+		logInfo:                    cfg.logInfo,
+		logDebug:                   cfg.logDebug,
+		rand:                       cfg.rand,
+		valueLocBlocks:             make([]valueLocBlock, math.MaxUint16),
+		path:                       cfg.path,
+		pathtoc:                    cfg.pathtoc,
+		vlm:                        vlm,
+		workers:                    cfg.workers,
+		replicationIgnoreRecent:    (uint64(cfg.replicationIgnoreRecent) * uint64(time.Second) / 1000) << _TSB_UTIL_BITS,
+		outPushReplicationWorkers:  cfg.outPushReplicationWorkers,
+		outPushReplicationInterval: cfg.outPushReplicationInterval,
+		maxValueSize:               uint32(cfg.maxValueSize),
+		pageSize:                   uint32(cfg.pageSize),
+		minValueAlloc:              cfg.minValueAlloc,
+		writePagesPerWorker:        cfg.writePagesPerWorker,
+		valuesFileSize:             uint32(cfg.valuesFileSize),
+		valuesFileReaders:          cfg.valuesFileReaders,
+		checksumInterval:           uint32(cfg.checksumInterval),
+		ring:                       cfg.ring,
 	}
 	vs.freeableVMChans = make([]chan *valuesMem, vs.workers)
 	for i := 0; i < cap(vs.freeableVMChans); i++ {
@@ -306,27 +294,6 @@ func New(opts ...func(*config)) *DefaultValueStore {
 	}
 	vs.recovery()
 	if vs.ring != nil {
-		vs.ring.SetMsgHandler(ring.MSG_PULL_REPLICATION, vs.newInPullReplicationMsg)
-		vs.inPullReplicationChan = make(chan *pullReplicationMsg, _GLH_IN_PULL_REPLICATION_MSGS)
-		vs.freeInPullReplicationChan = make(chan *pullReplicationMsg, _GLH_IN_PULL_REPLICATION_MSGS)
-		for i := 0; i < cap(vs.freeInPullReplicationChan); i++ {
-			vs.freeInPullReplicationChan <- &pullReplicationMsg{
-				vs:     vs,
-				header: make([]byte, ktBloomFilterHeaderBytes+pullReplicationMsgHeaderBytes),
-			}
-		}
-		for i := 0; i < _GLH_IN_PULL_REPLICATION_HANDLERS; i++ {
-			go vs.inPullReplication()
-		}
-		vs.outPullReplicationChan = make(chan *pullReplicationMsg, _GLH_OUT_PULL_REPLICATION_MSGS)
-		vs.outPullReplicationKTBFs = []*ktBloomFilter{newKTBloomFilter(_GLH_BLOOM_FILTER_N, _GLH_BLOOM_FILTER_P, 0)}
-		for i := 0; i < cap(vs.outPullReplicationChan); i++ {
-			vs.outPullReplicationChan <- &pullReplicationMsg{
-				vs:     vs,
-				header: make([]byte, ktBloomFilterHeaderBytes+pullReplicationMsgHeaderBytes),
-				body:   make([]byte, len(vs.outPullReplicationKTBFs[0].bits)),
-			}
-		}
 		vs.outPushReplicationChan = make(chan *pullReplicationMsg, _GLH_OUT_PULL_REPLICATION_MSGS)
 		vs.ring.SetMsgHandler(ring.MSG_BULK_SET, vs.newInBulkSetMsg)
 		vs.inBulkSetChan = make(chan *bulkSetMsg, _GLH_IN_BULK_SET_MSGS)
@@ -366,8 +333,7 @@ func New(opts ...func(*config)) *DefaultValueStore {
 		}
 	}
 	vs.tombstoneDiscardInit(cfg)
-	vs.outPullReplicationNotifyChan = make(chan *backgroundNotification, 1)
-	go vs.outPullReplicationLauncher()
+	vs.pullReplicationInit(cfg)
 	vs.outPushReplicationNotifyChan = make(chan *backgroundNotification, 1)
 	go vs.outPushReplicationLauncher()
 	return vs
