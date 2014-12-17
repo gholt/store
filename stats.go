@@ -81,10 +81,10 @@ func (vs *DefaultValueStore) GatherStats(debug bool) (uint64, uint64, fmt.String
 		stats.pathtoc = vs.pathtoc
 		stats.workers = vs.workers
 		stats.tombstoneDiscardInterval = vs.tombstoneDiscardState.interval
-		stats.outPullReplicationWorkers = vs.outPullReplicationWorkers
-		stats.outPullReplicationInterval = vs.outPullReplicationInterval
-		stats.outPushReplicationWorkers = vs.outPushReplicationWorkers
-		stats.outPushReplicationInterval = vs.outPushReplicationInterval
+		stats.outPullReplicationWorkers = vs.pullReplicationState.outWorkers
+		stats.outPullReplicationInterval = vs.pullReplicationState.outInterval
+		stats.outPushReplicationWorkers = vs.pushReplicationState.outWorkers
+		stats.outPushReplicationInterval = vs.pushReplicationState.outInterval
 		stats.maxValueSize = vs.maxValueSize
 		stats.pageSize = vs.pageSize
 		stats.minValueAlloc = vs.minValueAlloc

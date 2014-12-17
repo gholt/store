@@ -14,11 +14,23 @@ import (
 
 const _GLH_IN_PULL_REPLICATION_MSGS = 128
 const _GLH_IN_PULL_REPLICATION_HANDLERS = 40
+const _GLH_IN_PULL_REPLICATION_MSG_TIMEOUT = 300
 const _GLH_OUT_PULL_REPLICATION_MSGS = 128
 const _GLH_BLOOM_FILTER_N = 1000000
 const _GLH_BLOOM_FILTER_P = 0.001
 const pullReplicationMsgHeaderBytes = 44
-const _GLH_IN_PULL_REPLICATION_MSG_TIMEOUT = 300
+
+type pullReplicationState struct {
+	inMsgChan     chan *pullReplicationMsg
+	inFreeMsgChan chan *pullReplicationMsg
+	outWorkers    int
+	outInterval   int
+	outNotifyChan chan *backgroundNotification
+	outIteration  uint16
+	outAbort      uint32
+	outMsgChan    chan *pullReplicationMsg
+	outKTBFs      []*ktBloomFilter
+}
 
 type pullReplicationMsg struct {
 	vs     *DefaultValueStore
@@ -26,11 +38,43 @@ type pullReplicationMsg struct {
 	body   []byte
 }
 
+func (vs *DefaultValueStore) pullReplicationInit(cfg *config) {
+	vs.pullReplicationState.outInterval = cfg.outPullReplicationInterval
+	vs.pullReplicationState.outNotifyChan = make(chan *backgroundNotification, 1)
+	vs.pullReplicationState.outWorkers = cfg.outPullReplicationWorkers
+	vs.pullReplicationState.outIteration = uint16(cfg.rand.Uint32())
+	if vs.ring != nil {
+		vs.ring.SetMsgHandler(ring.MSG_PULL_REPLICATION, vs.newInPullReplicationMsg)
+		vs.pullReplicationState.inMsgChan = make(chan *pullReplicationMsg, _GLH_IN_PULL_REPLICATION_MSGS)
+		vs.pullReplicationState.inFreeMsgChan = make(chan *pullReplicationMsg, _GLH_IN_PULL_REPLICATION_MSGS)
+		for i := 0; i < cap(vs.pullReplicationState.inFreeMsgChan); i++ {
+			vs.pullReplicationState.inFreeMsgChan <- &pullReplicationMsg{
+				vs:     vs,
+				header: make([]byte, ktBloomFilterHeaderBytes+pullReplicationMsgHeaderBytes),
+			}
+		}
+		for i := 0; i < _GLH_IN_PULL_REPLICATION_HANDLERS; i++ {
+			go vs.inPullReplication()
+		}
+		vs.pullReplicationState.outMsgChan = make(chan *pullReplicationMsg, _GLH_OUT_PULL_REPLICATION_MSGS)
+		vs.pullReplicationState.outKTBFs = []*ktBloomFilter{newKTBloomFilter(_GLH_BLOOM_FILTER_N, _GLH_BLOOM_FILTER_P, 0)}
+		for i := 0; i < cap(vs.pullReplicationState.outMsgChan); i++ {
+			vs.pullReplicationState.outMsgChan <- &pullReplicationMsg{
+				vs:     vs,
+				header: make([]byte, ktBloomFilterHeaderBytes+pullReplicationMsgHeaderBytes),
+				body:   make([]byte, len(vs.pullReplicationState.outKTBFs[0].bits)),
+			}
+		}
+	}
+	vs.pullReplicationState.outNotifyChan = make(chan *backgroundNotification, 1)
+	go vs.outPullReplicationLauncher()
+}
+
 // DisableOutPullReplication will stop any outgoing pull replication requests
 // until EnableOutPullReplication is called.
 func (vs *DefaultValueStore) DisableOutPullReplication() {
 	c := make(chan struct{}, 1)
-	vs.outPullReplicationNotifyChan <- &backgroundNotification{
+	vs.pullReplicationState.outNotifyChan <- &backgroundNotification{
 		disable:  true,
 		doneChan: c,
 	}
@@ -40,7 +84,7 @@ func (vs *DefaultValueStore) DisableOutPullReplication() {
 // EnableOutPullReplication will resume outgoing pull replication requests.
 func (vs *DefaultValueStore) EnableOutPullReplication() {
 	c := make(chan struct{}, 1)
-	vs.outPullReplicationNotifyChan <- &backgroundNotification{
+	vs.pullReplicationState.outNotifyChan <- &backgroundNotification{
 		enable:   true,
 		doneChan: c,
 	}
@@ -51,7 +95,7 @@ func (vs *DefaultValueStore) inPullReplication() {
 	k := make([]uint64, 2*1024*1024)
 	v := make([]byte, vs.maxValueSize)
 	for {
-		prm := <-vs.inPullReplicationChan
+		prm := <-vs.pullReplicationState.inMsgChan
 		k = k[:0]
 		cutoff := prm.cutoff()
 		tombstoneCutoff := (uint64(brimtime.TimeToUnixMicro(time.Now())) << _TSB_UTIL_BITS) - vs.tombstoneDiscardState.age
@@ -70,7 +114,7 @@ func (vs *DefaultValueStore) inPullReplication() {
 			}
 		})
 		nodeID := prm.nodeID()
-		vs.freeInPullReplicationChan <- prm
+		vs.pullReplicationState.inFreeMsgChan <- prm
 		if len(k) > 0 {
 			bsm := vs.newOutBulkSetMsg()
 			var t uint64
@@ -107,27 +151,27 @@ func (vs *DefaultValueStore) inPullReplication() {
 // have been received when this function returns. These requests are stateless,
 // and so synchronization at that level is not possible.
 func (vs *DefaultValueStore) OutPullReplicationPass() {
-	atomic.StoreUint32(&vs.outPullReplicationAbort, 1)
+	atomic.StoreUint32(&vs.pullReplicationState.outAbort, 1)
 	c := make(chan struct{}, 1)
-	vs.outPullReplicationNotifyChan <- &backgroundNotification{doneChan: c}
+	vs.pullReplicationState.outNotifyChan <- &backgroundNotification{doneChan: c}
 	<-c
 }
 
 func (vs *DefaultValueStore) outPullReplicationLauncher() {
 	var enabled bool
-	interval := float64(vs.outPullReplicationInterval) * float64(time.Second)
+	interval := float64(vs.pullReplicationState.outInterval) * float64(time.Second)
 	nextRun := time.Now().Add(time.Duration(interval + interval*vs.rand.NormFloat64()*0.1))
 	for {
 		var notification *backgroundNotification
 		sleep := nextRun.Sub(time.Now())
 		if sleep > 0 {
 			select {
-			case notification = <-vs.outPullReplicationNotifyChan:
+			case notification = <-vs.pullReplicationState.outNotifyChan:
 			case <-time.After(sleep):
 			}
 		} else {
 			select {
-			case notification = <-vs.outPullReplicationNotifyChan:
+			case notification = <-vs.pullReplicationState.outNotifyChan:
 			default:
 			}
 		}
@@ -139,16 +183,16 @@ func (vs *DefaultValueStore) outPullReplicationLauncher() {
 				continue
 			}
 			if notification.disable {
-				atomic.StoreUint32(&vs.outPullReplicationAbort, 1)
+				atomic.StoreUint32(&vs.pullReplicationState.outAbort, 1)
 				enabled = false
 				notification.doneChan <- struct{}{}
 				continue
 			}
-			atomic.StoreUint32(&vs.outPullReplicationAbort, 0)
+			atomic.StoreUint32(&vs.pullReplicationState.outAbort, 0)
 			vs.outPullReplicationPass()
 			notification.doneChan <- struct{}{}
 		} else if enabled {
-			atomic.StoreUint32(&vs.outPullReplicationAbort, 0)
+			atomic.StoreUint32(&vs.pullReplicationState.outAbort, 0)
 			vs.outPullReplicationPass()
 		}
 	}
@@ -164,16 +208,16 @@ func (vs *DefaultValueStore) outPullReplicationPass() {
 			vs.logDebug.Printf("out pull replication pass took %s", time.Now().Sub(begin))
 		}()
 	}
-	if vs.outPullReplicationIteration == math.MaxUint16 {
-		vs.outPullReplicationIteration = 0
+	if vs.pullReplicationState.outIteration == math.MaxUint16 {
+		vs.pullReplicationState.outIteration = 0
 	} else {
-		vs.outPullReplicationIteration++
+		vs.pullReplicationState.outIteration++
 	}
 	ringID := vs.ring.ID()
 	partitionPower := vs.ring.PartitionPower()
 	partitions := uint32(1) << partitionPower
-	for len(vs.outPullReplicationKTBFs) < vs.outPullReplicationWorkers {
-		vs.outPullReplicationKTBFs = append(vs.outPullReplicationKTBFs, newKTBloomFilter(_GLH_BLOOM_FILTER_N, _GLH_BLOOM_FILTER_P, 0))
+	for len(vs.pullReplicationState.outKTBFs) < vs.pullReplicationState.outWorkers {
+		vs.pullReplicationState.outKTBFs = append(vs.pullReplicationState.outKTBFs, newKTBloomFilter(_GLH_BLOOM_FILTER_N, _GLH_BLOOM_FILTER_P, 0))
 	}
 	f := func(p uint32, ktbf *ktBloomFilter) {
 		start := uint64(p) << uint64(64-partitionPower)
@@ -187,14 +231,14 @@ func (vs *DefaultValueStore) outPullReplicationPass() {
 		tombstoneCutoff := timestampbitsnow - vs.tombstoneDiscardState.age
 		substart := start
 		substop := start + (pullSize - 1)
-		for atomic.LoadUint32(&vs.outPullReplicationAbort) == 0 {
-			ktbf.reset(vs.outPullReplicationIteration)
+		for atomic.LoadUint32(&vs.pullReplicationState.outAbort) == 0 {
+			ktbf.reset(vs.pullReplicationState.outIteration)
 			vs.vlm.ScanCallback(substart, substop, func(keyA uint64, keyB uint64, timestampbits uint64, length uint32) {
 				if timestampbits&_TSB_LOCAL_REMOVAL == 0 && timestampbits < cutoff && (timestampbits&_TSB_DELETION == 0 || timestampbits >= tombstoneCutoff) {
 					ktbf.add(keyA, keyB, timestampbits)
 				}
 			})
-			if atomic.LoadUint32(&vs.outPullReplicationAbort) != 0 {
+			if atomic.LoadUint32(&vs.pullReplicationState.outAbort) != 0 {
 				break
 			}
 			prm := vs.newOutPullReplicationMsg(ringID, p, cutoff, substart, substop, ktbf)
@@ -210,11 +254,11 @@ func (vs *DefaultValueStore) outPullReplicationPass() {
 	}
 	sp := uint32(vs.rand.Intn(int(partitions)))
 	wg := &sync.WaitGroup{}
-	wg.Add(vs.outPullReplicationWorkers)
-	for g := 0; g < vs.outPullReplicationWorkers; g++ {
+	wg.Add(vs.pullReplicationState.outWorkers)
+	for g := 0; g < vs.pullReplicationState.outWorkers; g++ {
 		go func(g uint32) {
-			ktbf := vs.outPullReplicationKTBFs[g]
-			for p := uint32(sp + g); p < partitions && atomic.LoadUint32(&vs.outPullReplicationAbort) == 0; p += uint32(vs.outPullReplicationWorkers) {
+			ktbf := vs.pullReplicationState.outKTBFs[g]
+			for p := uint32(sp + g); p < partitions && atomic.LoadUint32(&vs.pullReplicationState.outAbort) == 0; p += uint32(vs.pullReplicationState.outWorkers) {
 				if vs.ring.ID() != ringID {
 					break
 				}
@@ -222,7 +266,7 @@ func (vs *DefaultValueStore) outPullReplicationPass() {
 					f(p, ktbf)
 				}
 			}
-			for p := uint32(g); p < sp && atomic.LoadUint32(&vs.outPullReplicationAbort) == 0; p += uint32(vs.outPullReplicationWorkers) {
+			for p := uint32(g); p < sp && atomic.LoadUint32(&vs.pullReplicationState.outAbort) == 0; p += uint32(vs.pullReplicationState.outWorkers) {
 				if vs.ring.ID() != ringID {
 					break
 				}
@@ -241,7 +285,7 @@ var toss []byte = make([]byte, 65536)
 func (vs *DefaultValueStore) newInPullReplicationMsg(r io.Reader, l uint64) (uint64, error) {
 	var prm *pullReplicationMsg
 	select {
-	case prm = <-vs.freeInPullReplicationChan:
+	case prm = <-vs.pullReplicationState.inFreeMsgChan:
 	case <-time.After(_GLH_IN_PULL_REPLICATION_MSG_TIMEOUT * time.Second):
 		var n uint64
 		var sn int
@@ -278,12 +322,12 @@ func (vs *DefaultValueStore) newInPullReplicationMsg(r io.Reader, l uint64) (uin
 		sn, err = r.Read(prm.body[n:])
 		n += sn
 	}
-	vs.inPullReplicationChan <- prm
+	vs.pullReplicationState.inMsgChan <- prm
 	return l, nil
 }
 
 func (vs *DefaultValueStore) newOutPullReplicationMsg(ringID uint64, partition uint32, cutoff uint64, rangeStart uint64, rangeStop uint64, ktbf *ktBloomFilter) *pullReplicationMsg {
-	prm := <-vs.outPullReplicationChan
+	prm := <-vs.pullReplicationState.outMsgChan
 	binary.BigEndian.PutUint64(prm.header, vs.ring.NodeID())
 	binary.BigEndian.PutUint64(prm.header[8:], ringID)
 	binary.BigEndian.PutUint32(prm.header[16:], partition)
@@ -345,5 +389,5 @@ func (prm *pullReplicationMsg) WriteContent(w io.Writer) (uint64, error) {
 }
 
 func (prm *pullReplicationMsg) Done() {
-	prm.vs.outPullReplicationChan <- prm
+	prm.vs.pullReplicationState.outMsgChan <- prm
 }
