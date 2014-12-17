@@ -165,13 +165,9 @@ type DefaultValueStore struct {
 	replicationIgnoreRecent uint64
 	pullReplicationState    pullReplicationState
 	pushReplicationState    pushReplicationState
-	inBulkSetChan           chan *bulkSetMsg
-	freeInBulkSetChan       chan *bulkSetMsg
-	outBulkSetChan          chan *bulkSetMsg
-	inBulkSetAckChan        chan *bulkSetAckMsg
-	freeInBulkSetAckChan    chan *bulkSetAckMsg
-	outBulkSetAckChan       chan *bulkSetAckMsg
 	compactionState         compactionState
+	bulkSetState            bulkSetState
+	bulkSetAckState         bulkSetAckState
 }
 
 type valueWriteReq struct {
@@ -289,48 +285,12 @@ func New(opts ...func(*config)) *DefaultValueStore {
 		go vs.memWriter(vs.pendingVWRChans[i])
 	}
 	vs.recovery()
-	if vs.ring != nil {
-		vs.ring.SetMsgHandler(ring.MSG_BULK_SET, vs.newInBulkSetMsg)
-		vs.inBulkSetChan = make(chan *bulkSetMsg, _GLH_IN_BULK_SET_MSGS)
-		vs.freeInBulkSetChan = make(chan *bulkSetMsg, _GLH_IN_BULK_SET_MSGS)
-		for i := 0; i < cap(vs.freeInBulkSetChan); i++ {
-			vs.freeInBulkSetChan <- &bulkSetMsg{
-				vs:     vs,
-				header: make([]byte, 8),
-			}
-		}
-		for i := 0; i < _GLH_IN_BULK_SET_HANDLERS; i++ {
-			go vs.inBulkSet()
-		}
-		vs.outBulkSetChan = make(chan *bulkSetMsg, _GLH_OUT_BULK_SET_MSGS)
-		for i := 0; i < cap(vs.outBulkSetChan); i++ {
-			vs.outBulkSetChan <- &bulkSetMsg{
-				vs:     vs,
-				header: make([]byte, 8),
-				body:   make([]byte, _GLH_OUT_BULK_SET_MSG_SIZE),
-			}
-		}
-		vs.ring.SetMsgHandler(ring.MSG_BULK_SET_ACK, vs.newInBulkSetAckMsg)
-		vs.inBulkSetAckChan = make(chan *bulkSetAckMsg, _GLH_IN_BULK_SET_ACK_MSGS)
-		vs.freeInBulkSetAckChan = make(chan *bulkSetAckMsg, _GLH_IN_BULK_SET_ACK_MSGS)
-		for i := 0; i < cap(vs.freeInBulkSetAckChan); i++ {
-			vs.freeInBulkSetAckChan <- &bulkSetAckMsg{vs: vs}
-		}
-		for i := 0; i < _GLH_IN_BULK_SET_ACK_HANDLERS; i++ {
-			go vs.inBulkSetAck()
-		}
-		vs.outBulkSetAckChan = make(chan *bulkSetAckMsg, _GLH_OUT_BULK_SET_ACK_MSGS)
-		for i := 0; i < cap(vs.outBulkSetAckChan); i++ {
-			vs.outBulkSetAckChan <- &bulkSetAckMsg{
-				vs:   vs,
-				body: make([]byte, _GLH_OUT_BULK_SET_ACK_MSG_SIZE),
-			}
-		}
-	}
 	vs.tombstoneDiscardInit(cfg)
 	vs.compactionInit(cfg)
 	vs.pullReplicationInit(cfg)
 	vs.pushReplicationInit(cfg)
+	vs.bulkSetInit(cfg)
+	vs.bulkSetAckInit(cfg)
 	return vs
 }
 
