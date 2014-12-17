@@ -9,11 +9,31 @@ import (
 	"github.com/gholt/brimtime"
 )
 
+type pushReplicationState struct {
+	outWorkers    int
+	outInterval   int
+	outNotifyChan chan *backgroundNotification
+	outAbort      uint32
+	outMsgChan    chan *pullReplicationMsg
+	outLists      [][]uint64
+	outValBufs    [][]byte
+}
+
+func (vs *DefaultValueStore) pushReplicationInit(cfg *config) {
+	vs.pushReplicationState.outWorkers = cfg.outPushReplicationWorkers
+	vs.pushReplicationState.outInterval = cfg.outPushReplicationInterval
+	if vs.ring != nil {
+		vs.pushReplicationState.outMsgChan = make(chan *pullReplicationMsg, _GLH_OUT_PULL_REPLICATION_MSGS)
+	}
+	vs.pushReplicationState.outNotifyChan = make(chan *backgroundNotification, 1)
+	go vs.outPushReplicationLauncher()
+}
+
 // DisableOutPushReplication will stop any outgoing push replication requests
 // until EnableOutPushReplication is called.
 func (vs *DefaultValueStore) DisableOutPushReplication() {
 	c := make(chan struct{}, 1)
-	vs.outPushReplicationNotifyChan <- &backgroundNotification{
+	vs.pushReplicationState.outNotifyChan <- &backgroundNotification{
 		disable:  true,
 		doneChan: c,
 	}
@@ -23,7 +43,7 @@ func (vs *DefaultValueStore) DisableOutPushReplication() {
 // EnableOutPushReplication will resume outgoing push replication requests.
 func (vs *DefaultValueStore) EnableOutPushReplication() {
 	c := make(chan struct{}, 1)
-	vs.outPushReplicationNotifyChan <- &backgroundNotification{
+	vs.pushReplicationState.outNotifyChan <- &backgroundNotification{
 		enable:   true,
 		doneChan: c,
 	}
@@ -38,27 +58,27 @@ func (vs *DefaultValueStore) EnableOutPushReplication() {
 // have been received when this function returns. These requests are stateless,
 // and so synchronization at that level is not possible.
 func (vs *DefaultValueStore) OutPushReplicationPass() {
-	atomic.StoreUint32(&vs.outPushReplicationAbort, 1)
+	atomic.StoreUint32(&vs.pushReplicationState.outAbort, 1)
 	c := make(chan struct{}, 1)
-	vs.outPushReplicationNotifyChan <- &backgroundNotification{doneChan: c}
+	vs.pushReplicationState.outNotifyChan <- &backgroundNotification{doneChan: c}
 	<-c
 }
 
 func (vs *DefaultValueStore) outPushReplicationLauncher() {
 	var enabled bool
-	interval := float64(vs.outPushReplicationInterval) * float64(time.Second)
+	interval := float64(vs.pushReplicationState.outInterval) * float64(time.Second)
 	nextRun := time.Now().Add(time.Duration(interval + interval*vs.rand.NormFloat64()*0.1))
 	for {
 		var notification *backgroundNotification
 		sleep := nextRun.Sub(time.Now())
 		if sleep > 0 {
 			select {
-			case notification = <-vs.outPushReplicationNotifyChan:
+			case notification = <-vs.pushReplicationState.outNotifyChan:
 			case <-time.After(sleep):
 			}
 		} else {
 			select {
-			case notification = <-vs.outPushReplicationNotifyChan:
+			case notification = <-vs.pushReplicationState.outNotifyChan:
 			default:
 			}
 		}
@@ -70,16 +90,16 @@ func (vs *DefaultValueStore) outPushReplicationLauncher() {
 				continue
 			}
 			if notification.disable {
-				atomic.StoreUint32(&vs.outPushReplicationAbort, 1)
+				atomic.StoreUint32(&vs.pushReplicationState.outAbort, 1)
 				enabled = false
 				notification.doneChan <- struct{}{}
 				continue
 			}
-			atomic.StoreUint32(&vs.outPushReplicationAbort, 0)
+			atomic.StoreUint32(&vs.pushReplicationState.outAbort, 0)
 			vs.outPushReplicationPass()
 			notification.doneChan <- struct{}{}
 		} else if enabled {
-			atomic.StoreUint32(&vs.outPushReplicationAbort, 0)
+			atomic.StoreUint32(&vs.pushReplicationState.outAbort, 0)
 			vs.outPushReplicationPass()
 		}
 	}
@@ -98,11 +118,11 @@ func (vs *DefaultValueStore) outPushReplicationPass() {
 	ringID := vs.ring.ID()
 	partitionPower := vs.ring.PartitionPower()
 	partitions := uint32(1) << partitionPower
-	for len(vs.outPushReplicationLists) < vs.outPushReplicationWorkers {
-		vs.outPushReplicationLists = append(vs.outPushReplicationLists, make([]uint64, 2*1024*1024))
+	for len(vs.pushReplicationState.outLists) < vs.pushReplicationState.outWorkers {
+		vs.pushReplicationState.outLists = append(vs.pushReplicationState.outLists, make([]uint64, 2*1024*1024))
 	}
-	for len(vs.outPushReplicationValBufs) < vs.outPushReplicationWorkers {
-		vs.outPushReplicationValBufs = append(vs.outPushReplicationValBufs, make([]byte, vs.maxValueSize))
+	for len(vs.pushReplicationState.outValBufs) < vs.pushReplicationState.outWorkers {
+		vs.pushReplicationState.outValBufs = append(vs.pushReplicationState.outValBufs, make([]byte, vs.maxValueSize))
 	}
 	f := func(p uint32, list []uint64, valbuf []byte) {
 		list = list[:0]
@@ -117,7 +137,7 @@ func (vs *DefaultValueStore) outPushReplicationPass() {
 		tombstoneCutoff := timestampbitsnow - vs.tombstoneDiscardState.age
 		substart := start
 		substop := start + (pullSize - 1)
-		for atomic.LoadUint32(&vs.outPushReplicationAbort) == 0 {
+		for atomic.LoadUint32(&vs.pushReplicationState.outAbort) == 0 {
 			l := int64(_GLH_OUT_BULK_SET_MSG_SIZE)
 			vs.vlm.ScanCallback(substart, substop, func(keyA uint64, keyB uint64, timestampbits uint64, length uint32) {
 				if l > 0 {
@@ -129,7 +149,7 @@ func (vs *DefaultValueStore) outPushReplicationPass() {
 					}
 				}
 			})
-			if atomic.LoadUint32(&vs.outPushReplicationAbort) != 0 {
+			if atomic.LoadUint32(&vs.pushReplicationState.outAbort) != 0 {
 				break
 			}
 			if len(list) > 0 {
@@ -152,7 +172,7 @@ func (vs *DefaultValueStore) outPushReplicationPass() {
 						}
 					}
 				}
-				if atomic.LoadUint32(&vs.outPushReplicationAbort) != 0 {
+				if atomic.LoadUint32(&vs.pushReplicationState.outAbort) != 0 {
 					bsm.Done()
 					break
 				}
@@ -169,13 +189,13 @@ func (vs *DefaultValueStore) outPushReplicationPass() {
 	}
 	sp := uint32(vs.rand.Intn(int(partitions)))
 	wg := &sync.WaitGroup{}
-	wg.Add(vs.outPushReplicationWorkers)
-	for g := 0; g < vs.outPushReplicationWorkers; g++ {
+	wg.Add(vs.pushReplicationState.outWorkers)
+	for g := 0; g < vs.pushReplicationState.outWorkers; g++ {
 		go func(g uint32) {
-			list := vs.outPushReplicationLists[g]
-			valbuf := vs.outPushReplicationValBufs[g]
+			list := vs.pushReplicationState.outLists[g]
+			valbuf := vs.pushReplicationState.outValBufs[g]
 			spg := uint32(sp + g)
-			for p := spg; p < partitions && atomic.LoadUint32(&vs.outPushReplicationAbort) == 0; p += uint32(vs.outPushReplicationWorkers) {
+			for p := spg; p < partitions && atomic.LoadUint32(&vs.pushReplicationState.outAbort) == 0; p += uint32(vs.pushReplicationState.outWorkers) {
 				if vs.ring.ID() != ringID {
 					break
 				}
@@ -183,7 +203,7 @@ func (vs *DefaultValueStore) outPushReplicationPass() {
 					f(p, list, valbuf)
 				}
 			}
-			for p := uint32(g); p < spg && atomic.LoadUint32(&vs.outPushReplicationAbort) == 0; p += uint32(vs.outPushReplicationWorkers) {
+			for p := uint32(g); p < spg && atomic.LoadUint32(&vs.pushReplicationState.outAbort) == 0; p += uint32(vs.pushReplicationState.outWorkers) {
 				if vs.ring.ID() != ringID {
 					break
 				}
