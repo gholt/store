@@ -14,14 +14,41 @@ const _GLH_OUT_BULK_SET_ACK_MSGS = 128
 const _GLH_OUT_BULK_SET_ACK_MSG_SIZE = 16 * 1024 * 1024
 const _GLH_IN_BULK_SET_ACK_MSG_TIMEOUT = 300
 
+type bulkSetAckState struct {
+	inMsgChan      chan *bulkSetAckMsg
+	inFreeMsgChan  chan *bulkSetAckMsg
+	outFreeMsgChan chan *bulkSetAckMsg
+}
+
 type bulkSetAckMsg struct {
 	vs   *DefaultValueStore
 	body []byte
 }
 
+func (vs *DefaultValueStore) bulkSetAckInit(cfg *config) {
+	if vs.ring != nil {
+		vs.ring.SetMsgHandler(ring.MSG_BULK_SET_ACK, vs.newInBulkSetAckMsg)
+		vs.bulkSetAckState.inMsgChan = make(chan *bulkSetAckMsg, _GLH_IN_BULK_SET_ACK_MSGS)
+		vs.bulkSetAckState.inFreeMsgChan = make(chan *bulkSetAckMsg, _GLH_IN_BULK_SET_ACK_MSGS)
+		for i := 0; i < cap(vs.bulkSetAckState.inFreeMsgChan); i++ {
+			vs.bulkSetAckState.inFreeMsgChan <- &bulkSetAckMsg{vs: vs}
+		}
+		for i := 0; i < _GLH_IN_BULK_SET_ACK_HANDLERS; i++ {
+			go vs.inBulkSetAck()
+		}
+		vs.bulkSetAckState.outFreeMsgChan = make(chan *bulkSetAckMsg, _GLH_OUT_BULK_SET_ACK_MSGS)
+		for i := 0; i < cap(vs.bulkSetAckState.outFreeMsgChan); i++ {
+			vs.bulkSetAckState.outFreeMsgChan <- &bulkSetAckMsg{
+				vs:   vs,
+				body: make([]byte, _GLH_OUT_BULK_SET_ACK_MSG_SIZE),
+			}
+		}
+	}
+}
+
 func (vs *DefaultValueStore) inBulkSetAck() {
 	for {
-		bsam := <-vs.inBulkSetAckChan
+		bsam := <-vs.bulkSetAckState.inMsgChan
 		rid := vs.ring.ID()
 		sppower := 64 - vs.ring.PartitionPower()
 		b := bsam.body
@@ -36,14 +63,14 @@ func (vs *DefaultValueStore) inBulkSetAck() {
 				vs.write(keyA, binary.BigEndian.Uint64(b[o+8:]), binary.BigEndian.Uint64(b[o+16:])|_TSB_LOCAL_REMOVAL, nil)
 			}
 		}
-		vs.freeInBulkSetAckChan <- bsam
+		vs.bulkSetAckState.inFreeMsgChan <- bsam
 	}
 }
 
 func (vs *DefaultValueStore) newInBulkSetAckMsg(r io.Reader, l uint64) (uint64, error) {
 	var bsam *bulkSetAckMsg
 	select {
-	case bsam = <-vs.freeInBulkSetAckChan:
+	case bsam = <-vs.bulkSetAckState.inFreeMsgChan:
 	case <-time.After(_GLH_IN_BULK_SET_ACK_MSG_TIMEOUT * time.Second):
 		var n uint64
 		var sn int
@@ -72,12 +99,12 @@ func (vs *DefaultValueStore) newInBulkSetAckMsg(r io.Reader, l uint64) (uint64, 
 			return uint64(n), err
 		}
 	}
-	vs.inBulkSetAckChan <- bsam
+	vs.bulkSetAckState.inMsgChan <- bsam
 	return l, nil
 }
 
 func (vs *DefaultValueStore) newOutBulkSetAckMsg() *bulkSetAckMsg {
-	bsam := <-vs.outBulkSetAckChan
+	bsam := <-vs.bulkSetAckState.outFreeMsgChan
 	bsam.body = bsam.body[:0]
 	return bsam
 }
@@ -96,7 +123,7 @@ func (bsam *bulkSetAckMsg) WriteContent(w io.Writer) (uint64, error) {
 }
 
 func (bsam *bulkSetAckMsg) Done() {
-	bsam.vs.outBulkSetAckChan <- bsam
+	bsam.vs.bulkSetAckState.outFreeMsgChan <- bsam
 }
 
 func (bsam *bulkSetAckMsg) add(keyA uint64, keyB uint64, timestampbits uint64) bool {

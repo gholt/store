@@ -14,15 +14,46 @@ const _GLH_OUT_BULK_SET_MSGS = 128
 const _GLH_OUT_BULK_SET_MSG_SIZE = 16 * 1024 * 1024
 const _GLH_IN_BULK_SET_MSG_TIMEOUT = 300
 
+type bulkSetState struct {
+	inMsgChan     chan *bulkSetMsg
+	inFreeMsgChan chan *bulkSetMsg
+	outMsgChan    chan *bulkSetMsg
+}
+
 type bulkSetMsg struct {
 	vs     *DefaultValueStore
 	header []byte
 	body   []byte
 }
 
+func (vs *DefaultValueStore) bulkSetInit(cfg *config) {
+	if vs.ring != nil {
+		vs.ring.SetMsgHandler(ring.MSG_BULK_SET, vs.newInBulkSetMsg)
+		vs.bulkSetState.inMsgChan = make(chan *bulkSetMsg, _GLH_IN_BULK_SET_MSGS)
+		vs.bulkSetState.inFreeMsgChan = make(chan *bulkSetMsg, _GLH_IN_BULK_SET_MSGS)
+		for i := 0; i < cap(vs.bulkSetState.inFreeMsgChan); i++ {
+			vs.bulkSetState.inFreeMsgChan <- &bulkSetMsg{
+				vs:     vs,
+				header: make([]byte, 8),
+			}
+		}
+		for i := 0; i < _GLH_IN_BULK_SET_HANDLERS; i++ {
+			go vs.inBulkSet()
+		}
+		vs.bulkSetState.outMsgChan = make(chan *bulkSetMsg, _GLH_OUT_BULK_SET_MSGS)
+		for i := 0; i < cap(vs.bulkSetState.outMsgChan); i++ {
+			vs.bulkSetState.outMsgChan <- &bulkSetMsg{
+				vs:     vs,
+				header: make([]byte, 8),
+				body:   make([]byte, _GLH_OUT_BULK_SET_MSG_SIZE),
+			}
+		}
+	}
+}
+
 func (vs *DefaultValueStore) inBulkSet() {
 	for {
-		bsm := <-vs.inBulkSetChan
+		bsm := <-vs.bulkSetState.inMsgChan
 		var bsam *bulkSetAckMsg
 		if bsm.nodeID() != 0 {
 			bsam = vs.newOutBulkSetAckMsg()
@@ -53,14 +84,14 @@ func (vs *DefaultValueStore) inBulkSet() {
 				bsam.Done()
 			}
 		}
-		vs.freeInBulkSetChan <- bsm
+		vs.bulkSetState.inFreeMsgChan <- bsm
 	}
 }
 
 func (vs *DefaultValueStore) newInBulkSetMsg(r io.Reader, l uint64) (uint64, error) {
 	var bsm *bulkSetMsg
 	select {
-	case bsm = <-vs.freeInBulkSetChan:
+	case bsm = <-vs.bulkSetState.inFreeMsgChan:
 	case <-time.After(_GLH_IN_BULK_SET_MSG_TIMEOUT * time.Second):
 		var n uint64
 		var sn int
@@ -110,12 +141,12 @@ func (vs *DefaultValueStore) newInBulkSetMsg(r io.Reader, l uint64) (uint64, err
 			return uint64(n), err
 		}
 	}
-	vs.inBulkSetChan <- bsm
+	vs.bulkSetState.inMsgChan <- bsm
 	return l, nil
 }
 
 func (vs *DefaultValueStore) newOutBulkSetMsg() *bulkSetMsg {
-	bsm := <-vs.outBulkSetChan
+	bsm := <-vs.bulkSetState.outMsgChan
 	binary.BigEndian.PutUint64(bsm.header, 0)
 	bsm.body = bsm.body[:0]
 	return bsm
@@ -139,7 +170,7 @@ func (bsm *bulkSetMsg) WriteContent(w io.Writer) (uint64, error) {
 }
 
 func (bsm *bulkSetMsg) Done() {
-	bsm.vs.outBulkSetChan <- bsm
+	bsm.vs.bulkSetState.outMsgChan <- bsm
 }
 
 func (bsm *bulkSetMsg) nodeID() uint64 {
