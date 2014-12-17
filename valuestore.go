@@ -113,6 +113,9 @@ type ValueStore interface {
 	EnableTombstoneDiscard()
 	DisableTombstoneDiscard()
 	TombstoneDiscardPass()
+	EnableCompaction()
+	DisableCompaction()
+	CompactionPass()
 	EnableOutPullReplication()
 	DisableOutPullReplication()
 	OutPullReplicationPass()
@@ -160,6 +163,7 @@ type DefaultValueStore struct {
 	checksumInterval             uint32
 	ring                         ring.MsgRing
 	tombstoneDiscardState        tombstoneDiscardState
+	compactionState              compactionState
 	replicationIgnoreRecent      uint64
 	inPullReplicationChan        chan *pullReplicationMsg
 	freeInPullReplicationChan    chan *pullReplicationMsg
@@ -366,6 +370,7 @@ func New(opts ...func(*config)) *DefaultValueStore {
 		}
 	}
 	vs.tombstoneDiscardInit(cfg)
+	vs.compactionInit(cfg)
 	vs.outPullReplicationNotifyChan = make(chan *backgroundNotification, 1)
 	go vs.outPullReplicationLauncher()
 	vs.outPushReplicationNotifyChan = make(chan *backgroundNotification, 1)
