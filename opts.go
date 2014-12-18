@@ -39,6 +39,7 @@ type config struct {
 	checksumInterval           int
 	ring                       ring.MsgRing
 	replicationIgnoreRecent    int
+	compactionInterval         int
 }
 
 func resolveConfig(opts ...func(*config)) *config {
@@ -127,6 +128,12 @@ func resolveConfig(opts ...func(*config)) *config {
 	if env := os.Getenv("VALUESTORE_REPLICATIONIGNORERECENT"); env != "" {
 		if val, err := strconv.Atoi(env); err == nil {
 			cfg.replicationIgnoreRecent = val
+		}
+	}
+	cfg.compactionInterval = 300
+	if env := os.Getenv("VALUESTORE_COMPACTIONINTERVAL"); env != "" {
+		if val, err := strconv.Atoi(env); err == nil {
+			cfg.compactionInterval = val
 		}
 	}
 	for _, opt := range opts {

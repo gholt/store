@@ -112,6 +112,9 @@ type ValueStore interface {
 	EnableTombstoneDiscard()
 	DisableTombstoneDiscard()
 	TombstoneDiscardPass()
+	EnableCompaction()
+	DisableCompaction()
+	CompactionPass()
 	EnableOutPullReplication()
 	DisableOutPullReplication()
 	OutPullReplicationPass()
@@ -162,6 +165,7 @@ type DefaultValueStore struct {
 	replicationIgnoreRecent uint64
 	pullReplicationState    pullReplicationState
 	pushReplicationState    pushReplicationState
+	compactionState         compactionState
 	bulkSetState            bulkSetState
 	bulkSetAckState         bulkSetAckState
 }
@@ -282,6 +286,7 @@ func New(opts ...func(*config)) *DefaultValueStore {
 	}
 	vs.recovery()
 	vs.tombstoneDiscardInit(cfg)
+	vs.compactionInit(cfg)
 	vs.pullReplicationInit(cfg)
 	vs.pushReplicationInit(cfg)
 	vs.bulkSetInit(cfg)
