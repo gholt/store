@@ -219,6 +219,12 @@ func (vs *DefaultValueStore) outPullReplicationPass() {
 	for len(vs.pullReplicationState.outKTBFs) < vs.pullReplicationState.outWorkers {
 		vs.pullReplicationState.outKTBFs = append(vs.pullReplicationState.outKTBFs, newKTBloomFilter(_GLH_BLOOM_FILTER_N, _GLH_BLOOM_FILTER_P, 0))
 	}
+	// GLH TODO: Redo this to split up work like tombstoneDiscard does. Also,
+	// don't do ScanCount, instead do something like tombstoneDiscard does as
+	// well where the ScanCallback stops after max items and reports where it
+	// stopped for the next scan. The difference here is that the ScanCallback
+	// should continue until done with an entire range (slightly overfilling
+	// the bloom filter) instead of stopping immediately.
 	f := func(p uint32, ktbf *ktBloomFilter) {
 		start := uint64(p) << uint64(64-partitionPower)
 		stop := start + (uint64(1)<<(64-partitionPower) - 1)
