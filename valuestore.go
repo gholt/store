@@ -85,12 +85,15 @@ const (
 	_TSB_UTIL_BITS = 8
 	_TSB_INACTIVE  = 0xff
 	_TSB_DELETION  = 0x80
+	// _TSB_COMPACTION_REWRITE indicates an item is being rewritten as part of
+	// compaction to the last disk file.
+	_TSB_COMPACTION_REWRITE = 0x01
 	// _TSB_LOCAL_REMOVAL indicates an item to be removed locally due to push
 	// replication (local store wasn't considered responsible for the item
 	// according to the ring) or a deletion marker expiration. An item marked
 	// for local removal will be retained in memory until the local removal
 	// marker is written to disk.
-	_TSB_LOCAL_REMOVAL = 0x01
+	_TSB_LOCAL_REMOVAL = 0x02
 )
 
 const (
