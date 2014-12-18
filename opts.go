@@ -130,7 +130,7 @@ func resolveConfig(opts ...func(*config)) *config {
 			cfg.replicationIgnoreRecent = val
 		}
 	}
-	cfg.compactionInterval = 5
+	cfg.compactionInterval = 300
 	if env := os.Getenv("VALUESTORE_COMPACTIONINTERVAL"); env != "" {
 		if val, err := strconv.Atoi(env); err == nil {
 			cfg.compactionInterval = val
