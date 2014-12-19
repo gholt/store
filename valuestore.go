@@ -386,8 +386,6 @@ func (vs *DefaultValueStore) read(keyA uint64, keyB uint64, value []byte) (uint6
 	return vs.valueLocBlock(id).read(keyA, keyB, timestampbits, offset, length, value)
 }
 
-var _EMPTY_BYTE_ARRAY []byte = []byte{}
-
 // Write stores timestampmicro, value for keyA, keyB and returns the previously
 // stored timestampmicro or returns any error; a newer timestampmicro already
 // in place is not reported as an error. Note that with a write and a delete
