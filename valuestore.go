@@ -109,6 +109,9 @@ type ValueStore interface {
 	Read(keyA uint64, keyB uint64, value []byte) (int64, []byte, error)
 	Write(keyA uint64, keyB uint64, timestamp int64, value []byte) (int64, error)
 	Delete(keyA uint64, keyB uint64, timestamp int64) (int64, error)
+	EnableAll()
+	DisableAll()
+	DisableAllBackground()
 	EnableTombstoneDiscard()
 	DisableTombstoneDiscard()
 	TombstoneDiscardPass()
@@ -198,10 +201,9 @@ type backgroundNotification struct {
 // by 128 bit keys.
 //
 // Note that a lot of buffering, multiple cores, and background processes can
-// be in use and therefore DisableTombstoneDiscard()
-// DisableOutPullReplication() DisableOutPushReplication() DisableWrites() and
-// Flush() should be called prior to the process exiting to ensure all
-// processing is done and the buffers are flushed.
+// be in use and therefore DisableAll() and Flush() should be called prior to
+// the process exiting to ensure all processing is done and the buffers are
+// flushed.
 //
 // You can provide Opt* functions for optional configuration items, such as
 // OptWorkers:
@@ -298,6 +300,32 @@ func New(opts ...func(*config)) *DefaultValueStore {
 // accept.
 func (vs *DefaultValueStore) MaxValueSize() uint32 {
 	return vs.maxValueSize
+}
+
+// DisableAll calls DisableAllBackground(), and DisableWrites().
+func (vs *DefaultValueStore) DisableAll() {
+	vs.DisableAllBackground()
+	vs.DisableWrites()
+}
+
+// DisableAllBackground calls DisableTombstoneDiscard(), DisableCompaction(),
+// DisableOutPullReplication(), DisableOutPushReplication(), but does *not*
+// call DisableWrites().
+func (vs *DefaultValueStore) DisableAllBackground() {
+	vs.DisableTombstoneDiscard()
+	vs.DisableCompaction()
+	vs.DisableOutPullReplication()
+	vs.DisableOutPushReplication()
+}
+
+// EnableAll calls EnableTombstoneDiscard(), EnableCompaction(),
+// EnableOutPullReplication(), EnableOutPushReplication(), and EnableWrites().
+func (vs *DefaultValueStore) EnableAll() {
+	vs.EnableTombstoneDiscard()
+	vs.EnableCompaction()
+	vs.EnableOutPullReplication()
+	vs.EnableOutPushReplication()
+	vs.EnableWrites()
 }
 
 // DisableWrites will cause any incoming Write or Delete requests to respond
