@@ -223,6 +223,9 @@ func resolveConfig(opts ...func(*config)) *config {
 	if cfg.replicationIgnoreRecent < 0 {
 		cfg.replicationIgnoreRecent = 0
 	}
+	if cfg.compactionInterval < 1 {
+		cfg.compactionInterval = 1
+	}
 	return cfg
 }
 
