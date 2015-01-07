@@ -103,5 +103,7 @@ func (vs *DefaultValueStore) compactionPass() {
 
 func (vs *DefaultValueStore) doCompaction() {
 	files, _ := ioutil.ReadDir("./")
-	vs.logDebug.Println(files)
+	if vs.logDebug != nil {
+		vs.logDebug.Println(files)
+	}
 }
