@@ -93,44 +93,36 @@ func (vs *DefaultValueStore) newInBulkSetMsg(r io.Reader, l uint64) (uint64, err
 	select {
 	case bsm = <-vs.bulkSetState.inFreeMsgChan:
 	case <-time.After(_GLH_IN_BULK_SET_MSG_TIMEOUT * time.Second):
-		left := l
+		var n uint64
 		var sn int
 		var err error
-		for left > 0 {
-			t := toss
-			if left < uint64(len(t)) {
-				t = t[:left]
-			}
-			sn, err = r.Read(t)
-			left -= uint64(sn)
+		for n < l {
+			sn, err = r.Read(toss)
+			n += uint64(sn)
 			if err != nil {
-				return l - left, err
+				return n, err
 			}
 		}
-		return l, nil
+		return n, nil
 	}
 	if l < 8 {
-		left := l
+		var n uint64
 		var sn int
 		var err error
-		for left > 0 {
-			t := toss
-			if left < uint64(len(t)) {
-				t = t[:left]
-			}
-			sn, err = r.Read(t)
-			left -= uint64(sn)
+		for n < l {
+			sn, err = r.Read(toss)
+			n += uint64(sn)
 			if err != nil {
-				return l - left, err
+				return n, err
 			}
 		}
-		return l, nil
+		return n, nil
 	}
 	var n int
 	var sn int
 	var err error
-	for n != len(bsm.header) {
-		sn, err = r.Read(bsm.header[n:len(bsm.header)])
+	for n != 8 {
+		sn, err = r.Read(bsm.header[n:])
 		n += sn
 		if err != nil {
 			return uint64(n), err
@@ -143,7 +135,7 @@ func (vs *DefaultValueStore) newInBulkSetMsg(r io.Reader, l uint64) (uint64, err
 	bsm.body = bsm.body[:l]
 	n = 0
 	for n != len(bsm.body) {
-		sn, err = r.Read(bsm.body[n:l])
+		sn, err = r.Read(bsm.body[n:])
 		n += sn
 		if err != nil {
 			return uint64(n), err
