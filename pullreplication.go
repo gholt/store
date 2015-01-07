@@ -23,7 +23,7 @@ const pullReplicationMsgHeaderBytes = 44
 type pullReplicationState struct {
 	inMsgChan     chan *pullReplicationMsg
 	inFreeMsgChan chan *pullReplicationMsg
-	outWorkers    int
+	outWorkers    uint64
 	outInterval   int
 	outNotifyChan chan *backgroundNotification
 	outIteration  uint16
@@ -41,7 +41,7 @@ type pullReplicationMsg struct {
 func (vs *DefaultValueStore) pullReplicationInit(cfg *config) {
 	vs.pullReplicationState.outInterval = cfg.outPullReplicationInterval
 	vs.pullReplicationState.outNotifyChan = make(chan *backgroundNotification, 1)
-	vs.pullReplicationState.outWorkers = cfg.outPullReplicationWorkers
+	vs.pullReplicationState.outWorkers = uint64(cfg.outPullReplicationWorkers)
 	vs.pullReplicationState.outIteration = uint16(cfg.rand.Uint32())
 	if vs.ring != nil {
 		vs.ring.SetMsgHandler(ring.MSG_PULL_REPLICATION, vs.newInPullReplicationMsg)
@@ -208,80 +208,89 @@ func (vs *DefaultValueStore) outPullReplicationPass() {
 			vs.logDebug.Printf("out pull replication pass took %s", time.Now().Sub(begin))
 		}()
 	}
+	pp := vs.ring.PartitionPower()
+	ps := uint64(1) << pp
 	if vs.pullReplicationState.outIteration == math.MaxUint16 {
 		vs.pullReplicationState.outIteration = 0
 	} else {
 		vs.pullReplicationState.outIteration++
 	}
 	ringID := vs.ring.ID()
-	partitionPower := vs.ring.PartitionPower()
-	partitions := uint32(1) << partitionPower
-	for len(vs.pullReplicationState.outKTBFs) < vs.pullReplicationState.outWorkers {
+	ws := vs.pullReplicationState.outWorkers
+	for uint64(len(vs.pullReplicationState.outKTBFs)) < ws {
 		vs.pullReplicationState.outKTBFs = append(vs.pullReplicationState.outKTBFs, newKTBloomFilter(_GLH_BLOOM_FILTER_N, _GLH_BLOOM_FILTER_P, 0))
 	}
-	// GLH TODO: Redo this to split up work like tombstoneDiscard does. Also,
-	// don't do ScanCount, instead do something like tombstoneDiscard does as
-	// well where the ScanCallback stops after max items and reports where it
-	// stopped for the next scan. The difference here is that the ScanCallback
-	// should continue until done with an entire range (slightly overfilling
-	// the bloom filter) instead of stopping immediately.
-	f := func(p uint32, ktbf *ktBloomFilter) {
-		start := uint64(p) << uint64(64-partitionPower)
-		stop := start + (uint64(1)<<(64-partitionPower) - 1)
-		pullSize := uint64(1) << (64 - partitionPower)
-		for vs.vlm.ScanCount(start, start+(pullSize-1), _GLH_BLOOM_FILTER_N) >= _GLH_BLOOM_FILTER_N {
-			pullSize /= 2
+	f := func(p uint64, w uint64, ktbf *ktBloomFilter) {
+		pb := p << (64 - pp)
+		rb := pb + ((uint64(1) << (64 - pp)) / ws * w)
+		var re uint64
+		if w+1 == ws {
+			if p+1 == ps {
+				re = math.MaxUint64
+			} else {
+				re = ((p + 1) << (64 - pp)) - 1
+			}
+		} else {
+			re = pb + ((uint64(1) << (64 - pp)) / ws * (w + 1)) - 1
 		}
 		timestampbitsnow := uint64(brimtime.TimeToUnixMicro(time.Now())) << _TSB_UTIL_BITS
 		cutoff := timestampbitsnow - vs.replicationIgnoreRecent
-		tombstoneCutoff := timestampbitsnow - vs.tombstoneDiscardState.age
-		substart := start
-		substop := start + (pullSize - 1)
-		for atomic.LoadUint32(&vs.pullReplicationState.outAbort) == 0 {
+		var more bool
+		for {
+			rbThis := rb
 			ktbf.reset(vs.pullReplicationState.outIteration)
-			vs.vlm.ScanCallback(substart, substop, func(keyA uint64, keyB uint64, timestampbits uint64, length uint32) {
-				if timestampbits&_TSB_LOCAL_REMOVAL == 0 && timestampbits < cutoff && (timestampbits&_TSB_DELETION == 0 || timestampbits >= tombstoneCutoff) {
-					ktbf.add(keyA, keyB, timestampbits)
-				}
+			rb, more = vs.vlm.ScanCallbackV2(rb, re, 0, _TSB_LOCAL_REMOVAL, cutoff, _GLH_BLOOM_FILTER_N, func(keyA uint64, keyB uint64, timestampbits uint64, length uint32) {
+				ktbf.add(keyA, keyB, timestampbits)
 			})
 			if atomic.LoadUint32(&vs.pullReplicationState.outAbort) != 0 {
 				break
 			}
-			prm := vs.newOutPullReplicationMsg(ringID, p, cutoff, substart, substop, ktbf)
-			if !vs.ring.MsgToOtherReplicas(ringID, p, prm) {
+			if vs.ring.ID() != ringID {
+				break
+			}
+			reThis := re
+			if more {
+				reThis = rb - 1
+			}
+			prm := vs.newOutPullReplicationMsg(ringID, uint32(p), cutoff, rbThis, reThis, ktbf)
+			if !vs.ring.MsgToOtherReplicas(ringID, uint32(p), prm) {
 				prm.Done()
 			}
-			substart += pullSize
-			substop += pullSize
-			if substop > stop || substop < stop {
+			if !more {
 				break
 			}
 		}
 	}
-	sp := uint32(vs.rand.Intn(int(partitions)))
 	wg := &sync.WaitGroup{}
-	wg.Add(vs.pullReplicationState.outWorkers)
-	for g := 0; g < vs.pullReplicationState.outWorkers; g++ {
-		go func(g uint32) {
-			ktbf := vs.pullReplicationState.outKTBFs[g]
-			for p := uint32(sp + g); p < partitions && atomic.LoadUint32(&vs.pullReplicationState.outAbort) == 0; p += uint32(vs.pullReplicationState.outWorkers) {
+	wg.Add(int(ws))
+	for w := uint64(0); w < ws; w++ {
+		go func(w uint64) {
+			ktbf := vs.pullReplicationState.outKTBFs[w]
+			pb := ps / ws * w
+			for p := pb; p < ps; p++ {
+				if atomic.LoadUint32(&vs.pullReplicationState.outAbort) != 0 {
+					break
+				}
 				if vs.ring.ID() != ringID {
 					break
 				}
-				if vs.ring.Responsible(p) {
-					f(p, ktbf)
+				if vs.ring.Responsible(uint32(p)) {
+					f(p, w, ktbf)
 				}
 			}
-			for p := uint32(g); p < sp && atomic.LoadUint32(&vs.pullReplicationState.outAbort) == 0; p += uint32(vs.pullReplicationState.outWorkers) {
+			for p := uint64(0); p < pb; p++ {
+				if atomic.LoadUint32(&vs.pullReplicationState.outAbort) != 0 {
+					break
+				}
 				if vs.ring.ID() != ringID {
 					break
 				}
-				if vs.ring.Responsible(p) {
-					f(p, ktbf)
+				if vs.ring.Responsible(uint32(p)) {
+					f(p, w, ktbf)
 				}
 			}
 			wg.Done()
-		}(uint32(g))
+		}(w)
 	}
 	wg.Wait()
 }

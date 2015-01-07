@@ -20,9 +20,9 @@ type tombstoneDiscardState struct {
 }
 
 type localRemovalEntry struct {
-	keyA      uint64
-	keyB      uint64
-	timestamp uint64
+	keyA          uint64
+	keyB          uint64
+	timestampbits uint64
 }
 
 func (vs *DefaultValueStore) tombstoneDiscardInit(cfg *config) {
@@ -181,16 +181,16 @@ func (vs *DefaultValueStore) tombstoneDiscardPassExpiredDeletions() {
 		var more bool
 		for {
 			lri := 0
-			rb, more = vs.vlm.ScanCallbackV2(rb, re, _TSB_DELETION, _TSB_LOCAL_REMOVAL, cutoff, _GLH_TOMBSTONE_DISCARD_BATCH_SIZE, func(keyA uint64, keyB uint64, timestamp uint64, length uint32) {
+			rb, more = vs.vlm.ScanCallbackV2(rb, re, _TSB_DELETION, _TSB_LOCAL_REMOVAL, cutoff, _GLH_TOMBSTONE_DISCARD_BATCH_SIZE, func(keyA uint64, keyB uint64, timestampbits uint64, length uint32) {
 				e := &lr[lri]
 				e.keyA = keyA
 				e.keyB = keyB
-				e.timestamp = timestamp
+				e.timestampbits = timestampbits
 				lri++
 			})
 			for i := 0; i < lri; i++ {
 				e := &lr[i]
-				vs.write(e.keyA, e.keyB, e.timestamp|_TSB_LOCAL_REMOVAL, nil)
+				vs.write(e.keyA, e.keyB, e.timestampbits|_TSB_LOCAL_REMOVAL, nil)
 			}
 			if !more {
 				break

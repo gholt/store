@@ -31,7 +31,7 @@ type valueStoreStats struct {
 	pathtoc                    string
 	workers                    int
 	tombstoneDiscardInterval   int
-	outPullReplicationWorkers  int
+	outPullReplicationWorkers  uint64
 	outPullReplicationInterval int
 	outPushReplicationWorkers  int
 	outPushReplicationInterval int
