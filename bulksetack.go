@@ -72,17 +72,21 @@ func (vs *DefaultValueStore) newInBulkSetAckMsg(r io.Reader, l uint64) (uint64, 
 	select {
 	case bsam = <-vs.bulkSetAckState.inFreeMsgChan:
 	case <-time.After(_GLH_IN_BULK_SET_ACK_MSG_TIMEOUT * time.Second):
-		var n uint64
+		left := l
 		var sn int
 		var err error
-		for n < l {
-			sn, err = r.Read(toss)
-			n += uint64(sn)
+		for left > 0 {
+			t := toss
+			if left < uint64(len(t)) {
+				t = t[:left]
+			}
+			sn, err = r.Read(t)
+			left -= uint64(sn)
 			if err != nil {
-				return n, err
+				return l - left, err
 			}
 		}
-		return n, nil
+		return l, nil
 	}
 	var n int
 	var sn int
@@ -93,7 +97,7 @@ func (vs *DefaultValueStore) newInBulkSetAckMsg(r io.Reader, l uint64) (uint64, 
 	bsam.body = bsam.body[:l]
 	n = 0
 	for n != len(bsam.body) {
-		sn, err = r.Read(bsam.body[n:])
+		sn, err = r.Read(bsam.body[n:l])
 		n += sn
 		if err != nil {
 			return uint64(n), err

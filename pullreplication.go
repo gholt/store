@@ -302,17 +302,21 @@ func (vs *DefaultValueStore) newInPullReplicationMsg(r io.Reader, l uint64) (uin
 	select {
 	case prm = <-vs.pullReplicationState.inFreeMsgChan:
 	case <-time.After(_GLH_IN_PULL_REPLICATION_MSG_TIMEOUT * time.Second):
-		var n uint64
+		left := l
 		var sn int
 		var err error
-		for n < l {
-			sn, err = r.Read(toss)
-			n += uint64(sn)
+		for left > 0 {
+			t := toss
+			if left < uint64(len(t)) {
+				t = t[:left]
+			}
+			sn, err = r.Read(t)
+			left -= uint64(sn)
 			if err != nil {
-				return n, err
+				return l - left, err
 			}
 		}
-		return n, nil
+		return l, nil
 	}
 	bl := l - pullReplicationMsgHeaderBytes - uint64(ktBloomFilterHeaderBytes)
 	if uint64(cap(prm.body)) < bl {
@@ -326,7 +330,7 @@ func (vs *DefaultValueStore) newInPullReplicationMsg(r io.Reader, l uint64) (uin
 		if err != nil {
 			return uint64(n), err
 		}
-		sn, err = r.Read(prm.header[n:])
+		sn, err = r.Read(prm.header[n:len(prm.header)])
 		n += sn
 	}
 	n = 0
@@ -334,7 +338,7 @@ func (vs *DefaultValueStore) newInPullReplicationMsg(r io.Reader, l uint64) (uin
 		if err != nil {
 			return uint64(len(prm.header)) + uint64(n), err
 		}
-		sn, err = r.Read(prm.body[n:])
+		sn, err = r.Read(prm.body[n:bl])
 		n += sn
 	}
 	vs.pullReplicationState.inMsgChan <- prm
