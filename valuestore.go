@@ -628,10 +628,8 @@ func (vs *DefaultValueStore) tocWriter() {
 	// writerB is kept around in case a "late" key arrives to be flushed who's value
 	// is actually in the previous values file.
 	memClearersFlushLeft := len(vs.freeableVMChans)
-	var btsA uint64
 	var writerA io.WriteCloser
 	var offsetA uint64
-	var btsB uint64
 	var writerB io.WriteCloser
 	var offsetB uint64
 	head := []byte("VALUESTORETOC v0                ")
@@ -654,8 +652,7 @@ func (vs *DefaultValueStore) tocWriter() {
 					panic(err)
 				}
 				writerB = nil
-				btsB = 0
-				atomic.StoreUint64(&vs.activeTOCB, btsB)
+				atomic.StoreUint64(&vs.activeTOCB, 0)
 				offsetB = 0
 			}
 			if writerA != nil {
@@ -667,8 +664,7 @@ func (vs *DefaultValueStore) tocWriter() {
 					panic(err)
 				}
 				writerA = nil
-				btsA = 0
-				atomic.StoreUint64(&vs.activeTOCA, btsA)
+				atomic.StoreUint64(&vs.activeTOCA, 0)
 				offsetA = 0
 			}
 			vs.flushedChan <- struct{}{}
@@ -678,12 +674,12 @@ func (vs *DefaultValueStore) tocWriter() {
 		if len(t) > 8 {
 			bts := binary.BigEndian.Uint64(t)
 			switch bts {
-			case btsA:
+			case atomic.LoadUint64(&vs.activeTOCA):
 				if _, err := writerA.Write(t[8:]); err != nil {
 					panic(err)
 				}
 				offsetA += uint64(len(t) - 8)
-			case btsB:
+			case atomic.LoadUint64(&vs.activeTOCB):
 				if _, err := writerB.Write(t[8:]); err != nil {
 					panic(err)
 				}
@@ -702,12 +698,10 @@ func (vs *DefaultValueStore) tocWriter() {
 						panic(err)
 					}
 				}
-				btsB = btsA
-				atomic.StoreUint64(&vs.activeTOCB, btsB)
+				atomic.StoreUint64(&vs.activeTOCB, atomic.LoadUint64(&vs.activeTOCA))
 				writerB = writerA
 				offsetB = offsetA
-				btsA = bts
-				atomic.StoreUint64(&vs.activeTOCA, btsA)
+				atomic.StoreUint64(&vs.activeTOCA, bts)
 				fp, err := os.Create(path.Join(vs.pathtoc, fmt.Sprintf("%d.valuestoc", bts)))
 				if err != nil {
 					panic(err)
