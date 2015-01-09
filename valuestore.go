@@ -152,6 +152,8 @@ type DefaultValueStore struct {
 	vfVMChan                chan *valuesMem
 	freeTOCBlockChan        chan []byte
 	pendingTOCBlockChan     chan []byte
+	activeTOCA              uint64
+	activeTOCB              uint64
 	flushedChan             chan struct{}
 	valueLocBlocks          []valueLocBlock
 	valueLocBlockIDer       uint64
@@ -622,6 +624,9 @@ func (vs *DefaultValueStore) vfWriter() {
 }
 
 func (vs *DefaultValueStore) tocWriter() {
+	// writerA is the current toc file while writerB is the previously active toc
+	// writerB is kept around in case a "late" key arrives to be flushed who's value
+	// is actually in the previous values file.
 	memClearersFlushLeft := len(vs.freeableVMChans)
 	var btsA uint64
 	var writerA io.WriteCloser
@@ -650,6 +655,7 @@ func (vs *DefaultValueStore) tocWriter() {
 				}
 				writerB = nil
 				btsB = 0
+				atomic.StoreUint64(&vs.activeTOCB, btsB)
 				offsetB = 0
 			}
 			if writerA != nil {
@@ -662,6 +668,7 @@ func (vs *DefaultValueStore) tocWriter() {
 				}
 				writerA = nil
 				btsA = 0
+				atomic.StoreUint64(&vs.activeTOCA, btsA)
 				offsetA = 0
 			}
 			vs.flushedChan <- struct{}{}
@@ -696,9 +703,11 @@ func (vs *DefaultValueStore) tocWriter() {
 					}
 				}
 				btsB = btsA
+				atomic.StoreUint64(&vs.activeTOCB, btsB)
 				writerB = writerA
 				offsetB = offsetA
 				btsA = bts
+				atomic.StoreUint64(&vs.activeTOCA, btsA)
 				fp, err := os.Create(path.Join(vs.pathtoc, fmt.Sprintf("%d.valuestoc", bts)))
 				if err != nil {
 					panic(err)
