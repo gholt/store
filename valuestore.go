@@ -362,13 +362,17 @@ func (vs *DefaultValueStore) Flush() {
 // Note that err == ErrNotFound with timestampmicro == 0 indicates keyA, keyB
 // was not known at all whereas err == ErrNotFound with timestampmicro != 0
 // indicates keyA, keyB was known and had a deletion marker (aka tombstone).
-func (vs *DefaultValueStore) Lookup(keyA uint64, keyB uint64) (int64, uint32,
-	error) {
+func (vs *DefaultValueStore) Lookup(keyA uint64, keyB uint64) (int64, uint32, error) {
+	timestampbits, _, length, err := vs.lookup(keyA, keyB)
+	return int64(timestampbits >> _TSB_UTIL_BITS), length, err
+}
+
+func (vs *DefaultValueStore) lookup(keyA, keyB uint64) (uint64, uint32, uint32, error) {
 	timestampbits, id, _, length := vs.vlm.Get(keyA, keyB)
 	if id == 0 || timestampbits&_TSB_DELETION != 0 {
-		return int64(timestampbits >> _TSB_UTIL_BITS), 0, ErrNotFound
+		return timestampbits, id, 0, ErrNotFound
 	}
-	return int64(timestampbits >> _TSB_UTIL_BITS), length, nil
+	return timestampbits, id, length, nil
 }
 
 // Read will return timestampmicro, value, err for keyA, keyB; if an incoming
@@ -625,7 +629,7 @@ func (vs *DefaultValueStore) vfWriter() {
 
 func (vs *DefaultValueStore) tocWriter() {
 	// writerA is the current toc file while writerB is the previously active toc
-	// writerB is kept around in case a "late" key arrives to be flushed who's value
+	// writerB is kept around in case a "late" key arrives to be flushed whom's value
 	// is actually in the previous values file.
 	memClearersFlushLeft := len(vs.freeableVMChans)
 	var writerA io.WriteCloser
