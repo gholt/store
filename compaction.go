@@ -3,7 +3,6 @@ package valuestore
 import (
 	"bytes"
 	"encoding/binary"
-	"fmt"
 	//"github.com/gholt/brimtime"
 	"github.com/spaolacci/murmur3"
 	"io"
@@ -107,18 +106,12 @@ func (vs *DefaultValueStore) compactionLauncher() {
 }
 
 func (vs *DefaultValueStore) compactionPass() {
-	/*
-		if vs.logDebug != nil {
-			begin := time.Now()
-			defer func() {
-				vs.logDebug.Printf("compaction pass took %s", time.Now().Sub(begin))
-			}()
-		}
-	*/
-	begin := time.Now()
-	defer func() {
-		fmt.Println("compaction pass took", time.Now().Sub(begin))
-	}()
+	if vs.logDebug != nil {
+		begin := time.Now()
+		defer func() {
+			vs.logDebug.Printf("compaction pass took %s", time.Now().Sub(begin))
+		}()
+	}
 	vs.doCompaction()
 }
 
@@ -283,22 +276,20 @@ func (vs *DefaultValueStore) compactFile(name string) bool {
 				keyA := binary.BigEndian.Uint64(fromDiskOverflow)
 				timestampbits := binary.BigEndian.Uint64(fromDiskOverflow[16:])
 				fromDiskOverflow = fromDiskOverflow[:0]
-				tsm, blockid, _, _ := vs.lookup(keyA, keyB)
+				tsm, _, _, _ := vs.lookup(keyA, keyB)
 				if int64(tsm>>_TSB_UTIL_BITS) != int64(timestampbits>>_TSB_UTIL_BITS) {
 					count++
 					stale++
 				} else {
 					var value []byte
-					fmt.Printf("Should rewrite: %d %d [%d]\n", keyA, keyB, blockid)
 					_, value, err := vs.read(keyA, keyB, value)
 					if err != nil {
-						fmt.Println("Error on value read!")
+						vs.logCritical.Println("Error on rewrite read", err.Error())
 						return false
 					}
 					_, err = vs.write(keyA, keyB, timestampbits|_TSB_COMPACTION_REWRITE, value)
 					if err != nil {
-						fmt.Println("shit")
-						fmt.Println(err)
+						vs.logCritical.Println("Error on rewrite", err.Error())
 						return false
 					}
 					count++
@@ -309,22 +300,20 @@ func (vs *DefaultValueStore) compactFile(name string) bool {
 				keyB := binary.BigEndian.Uint64(fromDiskBuf[j+8:])
 				keyA := binary.BigEndian.Uint64(fromDiskBuf[j:])
 				timestampbits := binary.BigEndian.Uint64(fromDiskBuf[j+16:])
-				tsm, blockid, _, _ := vs.lookup(keyA, keyB)
+				tsm, _, _, _ := vs.lookup(keyA, keyB)
 				if int64(tsm>>_TSB_UTIL_BITS) != int64(timestampbits>>_TSB_UTIL_BITS) {
 					count++
 					stale++
 				} else {
 					var value []byte
-					fmt.Printf("Should rewrite: %d %d [%d] - %d:%d\n", keyA, keyB, blockid, timestampbits, tsm)
 					_, value, err := vs.read(keyA, keyB, value)
 					if err != nil {
-						fmt.Println("Error on value read!")
+						vs.logCritical.Println("Error on rewrite read", err.Error())
 						return false
 					}
 					_, err = vs.write(keyA, keyB, timestampbits|_TSB_COMPACTION_REWRITE, value)
 					if err != nil {
-						fmt.Println("shit")
-						fmt.Println(err)
+						vs.logCritical.Println("Error on rewrite", err.Error())
 						return false
 					}
 					count++
@@ -350,7 +339,7 @@ func (vs *DefaultValueStore) compactFile(name string) bool {
 		vs.logWarning.Printf("%d checksum failures for %s\n", checksumFailures, name)
 		return false
 	}
-	fmt.Println("count:", count, "rewrote:", rewrote, "stale:", stale)
+	vs.logInfo.Println("count:", count, "rewrote:", rewrote, "stale:", stale)
 	return true
 }
 
@@ -381,17 +370,17 @@ func (vs *DefaultValueStore) doCompaction() {
 			continue
 		}
 		if namets == int64(atomic.LoadUint64(&vs.activeTOCA)) {
-			fmt.Printf("skipping active toc: %s\n", names[i])
+			//vs.logDebug.Printf("skipping active toc: %s\n", names[i])
 			continue
 		}
 		if namets == int64(atomic.LoadUint64(&vs.activeTOCB)) {
-			fmt.Printf("skipping active toc: %s\n", names[i])
+			//vs.logDebug.Printf("skipping active toc: %s\n", names[i])
 			continue
 		}
 		count, stale, _ := vs.sampleTOC(names[i])
 		if stale > (count / 2) {
-			fmt.Println(names[i], "count:", count, "stale:", stale)
-			fmt.Println("Triggering compaction for ", names[i])
+			vs.logInfo.Printf("%s count: %d stale %d\n", names[i], count, stale)
+			vs.logInfo.Println("Triggering compaction for", names[i])
 			compacted := vs.compactFile(names[i])
 			if compacted {
 				err = os.Remove(names[i])
@@ -404,7 +393,7 @@ func (vs *DefaultValueStore) doCompaction() {
 					vs.logCritical.Println("Unable to remove", names[i], "values because", err.Error())
 					continue
 				}
-				fmt.Println("Compacted", names[i])
+				vs.logInfo.Println("Compacted", names[i])
 			}
 		}
 
