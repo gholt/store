@@ -40,6 +40,9 @@ type config struct {
 	ring                       ring.MsgRing
 	replicationIgnoreRecent    int
 	compactionInterval         int
+	compactionThreshold        float64
+	compactionAgeThreshold     int
+	compactionWorkers          int
 }
 
 func resolveConfig(opts ...func(*config)) *config {
@@ -136,6 +139,24 @@ func resolveConfig(opts ...func(*config)) *config {
 			cfg.compactionInterval = val
 		}
 	}
+	cfg.compactionThreshold = 0.10
+	if env := os.Getenv("VALUESTORE_COMPACTIONTHRESHOLD"); env != "" {
+		if val, err := strconv.ParseFloat(env, 64); err == nil {
+			cfg.compactionThreshold = val
+		}
+	}
+	cfg.compactionAgeThreshold = 300
+	if env := os.Getenv("VALUESTORE_COMPACTIONAGETHRESHOLD"); env != "" {
+		if val, err := strconv.Atoi(env); err == nil {
+			cfg.compactionAgeThreshold = val
+		}
+	}
+	cfg.compactionWorkers = 1
+	if env := os.Getenv("VALUESTORE_COMPACTIONWORKERS"); env != "" {
+		if val, err := strconv.Atoi(env); err == nil {
+			cfg.compactionWorkers = val
+		}
+	}
 	for _, opt := range opts {
 		opt(cfg)
 	}
@@ -225,6 +246,15 @@ func resolveConfig(opts ...func(*config)) *config {
 	}
 	if cfg.compactionInterval < 1 {
 		cfg.compactionInterval = 1
+	}
+	if cfg.compactionWorkers < 1 {
+		cfg.compactionWorkers = 1
+	}
+	if cfg.compactionThreshold >= 1.0 || cfg.compactionThreshold <= 0.01 {
+		cfg.compactionThreshold = 0.10
+	}
+	if cfg.compactionAgeThreshold < 1 {
+		cfg.compactionAgeThreshold = 1
 	}
 	return cfg
 }
