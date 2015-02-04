@@ -327,10 +327,10 @@ func (vs *DefaultValueStore) DisableAllBackground() {
 // EnableOutPullReplication(), EnableOutPushReplication(), and EnableWrites().
 func (vs *DefaultValueStore) EnableAll() {
 	vs.EnableTombstoneDiscard()
-	vs.EnableCompaction()
 	vs.EnableOutPullReplication()
 	vs.EnableOutPushReplication()
 	vs.EnableWrites()
+	vs.EnableCompaction()
 }
 
 // DisableWrites will cause any incoming Write or Delete requests to respond
@@ -451,6 +451,19 @@ func (vs *DefaultValueStore) addValueLocBlock(block valueLocBlock) uint32 {
 	}
 	vs.valueLocBlocks[id] = block
 	return uint32(id)
+}
+
+func (vs *DefaultValueStore) valueLocBlockIDFromTimestampnano(tsn int64) uint32 {
+	for i := 1; i <= len(vs.valueLocBlocks); i++ {
+		if vs.valueLocBlocks[i] == nil {
+			return 0
+		} else {
+			if tsn == vs.valueLocBlocks[i].timestampnano() {
+				return uint32(i)
+			}
+		}
+	}
+	return 0
 }
 
 func (vs *DefaultValueStore) memClearer(freeableVMChan chan *valuesMem) {
