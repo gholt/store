@@ -5,7 +5,7 @@ import (
 	"io"
 	"time"
 
-	"github.com/gholt/experimental-ring"
+	"github.com/gholt/ring"
 )
 
 const _GLH_IN_BULK_SET_ACK_MSGS = 128

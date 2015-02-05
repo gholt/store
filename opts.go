@@ -9,8 +9,8 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/gholt/experimental-ring"
-	"github.com/gholt/experimental-valuelocmap"
+	"github.com/gholt/ring"
+	"github.com/gholt/valuelocmap"
 )
 
 type config struct {

@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
-	"github.com/spaolacci/murmur3"
 	"io"
 	"math/rand"
 	"os"
@@ -14,6 +13,8 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
+
+	"github.com/spaolacci/murmur3"
 )
 
 type compactionState struct {

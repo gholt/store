@@ -6,7 +6,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/gholt/brimtime"
+	"github.com/gholt/brimtime-v1"
 )
 
 type pushReplicationState struct {

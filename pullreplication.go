@@ -8,8 +8,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/gholt/brimtime"
-	"github.com/gholt/experimental-ring"
+	"github.com/gholt/brimtime-v1"
+	"github.com/gholt/ring"
 )
 
 const _GLH_IN_PULL_REPLICATION_MSGS = 128
