@@ -115,9 +115,11 @@ func (vs *DefaultValueStore) outPushReplicationPass() {
 			vs.logDebug.Printf("out push replication pass took %s", time.Now().Sub(begin))
 		}()
 	}
-	ringID := vs.ring.ID()
-	partitionPower := vs.ring.PartitionPower()
-	partitions := uint32(1) << partitionPower
+	// TODO: Instead of using this version change thing to indicate ring
+	// changes, we should atomic store/load the vs.ring pointer.
+	ringVersion := vs.ring.Version()
+	rightwardPartitionShift := 64 - vs.ring.PartitionBits()
+	partitionCount := uint32(1) << vs.ring.PartitionBits()
 	for len(vs.pushReplicationState.outLists) < vs.pushReplicationState.outWorkers {
 		vs.pushReplicationState.outLists = append(vs.pushReplicationState.outLists, make([]uint64, 2*1024*1024))
 	}
@@ -134,9 +136,9 @@ func (vs *DefaultValueStore) outPushReplicationPass() {
 	// before scanning the same area again; meaning less or no resends.
 	f := func(p uint32, list []uint64, valbuf []byte) {
 		list = list[:0]
-		start := uint64(p) << uint64(64-partitionPower)
-		stop := start + (uint64(1)<<(64-partitionPower) - 1)
-		pullSize := uint64(1) << (64 - partitionPower)
+		start := uint64(p) << uint64(rightwardPartitionShift)
+		stop := start + (uint64(1)<<rightwardPartitionShift - 1)
+		pullSize := uint64(1) << rightwardPartitionShift
 		for vs.vlm.ScanCount(start, start+(pullSize-1), _GLH_BLOOM_FILTER_N) >= _GLH_BLOOM_FILTER_N {
 			pullSize /= 2
 		}
@@ -162,7 +164,7 @@ func (vs *DefaultValueStore) outPushReplicationPass() {
 			}
 			if len(list) > 0 {
 				bsm := vs.newOutBulkSetMsg()
-				binary.BigEndian.PutUint64(bsm.header, vs.ring.NodeID())
+				binary.BigEndian.PutUint64(bsm.header, vs.ring.LocalNodeID())
 				var timestampbits uint64
 				var err error
 				for i := 0; i < len(list); i += 2 {
@@ -184,7 +186,7 @@ func (vs *DefaultValueStore) outPushReplicationPass() {
 					bsm.Done()
 					break
 				}
-				if !vs.ring.MsgToOtherReplicas(ringID, p, bsm) {
+				if !vs.ring.MsgToOtherReplicas(ringVersion, p, bsm) {
 					bsm.Done()
 				}
 			}
@@ -195,7 +197,7 @@ func (vs *DefaultValueStore) outPushReplicationPass() {
 			}
 		}
 	}
-	sp := uint32(vs.rand.Intn(int(partitions)))
+	sp := uint32(vs.rand.Intn(int(partitionCount)))
 	wg := &sync.WaitGroup{}
 	wg.Add(vs.pushReplicationState.outWorkers)
 	for g := 0; g < vs.pushReplicationState.outWorkers; g++ {
@@ -203,8 +205,8 @@ func (vs *DefaultValueStore) outPushReplicationPass() {
 			list := vs.pushReplicationState.outLists[g]
 			valbuf := vs.pushReplicationState.outValBufs[g]
 			spg := uint32(sp + g)
-			for p := spg; p < partitions && atomic.LoadUint32(&vs.pushReplicationState.outAbort) == 0; p += uint32(vs.pushReplicationState.outWorkers) {
-				if vs.ring.ID() != ringID {
+			for p := spg; p < partitionCount && atomic.LoadUint32(&vs.pushReplicationState.outAbort) == 0; p += uint32(vs.pushReplicationState.outWorkers) {
+				if vs.ring.Version() != ringVersion {
 					break
 				}
 				if !vs.ring.Responsible(p) {
@@ -212,7 +214,7 @@ func (vs *DefaultValueStore) outPushReplicationPass() {
 				}
 			}
 			for p := uint32(g); p < spg && atomic.LoadUint32(&vs.pushReplicationState.outAbort) == 0; p += uint32(vs.pushReplicationState.outWorkers) {
-				if vs.ring.ID() != ringID {
+				if vs.ring.Version() != ringVersion {
 					break
 				}
 				if !vs.ring.Responsible(p) {

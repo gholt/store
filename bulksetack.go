@@ -49,17 +49,19 @@ func (vs *DefaultValueStore) bulkSetAckInit(cfg *config) {
 func (vs *DefaultValueStore) inBulkSetAck() {
 	for {
 		bsam := <-vs.bulkSetAckState.inMsgChan
-		rid := vs.ring.ID()
-		sppower := 64 - vs.ring.PartitionPower()
+		// TODO: Instead of using this version change thing to indicate ring
+		// changes, we should atomic store/load the vs.ring pointer.
+		version := vs.ring.Version()
+		rightwardPartitionShift := 64 - vs.ring.PartitionBits()
 		b := bsam.body
 		l := len(b)
 		for o := 0; o < l; o += 24 {
-			if rid != vs.ring.ID() {
-				rid = vs.ring.ID()
-				sppower = 64 - vs.ring.PartitionPower()
+			if version != vs.ring.Version() {
+				version = vs.ring.Version()
+				rightwardPartitionShift = 64 - vs.ring.PartitionBits()
 			}
 			keyA := binary.BigEndian.Uint64(b[o:])
-			if !vs.ring.Responsible(uint32(keyA >> sppower)) {
+			if !vs.ring.Responsible(uint32(keyA >> rightwardPartitionShift)) {
 				vs.write(keyA, binary.BigEndian.Uint64(b[o+8:]), binary.BigEndian.Uint64(b[o+16:])|_TSB_LOCAL_REMOVAL, nil)
 			}
 		}

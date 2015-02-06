@@ -119,24 +119,24 @@ func (vs *DefaultValueStore) tombstoneDiscardPass() {
 }
 
 func (vs *DefaultValueStore) tombstoneDiscardPassLocalRemovals() {
-	pp := uint16(1)
+	rightwardPartitionShift := uint16(0)
 	if vs.ring != nil {
-		pp = vs.ring.PartitionPower()
+		rightwardPartitionShift = 64 - vs.ring.PartitionBits()
 	}
-	ps := uint64(1) << pp
+	partitionCount := uint64(1) << vs.ring.PartitionBits()
 	ws := uint64(vs.workers)
 	f := func(p uint64, w uint64) {
-		pb := p << (64 - pp)
-		rb := pb + ((uint64(1) << (64 - pp)) / ws * w)
+		pb := p << rightwardPartitionShift
+		rb := pb + ((uint64(1) << rightwardPartitionShift) / ws * w)
 		var re uint64
 		if w+1 == ws {
-			if p+1 == ps {
+			if p+1 == partitionCount {
 				re = math.MaxUint64
 			} else {
-				re = ((p + 1) << (64 - pp)) - 1
+				re = ((p + 1) << rightwardPartitionShift) - 1
 			}
 		} else {
-			re = pb + ((uint64(1) << (64 - pp)) / ws * (w + 1)) - 1
+			re = pb + ((uint64(1) << rightwardPartitionShift) / ws * (w + 1)) - 1
 		}
 		vs.vlm.Discard(rb, re, _TSB_LOCAL_REMOVAL)
 	}
@@ -144,8 +144,8 @@ func (vs *DefaultValueStore) tombstoneDiscardPassLocalRemovals() {
 	wg.Add(int(ws))
 	for w := uint64(0); w < ws; w++ {
 		go func(w uint64) {
-			pb := ps / ws * w
-			for p := pb; p < ps; p++ {
+			pb := partitionCount / ws * w
+			for p := pb; p < partitionCount; p++ {
 				f(p, w)
 			}
 			for p := uint64(0); p < pb; p++ {
@@ -158,24 +158,24 @@ func (vs *DefaultValueStore) tombstoneDiscardPassLocalRemovals() {
 }
 
 func (vs *DefaultValueStore) tombstoneDiscardPassExpiredDeletions() {
-	pp := uint16(1)
+	rightwardPartitionShift := uint16(0)
 	if vs.ring != nil {
-		pp = vs.ring.PartitionPower()
+		rightwardPartitionShift = 64 - vs.ring.PartitionBits()
 	}
-	ps := uint64(1) << pp
+	partitionCount := uint64(1) << vs.ring.PartitionBits()
 	ws := uint64(vs.workers)
 	f := func(p uint64, w uint64, lr []localRemovalEntry) {
-		pb := p << (64 - pp)
-		rb := pb + ((uint64(1) << (64 - pp)) / ws * w)
+		pb := p << rightwardPartitionShift
+		rb := pb + ((uint64(1) << rightwardPartitionShift) / ws * w)
 		var re uint64
 		if w+1 == ws {
-			if p+1 == ps {
+			if p+1 == partitionCount {
 				re = math.MaxUint64
 			} else {
-				re = ((p + 1) << (64 - pp)) - 1
+				re = ((p + 1) << rightwardPartitionShift) - 1
 			}
 		} else {
-			re = pb + ((uint64(1) << (64 - pp)) / ws * (w + 1)) - 1
+			re = pb + ((uint64(1) << rightwardPartitionShift) / ws * (w + 1)) - 1
 		}
 		cutoff := (uint64(brimtime.TimeToUnixMicro(time.Now())) << _TSB_UTIL_BITS) - vs.tombstoneDiscardState.age
 		var more bool
@@ -205,8 +205,8 @@ func (vs *DefaultValueStore) tombstoneDiscardPassExpiredDeletions() {
 	for w := uint64(0); w < ws; w++ {
 		go func(w uint64) {
 			lr := vs.tombstoneDiscardState.localRemovals[w]
-			pb := ps / ws * w
-			for p := pb; p < ps; p++ {
+			pb := partitionCount / ws * w
+			for p := pb; p < partitionCount; p++ {
 				f(p, w, lr)
 			}
 			for p := uint64(0); p < pb; p++ {

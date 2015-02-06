@@ -208,30 +208,32 @@ func (vs *DefaultValueStore) outPullReplicationPass() {
 			vs.logDebug.Printf("out pull replication pass took %s", time.Now().Sub(begin))
 		}()
 	}
-	pp := vs.ring.PartitionPower()
-	ps := uint64(1) << pp
+	rightwardPartitionShift := 64 - vs.ring.PartitionBits()
+	partitionCount := uint64(1) << vs.ring.PartitionBits()
 	if vs.pullReplicationState.outIteration == math.MaxUint16 {
 		vs.pullReplicationState.outIteration = 0
 	} else {
 		vs.pullReplicationState.outIteration++
 	}
-	ringID := vs.ring.ID()
+	// TODO: Instead of using this version change thing to indicate ring
+	// changes, we should atomic store/load the vs.ring pointer.
+	ringVersion := vs.ring.Version()
 	ws := vs.pullReplicationState.outWorkers
 	for uint64(len(vs.pullReplicationState.outKTBFs)) < ws {
 		vs.pullReplicationState.outKTBFs = append(vs.pullReplicationState.outKTBFs, newKTBloomFilter(_GLH_BLOOM_FILTER_N, _GLH_BLOOM_FILTER_P, 0))
 	}
 	f := func(p uint64, w uint64, ktbf *ktBloomFilter) {
-		pb := p << (64 - pp)
-		rb := pb + ((uint64(1) << (64 - pp)) / ws * w)
+		pb := p << rightwardPartitionShift
+		rb := pb + ((uint64(1) << rightwardPartitionShift) / ws * w)
 		var re uint64
 		if w+1 == ws {
-			if p+1 == ps {
+			if p+1 == partitionCount {
 				re = math.MaxUint64
 			} else {
-				re = ((p + 1) << (64 - pp)) - 1
+				re = ((p + 1) << rightwardPartitionShift) - 1
 			}
 		} else {
-			re = pb + ((uint64(1) << (64 - pp)) / ws * (w + 1)) - 1
+			re = pb + ((uint64(1) << rightwardPartitionShift) / ws * (w + 1)) - 1
 		}
 		timestampbitsnow := uint64(brimtime.TimeToUnixMicro(time.Now())) << _TSB_UTIL_BITS
 		cutoff := timestampbitsnow - vs.replicationIgnoreRecent
@@ -245,15 +247,15 @@ func (vs *DefaultValueStore) outPullReplicationPass() {
 			if atomic.LoadUint32(&vs.pullReplicationState.outAbort) != 0 {
 				break
 			}
-			if vs.ring.ID() != ringID {
+			if vs.ring.Version() != ringVersion {
 				break
 			}
 			reThis := re
 			if more {
 				reThis = rb - 1
 			}
-			prm := vs.newOutPullReplicationMsg(ringID, uint32(p), cutoff, rbThis, reThis, ktbf)
-			if !vs.ring.MsgToOtherReplicas(ringID, uint32(p), prm) {
+			prm := vs.newOutPullReplicationMsg(ringVersion, uint32(p), cutoff, rbThis, reThis, ktbf)
+			if !vs.ring.MsgToOtherReplicas(ringVersion, uint32(p), prm) {
 				prm.Done()
 			}
 			if !more {
@@ -266,12 +268,12 @@ func (vs *DefaultValueStore) outPullReplicationPass() {
 	for w := uint64(0); w < ws; w++ {
 		go func(w uint64) {
 			ktbf := vs.pullReplicationState.outKTBFs[w]
-			pb := ps / ws * w
-			for p := pb; p < ps; p++ {
+			pb := partitionCount / ws * w
+			for p := pb; p < partitionCount; p++ {
 				if atomic.LoadUint32(&vs.pullReplicationState.outAbort) != 0 {
 					break
 				}
-				if vs.ring.ID() != ringID {
+				if vs.ring.Version() != ringVersion {
 					break
 				}
 				if vs.ring.Responsible(uint32(p)) {
@@ -282,7 +284,7 @@ func (vs *DefaultValueStore) outPullReplicationPass() {
 				if atomic.LoadUint32(&vs.pullReplicationState.outAbort) != 0 {
 					break
 				}
-				if vs.ring.ID() != ringID {
+				if vs.ring.Version() != ringVersion {
 					break
 				}
 				if vs.ring.Responsible(uint32(p)) {
@@ -345,10 +347,10 @@ func (vs *DefaultValueStore) newInPullReplicationMsg(r io.Reader, l uint64) (uin
 	return l, nil
 }
 
-func (vs *DefaultValueStore) newOutPullReplicationMsg(ringID uint64, partition uint32, cutoff uint64, rangeStart uint64, rangeStop uint64, ktbf *ktBloomFilter) *pullReplicationMsg {
+func (vs *DefaultValueStore) newOutPullReplicationMsg(ringVersion uint64, partition uint32, cutoff uint64, rangeStart uint64, rangeStop uint64, ktbf *ktBloomFilter) *pullReplicationMsg {
 	prm := <-vs.pullReplicationState.outMsgChan
-	binary.BigEndian.PutUint64(prm.header, vs.ring.NodeID())
-	binary.BigEndian.PutUint64(prm.header[8:], ringID)
+	binary.BigEndian.PutUint64(prm.header, vs.ring.LocalNodeID())
+	binary.BigEndian.PutUint64(prm.header[8:], ringVersion)
 	binary.BigEndian.PutUint32(prm.header[16:], partition)
 	binary.BigEndian.PutUint64(prm.header[20:], cutoff)
 	binary.BigEndian.PutUint64(prm.header[28:], rangeStart)
@@ -369,7 +371,7 @@ func (prm *pullReplicationMsg) nodeID() uint64 {
 	return binary.BigEndian.Uint64(prm.header)
 }
 
-func (prm *pullReplicationMsg) ringID() uint64 {
+func (prm *pullReplicationMsg) ringVersion() uint64 {
 	return binary.BigEndian.Uint64(prm.header[8:])
 }
 
