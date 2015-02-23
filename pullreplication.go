@@ -347,10 +347,10 @@ func (vs *DefaultValueStore) newInPullReplicationMsg(r io.Reader, l uint64) (uin
 	return l, nil
 }
 
-func (vs *DefaultValueStore) newOutPullReplicationMsg(ringVersion uint64, partition uint32, cutoff uint64, rangeStart uint64, rangeStop uint64, ktbf *ktBloomFilter) *pullReplicationMsg {
+func (vs *DefaultValueStore) newOutPullReplicationMsg(ringVersion int64, partition uint32, cutoff uint64, rangeStart uint64, rangeStop uint64, ktbf *ktBloomFilter) *pullReplicationMsg {
 	prm := <-vs.pullReplicationState.outMsgChan
 	binary.BigEndian.PutUint64(prm.header, vs.ring.LocalNodeID())
-	binary.BigEndian.PutUint64(prm.header[8:], ringVersion)
+	binary.BigEndian.PutUint64(prm.header[8:], uint64(ringVersion))
 	binary.BigEndian.PutUint32(prm.header[16:], partition)
 	binary.BigEndian.PutUint64(prm.header[20:], cutoff)
 	binary.BigEndian.PutUint64(prm.header[28:], rangeStart)
@@ -371,8 +371,8 @@ func (prm *pullReplicationMsg) nodeID() uint64 {
 	return binary.BigEndian.Uint64(prm.header)
 }
 
-func (prm *pullReplicationMsg) ringVersion() uint64 {
-	return binary.BigEndian.Uint64(prm.header[8:])
+func (prm *pullReplicationMsg) ringVersion() int64 {
+	return int64(binary.BigEndian.Uint64(prm.header[8:]))
 }
 
 func (prm *pullReplicationMsg) partition() uint32 {
