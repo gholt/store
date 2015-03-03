@@ -135,9 +135,7 @@ func (vs *DefaultValueStore) inPullReplication() {
 				}
 			}
 			if len(bsm.body) > 0 {
-				if !vs.ring.MsgToNode(nodeID, bsm) {
-					bsm.Done()
-				}
+				vs.ring.MsgToNode(nodeID, bsm)
 			}
 		}
 	}
@@ -255,9 +253,7 @@ func (vs *DefaultValueStore) outPullReplicationPass() {
 				reThis = rb - 1
 			}
 			prm := vs.newOutPullReplicationMsg(ringVersion, uint32(p), cutoff, rbThis, reThis, ktbf)
-			if !vs.ring.MsgToOtherReplicas(ringVersion, uint32(p), prm) {
-				prm.Done()
-			}
+			vs.ring.MsgToOtherReplicas(ringVersion, uint32(p), prm)
 			if !more {
 				break
 			}

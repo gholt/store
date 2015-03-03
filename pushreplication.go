@@ -186,9 +186,7 @@ func (vs *DefaultValueStore) outPushReplicationPass() {
 					bsm.Done()
 					break
 				}
-				if !vs.ring.MsgToOtherReplicas(ringVersion, p, bsm) {
-					bsm.Done()
-				}
+				vs.ring.MsgToOtherReplicas(ringVersion, p, bsm)
 			}
 			substart += pullSize
 			substop += pullSize

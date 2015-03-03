@@ -82,9 +82,7 @@ func (vs *DefaultValueStore) inBulkSet() {
 			body = body[28+l:]
 		}
 		if bsam != nil {
-			if !vs.ring.MsgToNode(bsm.nodeID(), bsam) {
-				bsam.Done()
-			}
+			vs.ring.MsgToNode(bsm.nodeID(), bsam)
 		}
 		vs.bulkSetState.inFreeMsgChan <- bsm
 	}
