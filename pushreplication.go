@@ -118,8 +118,8 @@ func (vs *DefaultValueStore) outPushReplicationPass() {
 	// TODO: Instead of using this version change thing to indicate ring
 	// changes, we should atomic store/load the vs.ring pointer.
 	ringVersion := vs.ring.Version()
-	rightwardPartitionShift := 64 - vs.ring.PartitionBits()
-	partitionCount := uint32(1) << vs.ring.PartitionBits()
+	rightwardPartitionShift := 64 - vs.ring.PartitionBitCount()
+	partitionCount := uint32(1) << vs.ring.PartitionBitCount()
 	for len(vs.pushReplicationState.outLists) < vs.pushReplicationState.outWorkers {
 		vs.pushReplicationState.outLists = append(vs.pushReplicationState.outLists, make([]uint64, 2*1024*1024))
 	}

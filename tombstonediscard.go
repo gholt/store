@@ -121,9 +121,9 @@ func (vs *DefaultValueStore) tombstoneDiscardPass() {
 func (vs *DefaultValueStore) tombstoneDiscardPassLocalRemovals() {
 	rightwardPartitionShift := uint16(0)
 	if vs.ring != nil {
-		rightwardPartitionShift = 64 - vs.ring.PartitionBits()
+		rightwardPartitionShift = 64 - vs.ring.PartitionBitCount()
 	}
-	partitionCount := uint64(1) << vs.ring.PartitionBits()
+	partitionCount := uint64(1) << vs.ring.PartitionBitCount()
 	ws := uint64(vs.workers)
 	f := func(p uint64, w uint64) {
 		pb := p << rightwardPartitionShift
@@ -160,9 +160,9 @@ func (vs *DefaultValueStore) tombstoneDiscardPassLocalRemovals() {
 func (vs *DefaultValueStore) tombstoneDiscardPassExpiredDeletions() {
 	rightwardPartitionShift := uint16(0)
 	if vs.ring != nil {
-		rightwardPartitionShift = 64 - vs.ring.PartitionBits()
+		rightwardPartitionShift = 64 - vs.ring.PartitionBitCount()
 	}
-	partitionCount := uint64(1) << vs.ring.PartitionBits()
+	partitionCount := uint64(1) << vs.ring.PartitionBitCount()
 	ws := uint64(vs.workers)
 	f := func(p uint64, w uint64, lr []localRemovalEntry) {
 		pb := p << rightwardPartitionShift

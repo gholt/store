@@ -63,7 +63,7 @@ func (vs *DefaultValueStore) inBulkSet() {
 		// TODO: Instead of using this version change thing to indicate ring
 		// changes, we should atomic store/load the vs.ring pointer.
 		ringVersion := vs.ring.Version()
-		rightwardPartitionShift := 64 - vs.ring.PartitionBits()
+		rightwardPartitionShift := 64 - vs.ring.PartitionBitCount()
 		for len(body) > 0 {
 			keyA := binary.BigEndian.Uint64(body)
 			keyB := binary.BigEndian.Uint64(body[8:])
@@ -73,7 +73,7 @@ func (vs *DefaultValueStore) inBulkSet() {
 			if bsam != nil && err == nil {
 				if ringVersion != vs.ring.Version() {
 					ringVersion = vs.ring.Version()
-					rightwardPartitionShift = 64 - vs.ring.PartitionBits()
+					rightwardPartitionShift = 64 - vs.ring.PartitionBitCount()
 				}
 				if vs.ring.Responsible(uint32(keyA >> rightwardPartitionShift)) {
 					bsam.add(keyA, keyB, timestampbits)

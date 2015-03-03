@@ -208,8 +208,8 @@ func (vs *DefaultValueStore) outPullReplicationPass() {
 			vs.logDebug.Printf("out pull replication pass took %s", time.Now().Sub(begin))
 		}()
 	}
-	rightwardPartitionShift := 64 - vs.ring.PartitionBits()
-	partitionCount := uint64(1) << vs.ring.PartitionBits()
+	rightwardPartitionShift := 64 - vs.ring.PartitionBitCount()
+	partitionCount := uint64(1) << vs.ring.PartitionBitCount()
 	if vs.pullReplicationState.outIteration == math.MaxUint16 {
 		vs.pullReplicationState.outIteration = 0
 	} else {
