@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/gholt/brimtime-v1"
-	"github.com/gholt/ring"
 )
 
 const _GLH_IN_PULL_REPLICATION_MSGS = 128
@@ -18,6 +17,7 @@ const _GLH_IN_PULL_REPLICATION_MSG_TIMEOUT = 300
 const _GLH_OUT_PULL_REPLICATION_MSGS = 128
 const _GLH_BLOOM_FILTER_N = 1000000
 const _GLH_BLOOM_FILTER_P = 0.001
+const _MSG_PULL_REPLICATION = 0x579c4bd162f045b3
 const pullReplicationMsgHeaderBytes = 44
 
 type pullReplicationState struct {
@@ -44,7 +44,7 @@ func (vs *DefaultValueStore) pullReplicationInit(cfg *config) {
 	vs.pullReplicationState.outWorkers = uint64(cfg.outPullReplicationWorkers)
 	vs.pullReplicationState.outIteration = uint16(cfg.rand.Uint32())
 	if vs.ring != nil {
-		vs.ring.SetMsgHandler(ring.MSG_PULL_REPLICATION, vs.newInPullReplicationMsg)
+		vs.ring.SetMsgHandler(_MSG_PULL_REPLICATION, vs.newInPullReplicationMsg)
 		vs.pullReplicationState.inMsgChan = make(chan *pullReplicationMsg, _GLH_IN_PULL_REPLICATION_MSGS)
 		vs.pullReplicationState.inFreeMsgChan = make(chan *pullReplicationMsg, _GLH_IN_PULL_REPLICATION_MSGS)
 		for i := 0; i < cap(vs.pullReplicationState.inFreeMsgChan); i++ {
@@ -355,8 +355,8 @@ func (vs *DefaultValueStore) newOutPullReplicationMsg(ringVersion int64, partiti
 	return prm
 }
 
-func (prm *pullReplicationMsg) MsgType() ring.MsgType {
-	return ring.MSG_PULL_REPLICATION
+func (prm *pullReplicationMsg) MsgType() uint64 {
+	return _MSG_PULL_REPLICATION
 }
 
 func (prm *pullReplicationMsg) MsgLength() uint64 {

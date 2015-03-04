@@ -4,8 +4,6 @@ import (
 	"encoding/binary"
 	"io"
 	"time"
-
-	"github.com/gholt/ring"
 )
 
 const _GLH_IN_BULK_SET_MSGS = 128
@@ -13,6 +11,7 @@ const _GLH_IN_BULK_SET_HANDLERS = 40
 const _GLH_OUT_BULK_SET_MSGS = 128
 const _GLH_OUT_BULK_SET_MSG_SIZE = 16 * 1024 * 1024
 const _GLH_IN_BULK_SET_MSG_TIMEOUT = 300
+const _MSG_BULK_SET = 0x44f58445991a4aa1
 
 type bulkSetState struct {
 	inMsgChan     chan *bulkSetMsg
@@ -28,7 +27,7 @@ type bulkSetMsg struct {
 
 func (vs *DefaultValueStore) bulkSetInit(cfg *config) {
 	if vs.ring != nil {
-		vs.ring.SetMsgHandler(ring.MSG_BULK_SET, vs.newInBulkSetMsg)
+		vs.ring.SetMsgHandler(_MSG_BULK_SET, vs.newInBulkSetMsg)
 		vs.bulkSetState.inMsgChan = make(chan *bulkSetMsg, _GLH_IN_BULK_SET_MSGS)
 		vs.bulkSetState.inFreeMsgChan = make(chan *bulkSetMsg, _GLH_IN_BULK_SET_MSGS)
 		for i := 0; i < cap(vs.bulkSetState.inFreeMsgChan); i++ {
@@ -160,8 +159,8 @@ func (vs *DefaultValueStore) newOutBulkSetMsg() *bulkSetMsg {
 	return bsm
 }
 
-func (bsm *bulkSetMsg) MsgType() ring.MsgType {
-	return ring.MSG_BULK_SET
+func (bsm *bulkSetMsg) MsgType() uint64 {
+	return _MSG_BULK_SET
 }
 
 func (bsm *bulkSetMsg) MsgLength() uint64 {
