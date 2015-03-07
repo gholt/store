@@ -168,7 +168,7 @@ type DefaultValueStore struct {
 	valuesFileSize          uint32
 	valuesFileReaders       int
 	checksumInterval        uint32
-	ring                    ring.MsgRing
+	msgRing                 ring.MsgRing
 	tombstoneDiscardState   tombstoneDiscardState
 	replicationIgnoreRecent uint64
 	pullReplicationState    pullReplicationState
@@ -249,7 +249,7 @@ func New(opts ...func(*config)) *DefaultValueStore {
 		valuesFileSize:          uint32(cfg.valuesFileSize),
 		valuesFileReaders:       cfg.valuesFileReaders,
 		checksumInterval:        uint32(cfg.checksumInterval),
-		ring:                    cfg.ring,
+		msgRing:                 cfg.msgRing,
 	}
 	vs.freeableVMChans = make([]chan *valuesMem, vs.workers)
 	for i := 0; i < cap(vs.freeableVMChans); i++ {

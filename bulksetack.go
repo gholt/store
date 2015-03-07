@@ -25,8 +25,8 @@ type bulkSetAckMsg struct {
 }
 
 func (vs *DefaultValueStore) bulkSetAckInit(cfg *config) {
-	if vs.ring != nil {
-		vs.ring.SetMsgHandler(_MSG_BULK_SET_ACK, vs.newInBulkSetAckMsg)
+	if vs.msgRing != nil {
+		vs.msgRing.SetMsgHandler(_MSG_BULK_SET_ACK, vs.newInBulkSetAckMsg)
 		vs.bulkSetAckState.inMsgChan = make(chan *bulkSetAckMsg, _GLH_IN_BULK_SET_ACK_MSGS)
 		vs.bulkSetAckState.inFreeMsgChan = make(chan *bulkSetAckMsg, _GLH_IN_BULK_SET_ACK_MSGS)
 		for i := 0; i < cap(vs.bulkSetAckState.inFreeMsgChan); i++ {
@@ -48,19 +48,18 @@ func (vs *DefaultValueStore) bulkSetAckInit(cfg *config) {
 func (vs *DefaultValueStore) inBulkSetAck() {
 	for {
 		bsam := <-vs.bulkSetAckState.inMsgChan
-		// TODO: Instead of using this version change thing to indicate ring
-		// changes, we should atomic store/load the vs.ring pointer.
-		version := vs.ring.Version()
-		rightwardPartitionShift := 64 - vs.ring.PartitionBitCount()
+		ring := vs.msgRing.Ring()
+		version := ring.Version()
+		rightwardPartitionShift := 64 - ring.PartitionBitCount()
 		b := bsam.body
 		l := len(b)
 		for o := 0; o < l; o += 24 {
-			if version != vs.ring.Version() {
-				version = vs.ring.Version()
-				rightwardPartitionShift = 64 - vs.ring.PartitionBitCount()
+			if version != ring.Version() {
+				version = ring.Version()
+				rightwardPartitionShift = 64 - ring.PartitionBitCount()
 			}
 			keyA := binary.BigEndian.Uint64(b[o:])
-			if !vs.ring.Responsible(uint32(keyA >> rightwardPartitionShift)) {
+			if !ring.Responsible(uint32(keyA >> rightwardPartitionShift)) {
 				vs.write(keyA, binary.BigEndian.Uint64(b[o+8:]), binary.BigEndian.Uint64(b[o+16:])|_TSB_LOCAL_REMOVAL, nil)
 			}
 		}

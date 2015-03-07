@@ -37,7 +37,7 @@ type config struct {
 	valuesFileSize             int
 	valuesFileReaders          int
 	checksumInterval           int
-	ring                       ring.MsgRing
+	msgRing                    ring.MsgRing
 	replicationIgnoreRecent    int
 	compactionInterval         int
 	compactionThreshold        float64
@@ -480,7 +480,7 @@ func OptChecksumInterval(bytes int) func(*config) {
 // to other nodes.
 func OptMsgRing(r ring.MsgRing) func(*config) {
 	return func(cfg *config) {
-		cfg.ring = r
+		cfg.msgRing = r
 	}
 }
 

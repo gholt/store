@@ -43,8 +43,8 @@ func (vs *DefaultValueStore) pullReplicationInit(cfg *config) {
 	vs.pullReplicationState.outNotifyChan = make(chan *backgroundNotification, 1)
 	vs.pullReplicationState.outWorkers = uint64(cfg.outPullReplicationWorkers)
 	vs.pullReplicationState.outIteration = uint16(cfg.rand.Uint32())
-	if vs.ring != nil {
-		vs.ring.SetMsgHandler(_MSG_PULL_REPLICATION, vs.newInPullReplicationMsg)
+	if vs.msgRing != nil {
+		vs.msgRing.SetMsgHandler(_MSG_PULL_REPLICATION, vs.newInPullReplicationMsg)
 		vs.pullReplicationState.inMsgChan = make(chan *pullReplicationMsg, _GLH_IN_PULL_REPLICATION_MSGS)
 		vs.pullReplicationState.inFreeMsgChan = make(chan *pullReplicationMsg, _GLH_IN_PULL_REPLICATION_MSGS)
 		for i := 0; i < cap(vs.pullReplicationState.inFreeMsgChan); i++ {
@@ -135,7 +135,7 @@ func (vs *DefaultValueStore) inPullReplication() {
 				}
 			}
 			if len(bsm.body) > 0 {
-				vs.ring.MsgToNode(nodeID, bsm)
+				vs.msgRing.MsgToNode(nodeID, bsm)
 			}
 		}
 	}
@@ -197,7 +197,7 @@ func (vs *DefaultValueStore) outPullReplicationLauncher() {
 }
 
 func (vs *DefaultValueStore) outPullReplicationPass() {
-	if vs.ring == nil {
+	if vs.msgRing == nil {
 		return
 	}
 	if vs.logDebug != nil {
@@ -206,16 +206,15 @@ func (vs *DefaultValueStore) outPullReplicationPass() {
 			vs.logDebug.Printf("out pull replication pass took %s", time.Now().Sub(begin))
 		}()
 	}
-	rightwardPartitionShift := 64 - vs.ring.PartitionBitCount()
-	partitionCount := uint64(1) << vs.ring.PartitionBitCount()
+	ring := vs.msgRing.Ring()
+	rightwardPartitionShift := 64 - ring.PartitionBitCount()
+	partitionCount := uint64(1) << ring.PartitionBitCount()
 	if vs.pullReplicationState.outIteration == math.MaxUint16 {
 		vs.pullReplicationState.outIteration = 0
 	} else {
 		vs.pullReplicationState.outIteration++
 	}
-	// TODO: Instead of using this version change thing to indicate ring
-	// changes, we should atomic store/load the vs.ring pointer.
-	ringVersion := vs.ring.Version()
+	ringVersion := ring.Version()
 	ws := vs.pullReplicationState.outWorkers
 	for uint64(len(vs.pullReplicationState.outKTBFs)) < ws {
 		vs.pullReplicationState.outKTBFs = append(vs.pullReplicationState.outKTBFs, newKTBloomFilter(_GLH_BLOOM_FILTER_N, _GLH_BLOOM_FILTER_P, 0))
@@ -245,7 +244,7 @@ func (vs *DefaultValueStore) outPullReplicationPass() {
 			if atomic.LoadUint32(&vs.pullReplicationState.outAbort) != 0 {
 				break
 			}
-			if vs.ring.Version() != ringVersion {
+			if vs.msgRing.Ring().Version() != ringVersion {
 				break
 			}
 			reThis := re
@@ -253,7 +252,7 @@ func (vs *DefaultValueStore) outPullReplicationPass() {
 				reThis = rb - 1
 			}
 			prm := vs.newOutPullReplicationMsg(ringVersion, uint32(p), cutoff, rbThis, reThis, ktbf)
-			vs.ring.MsgToOtherReplicas(ringVersion, uint32(p), prm)
+			vs.msgRing.MsgToOtherReplicas(ringVersion, uint32(p), prm)
 			if !more {
 				break
 			}
@@ -269,10 +268,10 @@ func (vs *DefaultValueStore) outPullReplicationPass() {
 				if atomic.LoadUint32(&vs.pullReplicationState.outAbort) != 0 {
 					break
 				}
-				if vs.ring.Version() != ringVersion {
+				if ring.Version() != ringVersion {
 					break
 				}
-				if vs.ring.Responsible(uint32(p)) {
+				if ring.Responsible(uint32(p)) {
 					f(p, w, ktbf)
 				}
 			}
@@ -280,10 +279,10 @@ func (vs *DefaultValueStore) outPullReplicationPass() {
 				if atomic.LoadUint32(&vs.pullReplicationState.outAbort) != 0 {
 					break
 				}
-				if vs.ring.Version() != ringVersion {
+				if ring.Version() != ringVersion {
 					break
 				}
-				if vs.ring.Responsible(uint32(p)) {
+				if ring.Responsible(uint32(p)) {
 					f(p, w, ktbf)
 				}
 			}
@@ -345,7 +344,7 @@ func (vs *DefaultValueStore) newInPullReplicationMsg(r io.Reader, l uint64) (uin
 
 func (vs *DefaultValueStore) newOutPullReplicationMsg(ringVersion int64, partition uint32, cutoff uint64, rangeStart uint64, rangeStop uint64, ktbf *ktBloomFilter) *pullReplicationMsg {
 	prm := <-vs.pullReplicationState.outMsgChan
-	binary.BigEndian.PutUint64(prm.header, vs.ring.LocalNode().NodeID())
+	binary.BigEndian.PutUint64(prm.header, vs.msgRing.Ring().LocalNode().ID)
 	binary.BigEndian.PutUint64(prm.header[8:], uint64(ringVersion))
 	binary.BigEndian.PutUint32(prm.header[16:], partition)
 	binary.BigEndian.PutUint64(prm.header[20:], cutoff)

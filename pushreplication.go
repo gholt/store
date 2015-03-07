@@ -22,7 +22,7 @@ type pushReplicationState struct {
 func (vs *DefaultValueStore) pushReplicationInit(cfg *config) {
 	vs.pushReplicationState.outWorkers = cfg.outPushReplicationWorkers
 	vs.pushReplicationState.outInterval = cfg.outPushReplicationInterval
-	if vs.ring != nil {
+	if vs.msgRing != nil {
 		vs.pushReplicationState.outMsgChan = make(chan *pullReplicationMsg, _GLH_OUT_PULL_REPLICATION_MSGS)
 	}
 	vs.pushReplicationState.outNotifyChan = make(chan *backgroundNotification, 1)
@@ -106,7 +106,7 @@ func (vs *DefaultValueStore) outPushReplicationLauncher() {
 }
 
 func (vs *DefaultValueStore) outPushReplicationPass() {
-	if vs.ring == nil {
+	if vs.msgRing == nil {
 		return
 	}
 	if vs.logDebug != nil {
@@ -115,11 +115,10 @@ func (vs *DefaultValueStore) outPushReplicationPass() {
 			vs.logDebug.Printf("out push replication pass took %s", time.Now().Sub(begin))
 		}()
 	}
-	// TODO: Instead of using this version change thing to indicate ring
-	// changes, we should atomic store/load the vs.ring pointer.
-	ringVersion := vs.ring.Version()
-	rightwardPartitionShift := 64 - vs.ring.PartitionBitCount()
-	partitionCount := uint32(1) << vs.ring.PartitionBitCount()
+	ring := vs.msgRing.Ring()
+	ringVersion := ring.Version()
+	rightwardPartitionShift := 64 - ring.PartitionBitCount()
+	partitionCount := uint32(1) << ring.PartitionBitCount()
 	for len(vs.pushReplicationState.outLists) < vs.pushReplicationState.outWorkers {
 		vs.pushReplicationState.outLists = append(vs.pushReplicationState.outLists, make([]uint64, 2*1024*1024))
 	}
@@ -164,7 +163,7 @@ func (vs *DefaultValueStore) outPushReplicationPass() {
 			}
 			if len(list) > 0 {
 				bsm := vs.newOutBulkSetMsg()
-				binary.BigEndian.PutUint64(bsm.header, vs.ring.LocalNode().NodeID())
+				binary.BigEndian.PutUint64(bsm.header, ring.LocalNode().ID)
 				var timestampbits uint64
 				var err error
 				for i := 0; i < len(list); i += 2 {
@@ -186,7 +185,7 @@ func (vs *DefaultValueStore) outPushReplicationPass() {
 					bsm.Done()
 					break
 				}
-				vs.ring.MsgToOtherReplicas(ringVersion, p, bsm)
+				vs.msgRing.MsgToOtherReplicas(ringVersion, p, bsm)
 			}
 			substart += pullSize
 			substop += pullSize
@@ -204,18 +203,18 @@ func (vs *DefaultValueStore) outPushReplicationPass() {
 			valbuf := vs.pushReplicationState.outValBufs[g]
 			spg := uint32(sp + g)
 			for p := spg; p < partitionCount && atomic.LoadUint32(&vs.pushReplicationState.outAbort) == 0; p += uint32(vs.pushReplicationState.outWorkers) {
-				if vs.ring.Version() != ringVersion {
+				if ring.Version() != ringVersion {
 					break
 				}
-				if !vs.ring.Responsible(p) {
+				if !ring.Responsible(p) {
 					f(p, list, valbuf)
 				}
 			}
 			for p := uint32(g); p < spg && atomic.LoadUint32(&vs.pushReplicationState.outAbort) == 0; p += uint32(vs.pushReplicationState.outWorkers) {
-				if vs.ring.Version() != ringVersion {
+				if vs.msgRing.Ring().Version() != ringVersion {
 					break
 				}
-				if !vs.ring.Responsible(p) {
+				if !ring.Responsible(p) {
 					f(p, list, valbuf)
 				}
 			}
