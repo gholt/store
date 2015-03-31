@@ -163,7 +163,7 @@ func (vs *DefaultValueStore) outPushReplicationPass() {
 			}
 			if len(list) > 0 {
 				bsm := vs.newOutBulkSetMsg()
-				binary.BigEndian.PutUint64(bsm.header, ring.LocalNode().ID)
+				binary.BigEndian.PutUint64(bsm.header, ring.LocalNode().ID())
 				var timestampbits uint64
 				var err error
 				for i := 0; i < len(list); i += 2 {

@@ -344,7 +344,7 @@ func (vs *DefaultValueStore) newInPullReplicationMsg(r io.Reader, l uint64) (uin
 
 func (vs *DefaultValueStore) newOutPullReplicationMsg(ringVersion int64, partition uint32, cutoff uint64, rangeStart uint64, rangeStop uint64, ktbf *ktBloomFilter) *pullReplicationMsg {
 	prm := <-vs.pullReplicationState.outMsgChan
-	binary.BigEndian.PutUint64(prm.header, vs.msgRing.Ring().LocalNode().ID)
+	binary.BigEndian.PutUint64(prm.header, vs.msgRing.Ring().LocalNode().ID())
 	binary.BigEndian.PutUint64(prm.header[8:], uint64(ringVersion))
 	binary.BigEndian.PutUint32(prm.header[16:], partition)
 	binary.BigEndian.PutUint64(prm.header[20:], cutoff)
