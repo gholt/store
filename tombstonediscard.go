@@ -6,7 +6,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/gholt/brimtime-v1"
+	"gopkg.in/gholt/brimtime.v1"
 )
 
 const _GLH_TOMBSTONE_DISCARD_BATCH_SIZE = 1024 * 1024

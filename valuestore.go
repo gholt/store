@@ -75,10 +75,10 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/gholt/brimutil-v1"
 	"github.com/gholt/ring"
 	"github.com/gholt/valuelocmap"
 	"github.com/spaolacci/murmur3"
+	"gopkg.in/gholt/brimutil.v1"
 )
 
 const (

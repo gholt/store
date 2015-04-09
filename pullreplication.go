@@ -8,7 +8,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/gholt/brimtime-v1"
+	"gopkg.in/gholt/brimtime.v1"
 )
 
 const _GLH_IN_PULL_REPLICATION_MSGS = 128

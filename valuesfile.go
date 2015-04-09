@@ -10,8 +10,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/gholt/brimutil-v1"
 	"github.com/spaolacci/murmur3"
+	"gopkg.in/gholt/brimutil.v1"
 )
 
 type valuesFile struct {
