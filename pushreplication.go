@@ -148,7 +148,7 @@ func (vs *DefaultValueStore) outPushReplicationPass() {
 		substop := start + (pullSize - 1)
 		for atomic.LoadUint32(&vs.pushReplicationState.outAbort) == 0 {
 			l := int64(_GLH_OUT_BULK_SET_MSG_SIZE)
-			vs.vlm.ScanCallback(substart, substop, func(keyA uint64, keyB uint64, timestampbits uint64, length uint32) {
+			vs.vlm.DeprecatedScanCallback(substart, substop, func(keyA uint64, keyB uint64, timestampbits uint64, length uint32) {
 				if l > 0 {
 					if timestampbits&_TSB_LOCAL_REMOVAL == 0 && timestampbits < cutoff && (timestampbits&_TSB_DELETION == 0 || timestampbits >= tombstoneCutoff) {
 						list = append(list, keyA, keyB)

@@ -185,7 +185,7 @@ func (vs *DefaultValueStore) tombstoneDiscardPassExpiredDeletions() {
 		var more bool
 		for {
 			lri := 0
-			rb, more = vs.vlm.ScanCallbackV2(rb, re, _TSB_DELETION, _TSB_LOCAL_REMOVAL, cutoff, _GLH_TOMBSTONE_DISCARD_BATCH_SIZE, func(keyA uint64, keyB uint64, timestampbits uint64, length uint32) {
+			rb, more = vs.vlm.ScanCallback(rb, re, _TSB_DELETION, _TSB_LOCAL_REMOVAL, cutoff, _GLH_TOMBSTONE_DISCARD_BATCH_SIZE, func(keyA uint64, keyB uint64, timestampbits uint64, length uint32) {
 				e := &lr[lri]
 				e.keyA = keyA
 				e.keyB = keyB

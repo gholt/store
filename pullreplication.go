@@ -102,7 +102,7 @@ func (vs *DefaultValueStore) inPullReplication() {
 		tombstoneCutoff := (uint64(brimtime.TimeToUnixMicro(time.Now())) << _TSB_UTIL_BITS) - vs.tombstoneDiscardState.age
 		ktbf := prm.ktBloomFilter()
 		l := int64(_GLH_OUT_BULK_SET_MSG_SIZE)
-		vs.vlm.ScanCallbackV2(prm.rangeStart(), prm.rangeStop(), 0, _TSB_LOCAL_REMOVAL, cutoff, uint64(len(k)), func(keyA uint64, keyB uint64, timestampbits uint64, length uint32) {
+		vs.vlm.ScanCallback(prm.rangeStart(), prm.rangeStop(), 0, _TSB_LOCAL_REMOVAL, cutoff, uint64(len(k)), func(keyA uint64, keyB uint64, timestampbits uint64, length uint32) {
 			if l > 0 {
 				if timestampbits&_TSB_DELETION == 0 || timestampbits >= tombstoneCutoff {
 					if !ktbf.mayHave(keyA, keyB, timestampbits) {
@@ -239,7 +239,7 @@ func (vs *DefaultValueStore) outPullReplicationPass() {
 		for {
 			rbThis := rb
 			ktbf.reset(vs.pullReplicationState.outIteration)
-			rb, more = vs.vlm.ScanCallbackV2(rb, re, 0, _TSB_LOCAL_REMOVAL, cutoff, _GLH_BLOOM_FILTER_N, func(keyA uint64, keyB uint64, timestampbits uint64, length uint32) {
+			rb, more = vs.vlm.ScanCallback(rb, re, 0, _TSB_LOCAL_REMOVAL, cutoff, _GLH_BLOOM_FILTER_N, func(keyA uint64, keyB uint64, timestampbits uint64, length uint32) {
 				ktbf.add(keyA, keyB, timestampbits)
 			})
 			if atomic.LoadUint32(&vs.pullReplicationState.outAbort) != 0 {
