@@ -118,106 +118,131 @@ func (vs *DefaultValueStore) tombstoneDiscardPass() {
 	vs.tombstoneDiscardPassExpiredDeletions()
 }
 
+// tombstoneDiscardPassLocalRemovals removes all valuelocmap entries marked
+// with the _TSB_LOCAL_REMOVAL bit. These are entries that other routines have
+// indicated are no longer needed in memory.
 func (vs *DefaultValueStore) tombstoneDiscardPassLocalRemovals() {
-	rightwardPartitionShift := uint16(0)
-	partitionCount := uint64(1)
+	// Each worker will perform a pass on a subsection of each partition's key
+	// space. Additionally, each worker will start their work on different
+	// partition. This reduces contention for a given section of the
+	// valuelocmap.
+	partitionShift := uint16(0)
+	partitionMax := uint64(0)
 	if vs.msgRing != nil {
 		pbc := vs.msgRing.Ring().PartitionBitCount()
-		rightwardPartitionShift = 64 - pbc
-		partitionCount = uint64(1) << pbc
+		partitionShift = 64 - pbc
+		partitionMax = (uint64(1) << pbc) - 1
 	}
-	ws := uint64(vs.workers)
-	f := func(p uint64, w uint64) {
-		pb := p << rightwardPartitionShift
-		rb := pb + ((uint64(1) << rightwardPartitionShift) / ws * w)
-		var re uint64
-		if w+1 == ws {
-			if p+1 == partitionCount {
-				re = math.MaxUint64
-			} else {
-				re = ((p + 1) << rightwardPartitionShift) - 1
-			}
+	workerMax := uint64(vs.workers - 1)
+	workerPartitionPiece := (uint64(1) << partitionShift) / (workerMax + 1)
+	work := func(partition uint64, worker uint64) {
+		partitionOnLeftBits := partition << partitionShift
+		rangeBegin := partitionOnLeftBits + (workerPartitionPiece * worker)
+		var rangeEnd uint64
+		// A little bit of complexity here to handle where the more general
+		// expressions would have overflow issues.
+		if worker != workerMax {
+			rangeEnd = partitionOnLeftBits + (workerPartitionPiece * (worker + 1)) - 1
 		} else {
-			re = pb + ((uint64(1) << rightwardPartitionShift) / ws * (w + 1)) - 1
+			if partition != partitionMax {
+				rangeEnd = ((partition + 1) << partitionShift) - 1
+			} else {
+				rangeEnd = math.MaxUint64
+			}
 		}
-		vs.vlm.Discard(rb, re, _TSB_LOCAL_REMOVAL)
+		vs.vlm.Discard(rangeBegin, rangeEnd, _TSB_LOCAL_REMOVAL)
 	}
 	wg := &sync.WaitGroup{}
-	wg.Add(int(ws))
-	for w := uint64(0); w < ws; w++ {
-		go func(w uint64) {
-			pb := partitionCount / ws * w
-			for p := pb; p < partitionCount; p++ {
-				f(p, w)
+	wg.Add(int(workerMax + 1))
+	workerPartitionOffset := (partitionMax + 1) / (workerMax + 1)
+	for worker := uint64(0); worker <= workerMax; worker++ {
+		go func(worker uint64) {
+			partitionBegin := workerPartitionOffset * worker
+			for partition := partitionBegin; partition <= partitionMax; partition++ {
+				work(partition, worker)
 			}
-			for p := uint64(0); p < pb; p++ {
-				f(p, w)
+			for partition := uint64(0); partition < partitionBegin; partition++ {
+				work(partition, worker)
 			}
 			wg.Done()
-		}(w)
+		}(worker)
 	}
 	wg.Wait()
 }
 
+// tombstoneDiscardPassExpiredDeletions scans for valuelocmap entries marked
+// with _TSB_DELETION (but not _TSB_LOCAL_REMOVAL) that are older than the
+// maximum tombstone age and marks them for _TSB_LOCAL_REMOVAL.
 func (vs *DefaultValueStore) tombstoneDiscardPassExpiredDeletions() {
-	rightwardPartitionShift := uint16(0)
-	partitionCount := uint64(1)
+	// Each worker will perform a pass on a subsection of each partition's key
+	// space. Additionally, each worker will start their work on different
+	// partition. This reduces contention for a given section of the
+	// valuelocmap.
+	partitionShift := uint16(0)
+	partitionMax := uint64(0)
 	if vs.msgRing != nil {
 		pbc := vs.msgRing.Ring().PartitionBitCount()
-		rightwardPartitionShift = 64 - pbc
-		partitionCount = uint64(1) << pbc
+		partitionShift = 64 - pbc
+		partitionMax = (uint64(1) << pbc) - 1
 	}
-	ws := uint64(vs.workers)
-	f := func(p uint64, w uint64, lr []localRemovalEntry) {
-		pb := p << rightwardPartitionShift
-		rb := pb + ((uint64(1) << rightwardPartitionShift) / ws * w)
-		var re uint64
-		if w+1 == ws {
-			if p+1 == partitionCount {
-				re = math.MaxUint64
-			} else {
-				re = ((p + 1) << rightwardPartitionShift) - 1
-			}
+	workerMax := uint64(vs.workers - 1)
+	workerPartitionPiece := (uint64(1) << partitionShift) / (workerMax + 1)
+	work := func(partition uint64, worker uint64, localRemovals []localRemovalEntry) {
+		partitionOnLeftBits := partition << partitionShift
+		rangeBegin := partitionOnLeftBits + (workerPartitionPiece * worker)
+		var rangeEnd uint64
+		// A little bit of complexity here to handle where the more general
+		// expressions would have overflow issues.
+		if worker != workerMax {
+			rangeEnd = partitionOnLeftBits + (workerPartitionPiece * (worker + 1)) - 1
 		} else {
-			re = pb + ((uint64(1) << rightwardPartitionShift) / ws * (w + 1)) - 1
+			if partition != partitionMax {
+				rangeEnd = ((partition + 1) << partitionShift) - 1
+			} else {
+				rangeEnd = math.MaxUint64
+			}
 		}
 		cutoff := (uint64(brimtime.TimeToUnixMicro(time.Now())) << _TSB_UTIL_BITS) - vs.tombstoneDiscardState.age
-		var more bool
-		for {
-			lri := 0
-			rb, more = vs.vlm.ScanCallback(rb, re, _TSB_DELETION, _TSB_LOCAL_REMOVAL, cutoff, _GLH_TOMBSTONE_DISCARD_BATCH_SIZE, func(keyA uint64, keyB uint64, timestampbits uint64, length uint32) {
-				e := &lr[lri]
+		more := true
+		for more {
+			localRemovalsIndex := 0
+			// Since we can't modify what we're scanning while we're scanning
+			// (lock contention) we instead record in localRemovals what to
+			// modify after the scan.
+			rangeBegin, more = vs.vlm.ScanCallback(rangeBegin, rangeEnd, _TSB_DELETION, _TSB_LOCAL_REMOVAL, cutoff, _GLH_TOMBSTONE_DISCARD_BATCH_SIZE, func(keyA uint64, keyB uint64, timestampbits uint64, length uint32) {
+				e := &localRemovals[localRemovalsIndex]
 				e.keyA = keyA
 				e.keyB = keyB
 				e.timestampbits = timestampbits
-				lri++
+				localRemovalsIndex++
 			})
-			for i := 0; i < lri; i++ {
-				e := &lr[i]
+			for i := 0; i < localRemovalsIndex; i++ {
+				e := &localRemovals[i]
+				// These writes go through the entire system, so they're
+				// persisted and therefore restored on restarts.
 				vs.write(e.keyA, e.keyB, e.timestampbits|_TSB_LOCAL_REMOVAL, nil)
-			}
-			if !more {
-				break
 			}
 		}
 	}
-	for len(vs.tombstoneDiscardState.localRemovals) < int(ws) {
+	// To avoid memory churn, the localRemovals scratchpads are allocated just
+	// once and passed in to the workers.
+	for len(vs.tombstoneDiscardState.localRemovals) <= int(workerMax) {
 		vs.tombstoneDiscardState.localRemovals = append(vs.tombstoneDiscardState.localRemovals, make([]localRemovalEntry, _GLH_TOMBSTONE_DISCARD_BATCH_SIZE))
 	}
 	wg := &sync.WaitGroup{}
-	wg.Add(int(ws))
-	for w := uint64(0); w < ws; w++ {
-		go func(w uint64) {
-			lr := vs.tombstoneDiscardState.localRemovals[w]
-			pb := partitionCount / ws * w
-			for p := pb; p < partitionCount; p++ {
-				f(p, w, lr)
+	wg.Add(int(workerMax + 1))
+	for worker := uint64(0); worker <= workerMax; worker++ {
+		go func(worker uint64) {
+			localRemovals := vs.tombstoneDiscardState.localRemovals[worker]
+			partitionBegin := (partitionMax + 1) / (workerMax + 1) * worker
+			for partition := partitionBegin; partition <= partitionMax; partition++ {
+				work(partition, worker, localRemovals)
 			}
-			for p := uint64(0); p < pb; p++ {
-				f(p, w, lr)
+			for partition := uint64(0); partition < partitionBegin; partition++ {
+				work(partition, worker, localRemovals)
 			}
 			wg.Done()
-		}(w)
+		}(worker)
 	}
 	wg.Wait()
 }
