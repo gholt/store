@@ -206,9 +206,9 @@ func (vs *DefaultValueStore) tombstoneDiscardPassExpiredDeletions() {
 		more := true
 		for more {
 			localRemovalsIndex := 0
-			// Since we can't modify what we're scanning while we're scanning
-			// (lock contention) we instead record in localRemovals what to
-			// modify after the scan.
+			// Since we shouldn't try to modify what we're scanning while we're
+			// scanning (lock contention) we instead record in localRemovals
+			// what to modify after the scan.
 			rangeBegin, more = vs.vlm.ScanCallback(rangeBegin, rangeEnd, _TSB_DELETION, _TSB_LOCAL_REMOVAL, cutoff, _GLH_TOMBSTONE_DISCARD_BATCH_SIZE, func(keyA uint64, keyB uint64, timestampbits uint64, length uint32) {
 				e := &localRemovals[localRemovalsIndex]
 				e.keyA = keyA
@@ -235,11 +235,15 @@ func (vs *DefaultValueStore) tombstoneDiscardPassExpiredDeletions() {
 		go func(worker uint64) {
 			localRemovals := vs.tombstoneDiscardState.localRemovals[worker]
 			partitionBegin := (partitionMax + 1) / (workerMax + 1) * worker
-			for partition := partitionBegin; partition <= partitionMax; partition++ {
+			for partition := partitionBegin; ; {
 				work(partition, worker, localRemovals)
-			}
-			for partition := uint64(0); partition < partitionBegin; partition++ {
-				work(partition, worker, localRemovals)
+				partition++
+				if partition == partitionBegin {
+					break
+				}
+				if partition > partitionMax {
+					partition = 0
+				}
 			}
 			wg.Done()
 		}(worker)

@@ -117,12 +117,15 @@ func (vs *DefaultValueStore) outPushReplicationPass() {
 	}
 	ring := vs.msgRing.Ring()
 	ringVersion := ring.Version()
-	rightwardPartitionShift := 64 - ring.PartitionBitCount()
-	partitionCount := uint32(1) << ring.PartitionBitCount()
-	for len(vs.pushReplicationState.outLists) < vs.pushReplicationState.outWorkers {
+	partitionShift := 64 - ring.PartitionBitCount()
+	partitionMax := uint32(1) << ring.PartitionBitCount()
+	workerMax := uint64(vs.pushReplicationState.outWorkers - 1)
+	// To avoid memory churn, the scratchpad areas are allocated just once and
+	// passed in to the workers.
+	for len(vs.pushReplicationState.outLists) < int(workerMax) {
 		vs.pushReplicationState.outLists = append(vs.pushReplicationState.outLists, make([]uint64, 2*1024*1024))
 	}
-	for len(vs.pushReplicationState.outValBufs) < vs.pushReplicationState.outWorkers {
+	for len(vs.pushReplicationState.outValBufs) < int(workerMax) {
 		vs.pushReplicationState.outValBufs = append(vs.pushReplicationState.outValBufs, make([]byte, vs.maxValueSize))
 	}
 	// GLH TODO: Redo this to split up work like tombstoneDiscard does. Also,
@@ -133,11 +136,11 @@ func (vs *DefaultValueStore) outPushReplicationPass() {
 	// worth the simplicity and (hopefully) overall speed increase. Might just
 	// do one area scan per interval to give a better chance of getting acked
 	// before scanning the same area again; meaning less or no resends.
-	f := func(p uint32, list []uint64, valbuf []byte) {
+	work := func(p uint32, worker uint64, list []uint64, valbuf []byte) {
 		list = list[:0]
-		start := uint64(p) << uint64(rightwardPartitionShift)
-		stop := start + (uint64(1)<<rightwardPartitionShift - 1)
-		pullSize := uint64(1) << rightwardPartitionShift
+		start := uint64(p) << uint64(partitionShift)
+		stop := start + (uint64(1)<<partitionShift - 1)
+		pullSize := uint64(1) << partitionShift
 		for vs.vlm.ScanCount(start, start+(pullSize-1), _GLH_BLOOM_FILTER_N) >= _GLH_BLOOM_FILTER_N {
 			pullSize /= 2
 		}
@@ -194,32 +197,30 @@ func (vs *DefaultValueStore) outPushReplicationPass() {
 			}
 		}
 	}
-	sp := uint32(vs.rand.Intn(int(partitionCount)))
 	wg := &sync.WaitGroup{}
-	wg.Add(vs.pushReplicationState.outWorkers)
-	for g := 0; g < vs.pushReplicationState.outWorkers; g++ {
-		go func(g uint32) {
-			list := vs.pushReplicationState.outLists[g]
-			valbuf := vs.pushReplicationState.outValBufs[g]
-			spg := uint32(sp + g)
-			for p := spg; p < partitionCount && atomic.LoadUint32(&vs.pushReplicationState.outAbort) == 0; p += uint32(vs.pushReplicationState.outWorkers) {
-				if ring.Version() != ringVersion {
-					break
-				}
-				if !ring.Responsible(p) {
-					f(p, list, valbuf)
-				}
-			}
-			for p := uint32(g); p < spg && atomic.LoadUint32(&vs.pushReplicationState.outAbort) == 0; p += uint32(vs.pushReplicationState.outWorkers) {
+	wg.Add(int(workerMax + 1))
+	for worker := uint64(0); worker <= workerMax; worker++ {
+		go func(worker uint64) {
+			list := vs.pushReplicationState.outLists[worker]
+			valbuf := vs.pushReplicationState.outValBufs[worker]
+			partitionBegin := (partitionMax + 1) / uint32(workerMax+1) * uint32(worker)
+			for partition := partitionBegin; ; {
 				if vs.msgRing.Ring().Version() != ringVersion {
 					break
 				}
-				if !ring.Responsible(p) {
-					f(p, list, valbuf)
+				if !ring.Responsible(partition) {
+					work(partition, worker, list, valbuf)
+				}
+				partition++
+				if partition == partitionBegin {
+					break
+				}
+				if partition > partitionMax {
+					partition = 0
 				}
 			}
 			wg.Done()
-		}(uint32(g))
+		}(worker)
 	}
 	wg.Wait()
 }
