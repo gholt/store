@@ -2,12 +2,15 @@ package valuestore
 
 import (
 	"encoding/binary"
+	"math"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"gopkg.in/gholt/brimtime.v1"
 )
+
+const _GLH_PUSH_REPLICATION_BATCH_SIZE = 2 * 1024 * 1024
 
 type pushReplicationState struct {
 	outWorkers    int
@@ -117,13 +120,15 @@ func (vs *DefaultValueStore) outPushReplicationPass() {
 	}
 	ring := vs.msgRing.Ring()
 	ringVersion := ring.Version()
-	partitionShift := 64 - ring.PartitionBitCount()
-	partitionMax := uint32(1) << ring.PartitionBitCount()
+	pbc := ring.PartitionBitCount()
+	partitionShift := uint64(64 - pbc)
+	partitionMax := (uint64(1) << pbc) - 1
 	workerMax := uint64(vs.pushReplicationState.outWorkers - 1)
+	workerPartitionPiece := (uint64(1) << partitionShift) / (workerMax + 1)
 	// To avoid memory churn, the scratchpad areas are allocated just once and
 	// passed in to the workers.
 	for len(vs.pushReplicationState.outLists) < int(workerMax) {
-		vs.pushReplicationState.outLists = append(vs.pushReplicationState.outLists, make([]uint64, 2*1024*1024))
+		vs.pushReplicationState.outLists = append(vs.pushReplicationState.outLists, make([]uint64, _GLH_PUSH_REPLICATION_BATCH_SIZE))
 	}
 	for len(vs.pushReplicationState.outValBufs) < int(workerMax) {
 		vs.pushReplicationState.outValBufs = append(vs.pushReplicationState.outValBufs, make([]byte, vs.maxValueSize))
@@ -136,66 +141,66 @@ func (vs *DefaultValueStore) outPushReplicationPass() {
 	// worth the simplicity and (hopefully) overall speed increase. Might just
 	// do one area scan per interval to give a better chance of getting acked
 	// before scanning the same area again; meaning less or no resends.
-	work := func(p uint32, worker uint64, list []uint64, valbuf []byte) {
-		list = list[:0]
-		start := uint64(p) << uint64(partitionShift)
-		stop := start + (uint64(1)<<partitionShift - 1)
-		pullSize := uint64(1) << partitionShift
-		for vs.vlm.ScanCount(start, start+(pullSize-1), _GLH_BLOOM_FILTER_N) >= _GLH_BLOOM_FILTER_N {
-			pullSize /= 2
-		}
-		timestampbitsnow := uint64(brimtime.TimeToUnixMicro(time.Now())) << _TSB_UTIL_BITS
-		cutoff := timestampbitsnow - vs.replicationIgnoreRecent
-		tombstoneCutoff := timestampbitsnow - vs.tombstoneDiscardState.age
-		substart := start
-		substop := start + (pullSize - 1)
-		for atomic.LoadUint32(&vs.pushReplicationState.outAbort) == 0 {
-			l := int64(_GLH_OUT_BULK_SET_MSG_SIZE)
-			vs.vlm.DeprecatedScanCallback(substart, substop, func(keyA uint64, keyB uint64, timestampbits uint64, length uint32) {
-				if l > 0 {
-					if timestampbits&_TSB_LOCAL_REMOVAL == 0 && timestampbits < cutoff && (timestampbits&_TSB_DELETION == 0 || timestampbits >= tombstoneCutoff) {
-						list = append(list, keyA, keyB)
-						// bsm: keyA:8, keyB:8, timestampbits:8, length:4,
-						//      value:n
-						l -= 28 + int64(length)
-					}
-				}
-			})
-			if atomic.LoadUint32(&vs.pushReplicationState.outAbort) != 0 {
-				break
+	work := func(partition uint64, worker uint64, list []uint64, valbuf []byte) {
+		partitionOnLeftBits := partition << partitionShift
+		rangeBegin := partitionOnLeftBits + (workerPartitionPiece * worker)
+		var rangeEnd uint64
+		// A little bit of complexity here to handle where the more general
+		// expressions would have overflow issues.
+		if worker != workerMax {
+			rangeEnd = partitionOnLeftBits + (workerPartitionPiece * (worker + 1)) - 1
+		} else {
+			if partition != partitionMax {
+				rangeEnd = ((partition + 1) << partitionShift) - 1
+			} else {
+				rangeEnd = math.MaxUint64
 			}
-			if len(list) > 0 {
-				bsm := vs.newOutBulkSetMsg()
-				binary.BigEndian.PutUint64(bsm.header, ring.LocalNode().ID())
-				var timestampbits uint64
-				var err error
-				for i := 0; i < len(list); i += 2 {
-					timestampbits, valbuf, err = vs.read(list[i], list[i+1], valbuf[:0])
-					if err == ErrNotFound {
-						if timestampbits == 0 {
-							continue
-						}
-					} else if err != nil {
-						continue
-					}
-					if timestampbits&_TSB_LOCAL_REMOVAL == 0 && timestampbits < cutoff && (timestampbits&_TSB_DELETION == 0 || timestampbits >= tombstoneCutoff) {
-						if !bsm.add(list[i], list[i+1], timestampbits, valbuf) {
-							break
-						}
-					}
+		}
+		timestampbitsNow := uint64(brimtime.TimeToUnixMicro(time.Now())) << _TSB_UTIL_BITS
+		cutoff := timestampbitsNow - vs.replicationIgnoreRecent
+		tombstoneCutoff := timestampbitsNow - vs.tombstoneDiscardState.age
+		availableBytes := int64(_GLH_OUT_BULK_SET_MSG_SIZE)
+		list = list[:0]
+		// We ignore the "more" option from ScanCallback and just send the
+		// first matching batch each full iteration. Once a remote end acks the
+		// batch, those keys will have been removed and the first matching
+		// batch will start with any remaining keys.
+		// First we gather the matching keys to send.
+		vs.vlm.ScanCallback(rangeBegin, rangeEnd, 0, _TSB_LOCAL_REMOVAL, cutoff, _GLH_PUSH_REPLICATION_BATCH_SIZE, func(keyA uint64, keyB uint64, timestampbits uint64, length uint32) {
+			// bsm: keyA:8, keyB:8, timestampbits:8, length:4, value:n
+			inMsgLength := 28 + int64(length)
+			if availableBytes > inMsgLength && (timestampbits&_TSB_DELETION == 0 || timestampbits >= tombstoneCutoff) {
+				list = append(list, keyA, keyB)
+				availableBytes -= inMsgLength
+			}
+		})
+		if len(list) <= 0 || atomic.LoadUint32(&vs.pushReplicationState.outAbort) != 0 || vs.msgRing.Ring().Version() != ringVersion {
+			return
+		}
+		// Then we build and send the actual message.
+		bsm := vs.newOutBulkSetMsg()
+		binary.BigEndian.PutUint64(bsm.header, ring.LocalNode().ID())
+		var timestampbits uint64
+		var err error
+		for i := 0; i < len(list); i += 2 {
+			timestampbits, valbuf, err = vs.read(list[i], list[i+1], valbuf[:0])
+			// This might mean we need to send a deletion or it might mean the
+			// key has been completely removed from our records
+			// (timestampbits==0).
+			if err == ErrNotFound {
+				if timestampbits == 0 {
+					continue
 				}
-				if atomic.LoadUint32(&vs.pushReplicationState.outAbort) != 0 {
-					bsm.Done()
+			} else if err != nil {
+				continue
+			}
+			if timestampbits&_TSB_LOCAL_REMOVAL == 0 && timestampbits < cutoff && (timestampbits&_TSB_DELETION == 0 || timestampbits >= tombstoneCutoff) {
+				if !bsm.add(list[i], list[i+1], timestampbits, valbuf) {
 					break
 				}
-				vs.msgRing.MsgToOtherReplicas(ringVersion, p, bsm)
-			}
-			substart += pullSize
-			substop += pullSize
-			if substop > stop || substop < stop {
-				break
 			}
 		}
+		vs.msgRing.MsgToOtherReplicas(ringVersion, uint32(partition), bsm)
 	}
 	wg := &sync.WaitGroup{}
 	wg.Add(int(workerMax + 1))
@@ -203,12 +208,12 @@ func (vs *DefaultValueStore) outPushReplicationPass() {
 		go func(worker uint64) {
 			list := vs.pushReplicationState.outLists[worker]
 			valbuf := vs.pushReplicationState.outValBufs[worker]
-			partitionBegin := (partitionMax + 1) / uint32(workerMax+1) * uint32(worker)
+			partitionBegin := (partitionMax + 1) / (workerMax + 1) * worker
 			for partition := partitionBegin; ; {
-				if vs.msgRing.Ring().Version() != ringVersion {
+				if atomic.LoadUint32(&vs.pushReplicationState.outAbort) != 0 || vs.msgRing.Ring().Version() != ringVersion {
 					break
 				}
-				if !ring.Responsible(partition) {
+				if !ring.Responsible(uint32(partition)) {
 					work(partition, worker, list, valbuf)
 				}
 				partition++
