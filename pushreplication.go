@@ -133,14 +133,6 @@ func (vs *DefaultValueStore) outPushReplicationPass() {
 	for len(vs.pushReplicationState.outValBufs) < int(workerMax) {
 		vs.pushReplicationState.outValBufs = append(vs.pushReplicationState.outValBufs, make([]byte, vs.maxValueSize))
 	}
-	// GLH TODO: Redo this to split up work like tombstoneDiscard does. Also,
-	// don't do ScanCount, instead do something like tombstoneDiscard does as
-	// well where the ScanCallback stops after max items and reports where it
-	// stopped for the next scan. Downside is resending some data do to
-	// overlap, need to calculate if that's a huge problem or just a minor one
-	// worth the simplicity and (hopefully) overall speed increase. Might just
-	// do one area scan per interval to give a better chance of getting acked
-	// before scanning the same area again; meaning less or no resends.
 	work := func(partition uint64, worker uint64, list []uint64, valbuf []byte) {
 		partitionOnLeftBits := partition << partitionShift
 		rangeBegin := partitionOnLeftBits + (workerPartitionPiece * worker)

@@ -10,6 +10,7 @@ import (
 
 const ktBloomFilterHeaderBytes int = 20
 
+// ktBloomFilter is a key+timestamp bloom filter implementation.
 type ktBloomFilter struct {
 	n       uint64
 	p       float64
