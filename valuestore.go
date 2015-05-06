@@ -159,7 +159,7 @@ type DefaultValueStore struct {
 	valueLocBlockIDer       uint64
 	path                    string
 	pathtoc                 string
-	vlm                     valuelocmap.ValueLocMap
+	vlm                     valuelocmap.ValueLocMapL
 	workers                 int
 	maxValueSize            uint32
 	pageSize                uint32
@@ -227,7 +227,7 @@ func New(opts ...func(*config)) *DefaultValueStore {
 	cfg := resolveConfig(opts...)
 	vlm := cfg.vlm
 	if vlm == nil {
-		vlm = valuelocmap.New()
+		vlm = valuelocmap.NewL()
 	}
 	vs := &DefaultValueStore{
 		logCritical:             cfg.logCritical,
