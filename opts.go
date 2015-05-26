@@ -22,7 +22,7 @@ type config struct {
 	rand                       *rand.Rand
 	path                       string
 	pathtoc                    string
-	vlm                        valuelocmap.ValueLocMapL
+	vlm                        valuelocmap.ValueLocMap
 	workers                    int
 	tombstoneDiscardInterval   int
 	outPullReplicationWorkers  int
@@ -330,10 +330,10 @@ func OptPathTOC(dirpath string) func(*config) {
 	}
 }
 
-// OptValueLocMap allows overriding the default ValueLocMapL, an interface used
+// OptValueLocMap allows overriding the default ValueLocMap, an interface used
 // by ValueStore for tracking the mappings from keys to the locations of their
 // values. Defaults to github.com/gholt/valuelocmap.New().
-func OptValueLocMap(vlm valuelocmap.ValueLocMapL) func(*config) {
+func OptValueLocMap(vlm valuelocmap.ValueLocMap) func(*config) {
 	return func(cfg *config) {
 		cfg.vlm = vlm
 	}
