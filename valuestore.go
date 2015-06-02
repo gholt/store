@@ -52,9 +52,6 @@
 // OptMsgRing. The responsible parties will respond to these requests with
 // acknowledgements of the data they received, allowing the requester to
 // discard the out of place data.
-//
-// TODO list probably not comprehensive:
-//  Compaction
 package valuestore
 
 import (
