@@ -1,6 +1,9 @@
 # ValueStore
 ## Development Repository
 
+**This is a very early prototype of idea we may come back to later. Just
+wanted to get it recorded in case it is useful later.**
+
 Package valuestore provides a disk-backed data structure for use in storing
 []byte values referenced by 128 bit keys with options for replication.
 
