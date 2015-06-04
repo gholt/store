@@ -1,7 +1,7 @@
 # ValueStore
 ## Development Repository
 
-**This is a very early prototype of idea we may come back to later. Just
+**This is a very early prototype of an idea we may come back to later. I just
 wanted to get it recorded in case it is useful later.**
 
 Package valuestore provides a disk-backed data structure for use in storing
