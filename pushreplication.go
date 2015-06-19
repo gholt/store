@@ -209,11 +209,11 @@ func (vs *DefaultValueStore) outPushReplicationPass() {
 					work(partition, worker, list, valbuf)
 				}
 				partition++
-				if partition == partitionBegin {
-					break
-				}
 				if partition > partitionMax {
 					partition = 0
+				}
+				if partition == partitionBegin {
+					break
 				}
 			}
 			wg.Done()

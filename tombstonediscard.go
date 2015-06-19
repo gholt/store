@@ -238,11 +238,11 @@ func (vs *DefaultValueStore) tombstoneDiscardPassExpiredDeletions() {
 			for partition := partitionBegin; ; {
 				work(partition, worker, localRemovals)
 				partition++
-				if partition == partitionBegin {
-					break
-				}
 				if partition > partitionMax {
 					partition = 0
+				}
+				if partition == partitionBegin {
+					break
 				}
 			}
 			wg.Done()
