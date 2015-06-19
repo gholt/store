@@ -127,10 +127,10 @@ func (vs *DefaultValueStore) outPushReplicationPass() {
 	workerPartitionPiece := (uint64(1) << partitionShift) / (workerMax + 1)
 	// To avoid memory churn, the scratchpad areas are allocated just once and
 	// passed in to the workers.
-	for len(vs.pushReplicationState.outLists) < int(workerMax) {
+	for len(vs.pushReplicationState.outLists) < int(workerMax+1) {
 		vs.pushReplicationState.outLists = append(vs.pushReplicationState.outLists, make([]uint64, _GLH_PUSH_REPLICATION_BATCH_SIZE))
 	}
-	for len(vs.pushReplicationState.outValBufs) < int(workerMax) {
+	for len(vs.pushReplicationState.outValBufs) < int(workerMax+1) {
 		vs.pushReplicationState.outValBufs = append(vs.pushReplicationState.outValBufs, make([]byte, vs.maxValueSize))
 	}
 	work := func(partition uint64, worker uint64, list []uint64, valbuf []byte) {
