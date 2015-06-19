@@ -148,7 +148,7 @@ func (vs *DefaultValueStore) newInBulkSetMsg(r io.Reader, l uint64) (uint64, err
 		}
 	}
 	vs.bulkSetState.inMsgChan <- bsm
-	return l, nil
+	return l + 8, nil
 }
 
 func (vs *DefaultValueStore) newOutBulkSetMsg() *bulkSetMsg {
