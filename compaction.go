@@ -189,7 +189,7 @@ func (vs *DefaultValueStore) compactionWorker(id int, tocfiles <-chan compaction
 	for c := range tocfiles {
 		f, err := os.Open(c.name)
 		if err != nil {
-			vs.logError.Println("Unable to open for stat:", c.name, err.Error())
+			vs.logError.Println("Unable to open for stat:", c.name, err)
 			continue
 		}
 		fstat, err := f.Stat()
@@ -202,17 +202,17 @@ func (vs *DefaultValueStore) compactionWorker(id int, tocfiles <-chan compaction
 			vs.logInfo.Println("Triggering compaction for", c.name, "due to size")
 			result, err := vs.compactFile(c.name, c.candidateBlockID)
 			if err != nil {
-				vs.logCritical.Println(err.Error())
+				vs.logCritical.Println(err)
 			}
 			if (result.rewrote + result.stale) == result.count {
 				err = os.Remove(c.name)
 				if err != nil {
-					vs.logCritical.Println("Unable to remove", c.name, err.Error())
+					vs.logCritical.Println("Unable to remove", c.name, err)
 					continue
 				}
 				err = os.Remove(c.name[:len(c.name)-len("toc")])
 				if err != nil {
-					vs.logCritical.Println("Unable to remove", c.name, "values", err.Error())
+					vs.logCritical.Println("Unable to remove", c.name, "values", err)
 					continue
 				}
 				vs.logInfo.Printf("Compacted %s (total %d, rewrote %d, stale %d)", c.name, result.count, result.rewrote, result.stale)
@@ -236,17 +236,17 @@ func (vs *DefaultValueStore) compactionWorker(id int, tocfiles <-chan compaction
 				}
 				result, err := vs.compactFile(c.name, c.candidateBlockID)
 				if err != nil {
-					vs.logCritical.Println(err.Error())
+					vs.logCritical.Println(err)
 				}
 				if (result.rewrote + result.stale) == result.count {
 					err = os.Remove(c.name)
 					if err != nil {
-						vs.logCritical.Println("Unable to remove", c.name, err.Error())
+						vs.logCritical.Println("Unable to remove", c.name, err)
 						continue
 					}
 					err = os.Remove(c.name[:len(c.name)-len("toc")])
 					if err != nil {
-						vs.logCritical.Println("Unable to remove", c.name, "values", err.Error())
+						vs.logCritical.Println("Unable to remove", c.name, "values", err)
 						continue
 					}
 					vs.logInfo.Printf("Compacted %s: (total %d, rewrote %d, stale %d)", c.name, result.count, result.rewrote, result.stale)
@@ -436,12 +436,12 @@ func (vs *DefaultValueStore) compactFile(name string, candidateBlockID uint32) (
 					var value []byte
 					_, value, err := vs.read(keyA, keyB, value)
 					if err != nil {
-						vs.logCritical.Println("Error on rewrite read", err.Error())
+						vs.logCritical.Println("Error on rewrite read", err)
 						return cr, errors.New("Error on read for compaction rewrite.")
 					}
 					_, err = vs.write(keyA, keyB, timestampbits|_TSB_COMPACTION_REWRITE, value)
 					if err != nil {
-						vs.logCritical.Println("Error on rewrite", err.Error())
+						vs.logCritical.Println("Error on rewrite", err)
 						return cr, errors.New("Write error on compaction rewrite.")
 					}
 					cr.count++
@@ -460,12 +460,12 @@ func (vs *DefaultValueStore) compactFile(name string, candidateBlockID uint32) (
 					var value []byte
 					_, value, err := vs.read(keyA, keyB, value)
 					if err != nil {
-						vs.logCritical.Println("Error on rewrite read", err.Error())
+						vs.logCritical.Println("Error on rewrite read", err)
 						return cr, errors.New("Error on rewrite read")
 					}
 					_, err = vs.write(keyA, keyB, timestampbits|_TSB_COMPACTION_REWRITE, value)
 					if err != nil {
-						vs.logCritical.Println("Error on rewrite", err.Error())
+						vs.logCritical.Println("Error on rewrite", err)
 						return cr, errors.New("Error on rewrite")
 					}
 					cr.count++
