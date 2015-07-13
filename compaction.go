@@ -142,9 +142,9 @@ func (vs *DefaultValueStore) compactionPass() {
 
 	submitted := 0
 	for i := 0; i < len(names); i++ {
-		namets, valid := vs.compactionCandidate(names[i])
+		namets, valid := vs.compactionCandidate(path.Join(vs.pathtoc, names[i]))
 		if valid {
-			compactionJobs <- compactionJob{names[i], vs.valueLocBlockIDFromTimestampnano(namets)}
+			compactionJobs <- compactionJob{path.Join(vs.pathtoc, names[i]), vs.valueLocBlockIDFromTimestampnano(namets)}
 			submitted++
 		}
 	}
@@ -166,7 +166,8 @@ func (vs *DefaultValueStore) compactionCandidate(name string) (int64, bool) {
 		return 0, false
 	}
 	var namets int64
-	namets, err := strconv.ParseInt(name[:len(name)-len(".valuestoc")], 10, 64)
+	_, n := path.Split(name)
+	namets, err := strconv.ParseInt(n[:len(n)-len(".valuestoc")], 10, 64)
 	if err != nil {
 		vs.logError.Printf("bad timestamp in name: %#v\n", name)
 		return 0, false
@@ -188,7 +189,7 @@ func (vs *DefaultValueStore) compactionWorker(id int, tocfiles <-chan compaction
 	for c := range tocfiles {
 		f, err := os.Open(c.name)
 		if err != nil {
-			vs.logError.Println("Unable to open for stat:", c.name)
+			vs.logError.Println("Unable to open for stat:", c.name, err.Error())
 			continue
 		}
 		fstat, err := f.Stat()
@@ -261,7 +262,7 @@ func (vs *DefaultValueStore) sampleTOC(name string, candidateBlockID uint32, ski
 	stale := 0
 	fromDiskBuf := make([]byte, vs.checksumInterval+4)
 	fromDiskOverflow := make([]byte, 0, 32)
-	fp, err := os.Open(path.Join(vs.pathtoc, name))
+	fp, err := os.Open(name)
 	if err != nil {
 		vs.logError.Printf("error opening %s: %s\n", name, err)
 		return 0, 0, err
@@ -374,7 +375,7 @@ func (vs *DefaultValueStore) compactFile(name string, candidateBlockID uint32) (
 	var cr compactionResult
 	fromDiskBuf := make([]byte, vs.checksumInterval+4)
 	fromDiskOverflow := make([]byte, 0, 32)
-	fp, err := os.Open(path.Join(vs.pathtoc, name))
+	fp, err := os.Open(name)
 	if err != nil {
 		vs.logError.Printf("error opening %s: %s\n", name, err)
 		return cr, errors.New("Error opening toc")
