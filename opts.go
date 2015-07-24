@@ -492,3 +492,36 @@ func OptReplicationIgnoreRecent(seconds int) func(*config) {
 		cfg.replicationIgnoreRecent = seconds
 	}
 }
+
+// OptCompactionInterval indicates how often compaction will run. Defaults to
+// env VALUESTORE_COMPACTIONINTERVAL or 300.
+func OptCompactionInterval(seconds int) func(*config) {
+	return func(cfg *config) {
+		cfg.compactionInterval = seconds
+	}
+}
+
+// OptCompactionThreshold indicates how much waste a given file may have before
+// it is compacted. Defaults to VALUESTORE_COMPACTIONTHRESHOLD or 0.10 (10%).
+func OptCompactionThreshold(ratio float64) func(*config) {
+	return func(cfg *config) {
+		cfg.compactionThreshold = ratio
+	}
+}
+
+// OptCompactionAgeThreshold indicates how old a given file must be before it
+// is considered for compaction. Defaults to VALUESTORE_COMPACTIONAGETHRESHOLD
+// or 300.
+func OptCompactionAgeThreshold(seconds int) func(*config) {
+	return func(cfg *config) {
+		cfg.compactionAgeThreshold = seconds
+	}
+}
+
+// OptCompactionWorkers indicates how much concurrency is allowed for
+// compaction. Defaults to VALUESTORE_COMPACTIONWORKERS or 1.
+func OptCompactionWorkers(count int) func(*config) {
+	return func(cfg *config) {
+		cfg.compactionWorkers = count
+	}
+}
