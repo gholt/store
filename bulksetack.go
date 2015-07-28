@@ -6,17 +6,13 @@ import (
 	"time"
 )
 
-const _GLH_IN_BULK_SET_ACK_MSGS = 128
-const _GLH_IN_BULK_SET_ACK_HANDLERS = 40
-const _GLH_OUT_BULK_SET_ACK_MSGS = 128
-const _GLH_OUT_BULK_SET_ACK_MSG_SIZE = 16 * 1024 * 1024
-const _GLH_IN_BULK_SET_ACK_MSG_TIMEOUT = 300
 const _MSG_BULK_SET_ACK = 0x39589f4746844e3b
 
 type bulkSetAckState struct {
-	inMsgChan      chan *bulkSetAckMsg
-	inFreeMsgChan  chan *bulkSetAckMsg
-	outFreeMsgChan chan *bulkSetAckMsg
+	inMsgChan              chan *bulkSetAckMsg
+	inFreeMsgChan          chan *bulkSetAckMsg
+	outFreeMsgChan         chan *bulkSetAckMsg
+	inBulkSetAckMsgTimeout time.Duration
 }
 
 type bulkSetAckMsg struct {
@@ -27,21 +23,22 @@ type bulkSetAckMsg struct {
 func (vs *DefaultValueStore) bulkSetAckInit(cfg *config) {
 	if vs.msgRing != nil {
 		vs.msgRing.SetMsgHandler(_MSG_BULK_SET_ACK, vs.newInBulkSetAckMsg)
-		vs.bulkSetAckState.inMsgChan = make(chan *bulkSetAckMsg, _GLH_IN_BULK_SET_ACK_MSGS)
-		vs.bulkSetAckState.inFreeMsgChan = make(chan *bulkSetAckMsg, _GLH_IN_BULK_SET_ACK_MSGS)
+		vs.bulkSetAckState.inMsgChan = make(chan *bulkSetAckMsg, cfg.inBulkSetAckMsgs)
+		vs.bulkSetAckState.inFreeMsgChan = make(chan *bulkSetAckMsg, cfg.inBulkSetAckMsgs)
 		for i := 0; i < cap(vs.bulkSetAckState.inFreeMsgChan); i++ {
 			vs.bulkSetAckState.inFreeMsgChan <- &bulkSetAckMsg{vs: vs}
 		}
-		for i := 0; i < _GLH_IN_BULK_SET_ACK_HANDLERS; i++ {
+		for i := 0; i < cfg.inBulkSetAckHandlers; i++ {
 			go vs.inBulkSetAck()
 		}
-		vs.bulkSetAckState.outFreeMsgChan = make(chan *bulkSetAckMsg, _GLH_OUT_BULK_SET_ACK_MSGS)
+		vs.bulkSetAckState.outFreeMsgChan = make(chan *bulkSetAckMsg, cfg.outBulkSetAckMsgs)
 		for i := 0; i < cap(vs.bulkSetAckState.outFreeMsgChan); i++ {
 			vs.bulkSetAckState.outFreeMsgChan <- &bulkSetAckMsg{
 				vs:   vs,
-				body: make([]byte, _GLH_OUT_BULK_SET_ACK_MSG_SIZE),
+				body: make([]byte, cfg.outBulkSetAckMsgSize),
 			}
 		}
+		vs.bulkSetAckState.inBulkSetAckMsgTimeout = time.Duration(cfg.inBulkSetAckMsgTimeout) * time.Second
 	}
 }
 
@@ -71,7 +68,7 @@ func (vs *DefaultValueStore) newInBulkSetAckMsg(r io.Reader, l uint64) (uint64, 
 	var bsam *bulkSetAckMsg
 	select {
 	case bsam = <-vs.bulkSetAckState.inFreeMsgChan:
-	case <-time.After(_GLH_IN_BULK_SET_ACK_MSG_TIMEOUT * time.Second):
+	case <-time.After(vs.bulkSetAckState.inBulkSetAckMsgTimeout):
 		left := l
 		var sn int
 		var err error

@@ -39,6 +39,11 @@ type config struct {
 	checksumInterval           int
 	msgRing                    ring.MsgRing
 	replicationIgnoreRecent    int
+	inBulkSetAckMsgs           int
+	inBulkSetAckHandlers       int
+	inBulkSetAckMsgTimeout     int
+	outBulkSetAckMsgs          int
+	outBulkSetAckMsgSize       int
 	compactionInterval         int
 	compactionThreshold        float64
 	compactionAgeThreshold     int
@@ -131,6 +136,36 @@ func resolveConfig(opts ...func(*config)) *config {
 	if env := os.Getenv("VALUESTORE_REPLICATIONIGNORERECENT"); env != "" {
 		if val, err := strconv.Atoi(env); err == nil {
 			cfg.replicationIgnoreRecent = val
+		}
+	}
+	cfg.inBulkSetAckMsgs = 128
+	if env := os.Getenv("VALUESTORE_INBULKSETACKMSGS"); env != "" {
+		if val, err := strconv.Atoi(env); err == nil {
+			cfg.inBulkSetAckMsgs = val
+		}
+	}
+	cfg.inBulkSetAckHandlers = 40
+	if env := os.Getenv("VALUESTORE_INBULKSETACKHANDLERS"); env != "" {
+		if val, err := strconv.Atoi(env); err == nil {
+			cfg.inBulkSetAckHandlers = val
+		}
+	}
+	cfg.inBulkSetAckMsgTimeout = 300
+	if env := os.Getenv("VALUESTORE_INBULKSETACKMSGTIMEOUT"); env != "" {
+		if val, err := strconv.Atoi(env); err == nil {
+			cfg.inBulkSetAckMsgTimeout = val
+		}
+	}
+	cfg.outBulkSetAckMsgs = 128
+	if env := os.Getenv("VALUESTORE_OUTBULKSETACKMSGS"); env != "" {
+		if val, err := strconv.Atoi(env); err == nil {
+			cfg.outBulkSetAckMsgs = val
+		}
+	}
+	cfg.outBulkSetAckMsgSize = 16 * 1024 * 1024
+	if env := os.Getenv("VALUESTORE_OUTBULKSETACKMSGSIZE"); env != "" {
+		if val, err := strconv.Atoi(env); err == nil {
+			cfg.outBulkSetAckMsgSize = val
 		}
 	}
 	cfg.compactionInterval = 300
@@ -243,6 +278,21 @@ func resolveConfig(opts ...func(*config)) *config {
 	}
 	if cfg.replicationIgnoreRecent < 0 {
 		cfg.replicationIgnoreRecent = 0
+	}
+	if cfg.inBulkSetAckMsgs < 1 {
+		cfg.inBulkSetAckMsgs = 1
+	}
+	if cfg.inBulkSetAckHandlers < 1 {
+		cfg.inBulkSetAckHandlers = 1
+	}
+	if cfg.inBulkSetAckMsgTimeout < 1 {
+		cfg.inBulkSetAckMsgTimeout = 1
+	}
+	if cfg.outBulkSetAckMsgs < 1 {
+		cfg.outBulkSetAckMsgs = 1
+	}
+	if cfg.outBulkSetAckMsgSize < 1 {
+		cfg.outBulkSetAckMsgSize = 1
 	}
 	if cfg.compactionInterval < 1 {
 		cfg.compactionInterval = 1
@@ -490,6 +540,50 @@ func OptMsgRing(r ring.MsgRing) func(*config) {
 func OptReplicationIgnoreRecent(seconds int) func(*config) {
 	return func(cfg *config) {
 		cfg.replicationIgnoreRecent = seconds
+	}
+}
+
+// OptInBulkSetAckMsgs indicates how many incoming bulk-set messages can be
+// buffered before dropping additional ones. Defaults to env
+// VALUESTORE_INBULKSETACKMSGS or 128.
+func OptInBulkSetAckMsgs(count int) func(*config) {
+	return func(cfg *config) {
+		cfg.inBulkSetAckMsgs = count
+	}
+}
+
+// OptInBulkSetAckHandlers indicates how many incoming bulk-set messages can be
+// processed at the same time. Defaults to env VALUESTORE_INBULKSETACKHANDLERS
+// or 40.
+func OptInBulkSetAckHandlers(count int) func(*config) {
+	return func(cfg *config) {
+		cfg.inBulkSetAckHandlers = count
+	}
+}
+
+// OptInBulkSetAckMsgTimeout indicates the maximum seconds an incoming bulk-set
+// acknowledgement message can be pending before just discarding it. Defaults
+// to env VALUESTORE_INBULKSETACKMSGTIMEOUT or 300.
+func OptInBulkSetAckMsgTimeout(seconds int) func(*config) {
+	return func(cfg *config) {
+		cfg.inBulkSetAckMsgTimeout = seconds
+	}
+}
+
+// OptOutBulkSetAckMsgs indicates how many outgoing bulk-set messages can be
+// buffered before blocking on creating more. Defaults to env
+// VALUESTORE_OUTBULKSETACKMSGS or 128.
+func OptOutBulkSetAckMsgs(count int) func(*config) {
+	return func(cfg *config) {
+		cfg.outBulkSetAckMsgs = count
+	}
+}
+
+// OptOutBulkSetAckMsgSize indicates the maximum bytes for outgoing bulk-set
+// messages. Defaults to env VALUESTORE_OUTBULKSETACKMSGSIZE or 16,777,216.
+func OptOutBulkSetAckMsgSize(bytes int) func(*config) {
+	return func(cfg *config) {
+		cfg.outBulkSetAckMsgSize = bytes
 	}
 }
 
