@@ -6,6 +6,8 @@ import (
 	"time"
 )
 
+// bsm: keyA:8, keyB:8, timestampbits:8, length:4, value:n
+const _MIN_BULK_SET_MSG_ENTRY = 28
 const _MSG_BULK_SET = 0x44f58445991a4aa1
 
 type bulkSetState struct {

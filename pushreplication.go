@@ -10,8 +10,6 @@ import (
 	"gopkg.in/gholt/brimtime.v1"
 )
 
-const _GLH_PUSH_REPLICATION_BATCH_SIZE = 2 * 1024 * 1024
-
 type pushReplicationState struct {
 	outWorkers    int
 	outInterval   int
@@ -128,7 +126,7 @@ func (vs *DefaultValueStore) outPushReplicationPass() {
 	// To avoid memory churn, the scratchpad areas are allocated just once and
 	// passed in to the workers.
 	for len(vs.pushReplicationState.outLists) < int(workerMax+1) {
-		vs.pushReplicationState.outLists = append(vs.pushReplicationState.outLists, make([]uint64, _GLH_PUSH_REPLICATION_BATCH_SIZE))
+		vs.pushReplicationState.outLists = append(vs.pushReplicationState.outLists, make([]uint64, vs.bulkSetState.msgSize/_MIN_BULK_SET_MSG_ENTRY))
 	}
 	for len(vs.pushReplicationState.outValBufs) < int(workerMax+1) {
 		vs.pushReplicationState.outValBufs = append(vs.pushReplicationState.outValBufs, make([]byte, vs.maxValueSize))
@@ -158,9 +156,8 @@ func (vs *DefaultValueStore) outPushReplicationPass() {
 		// batch, those keys will have been removed and the first matching
 		// batch will start with any remaining keys.
 		// First we gather the matching keys to send.
-		vs.vlm.ScanCallback(rangeBegin, rangeEnd, 0, _TSB_LOCAL_REMOVAL, cutoff, _GLH_PUSH_REPLICATION_BATCH_SIZE, func(keyA uint64, keyB uint64, timestampbits uint64, length uint32) {
-			// bsm: keyA:8, keyB:8, timestampbits:8, length:4, value:n
-			inMsgLength := 28 + int64(length)
+		vs.vlm.ScanCallback(rangeBegin, rangeEnd, 0, _TSB_LOCAL_REMOVAL, cutoff, uint64(cap(list)/_MIN_BULK_SET_MSG_ENTRY), func(keyA uint64, keyB uint64, timestampbits uint64, length uint32) {
+			inMsgLength := _MIN_BULK_SET_MSG_ENTRY + int64(length)
 			if availableBytes > inMsgLength && (timestampbits&_TSB_DELETION == 0 || timestampbits >= tombstoneCutoff) {
 				list = append(list, keyA, keyB)
 				availableBytes -= inMsgLength

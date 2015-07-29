@@ -36,6 +36,7 @@ type config struct {
 	outPushReplicationWorkers   int
 	outPushReplicationInterval  int
 	outPushReplicationMsgs      int
+	outPushReplicationMsgCap    int
 	maxValueSize                int
 	pageSize                    int
 	minValueAlloc               int
