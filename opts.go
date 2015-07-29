@@ -24,7 +24,9 @@ type config struct {
 	pathtoc                     string
 	vlm                         valuelocmap.ValueLocMap
 	workers                     int
+	recoveryBatchSize           int
 	tombstoneDiscardInterval    int
+	tombstoneDiscardBatchSize   int
 	inPullReplicationMsgs       int
 	inPullReplicationHandlers   int
 	inPullReplicationMsgTimeout int
@@ -73,10 +75,22 @@ func resolveConfig(opts ...func(*config)) *config {
 			cfg.workers = val
 		}
 	}
+	cfg.recoveryBatchSize = 1024 * 1024
+	if env := os.Getenv("VALUESTORE_RECOVERYBATCHSIZE"); env != "" {
+		if val, err := strconv.Atoi(env); err == nil {
+			cfg.recoveryBatchSize = val
+		}
+	}
 	cfg.tombstoneDiscardInterval = 60
 	if env := os.Getenv("VALUESTORE_TOMBSTONEDISCARDINTERVAL"); env != "" {
 		if val, err := strconv.Atoi(env); err == nil {
 			cfg.tombstoneDiscardInterval = val
+		}
+	}
+	cfg.tombstoneDiscardBatchSize = 1024 * 1024
+	if env := os.Getenv("VALUESTORE_TOMBSTONEDISCARDBATCHSIZE"); env != "" {
+		if val, err := strconv.Atoi(env); err == nil {
+			cfg.tombstoneDiscardBatchSize = val
 		}
 	}
 	cfg.inPullReplicationMsgs = 128
@@ -304,8 +318,14 @@ func resolveConfig(opts ...func(*config)) *config {
 	if cfg.workers < 1 {
 		cfg.workers = 1
 	}
+	if cfg.recoveryBatchSize < 1 {
+		cfg.recoveryBatchSize = 1
+	}
 	if cfg.tombstoneDiscardInterval < 1 {
 		cfg.tombstoneDiscardInterval = 1
+	}
+	if cfg.tombstoneDiscardBatchSize < 1 {
+		cfg.tombstoneDiscardBatchSize = 1
 	}
 	if cfg.inPullReplicationMsgs < 1 {
 		cfg.inPullReplicationMsgs = 1
@@ -519,6 +539,15 @@ func OptWorkers(count int) func(*config) {
 	}
 }
 
+// OptRecoveryBatchSize indicates how many keys to set in a batch while
+// performing recovery (initial start up). Defaults to env
+// VALUESTORE_RECOVERYBATCHSIZE or 1,048,576.
+func OptRecoveryBatchSize(count int) func(*config) {
+	return func(cfg *config) {
+		cfg.recoveryBatchSize = count
+	}
+}
+
 // OptTombstoneDiscardInterval indicates the minimum number of seconds betweeen
 // the starts of discard passes (discarding expired tombstones [deletion
 // markers]). If set to 60 seconds and the passes take 10 seconds to run, they
@@ -532,6 +561,15 @@ func OptWorkers(count int) func(*config) {
 func OptTombstoneDiscardInterval(seconds int) func(*config) {
 	return func(cfg *config) {
 		cfg.tombstoneDiscardInterval = seconds
+	}
+}
+
+// OptTombstoneDiscardBatchSize indicates how many items to queue up before
+// pausing a scan, issuing the actual discards, and resuming the scan again.
+// Defaults to env VALUESTORE_TOMBSTONEDISCARDBATCHSIZE or 1,048,576.
+func OptTombstoneDiscardBatchSize(count int) func(*config) {
+	return func(cfg *config) {
+		cfg.tombstoneDiscardBatchSize = count
 	}
 }
 

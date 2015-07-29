@@ -9,14 +9,13 @@ import (
 	"gopkg.in/gholt/brimtime.v1"
 )
 
-const _GLH_TOMBSTONE_DISCARD_BATCH_SIZE = 1024 * 1024
-
 type tombstoneDiscardState struct {
 	interval      int
 	age           uint64
 	notifyChan    chan *backgroundNotification
 	abort         uint32
 	localRemovals [][]localRemovalEntry
+	batchSize     int
 }
 
 type localRemovalEntry struct {
@@ -29,6 +28,7 @@ func (vs *DefaultValueStore) tombstoneDiscardInit(cfg *config) {
 	vs.tombstoneDiscardState.interval = cfg.tombstoneDiscardInterval
 	vs.tombstoneDiscardState.age = (uint64(cfg.tombstoneAge) * uint64(time.Second) / 1000) << _TSB_UTIL_BITS
 	vs.tombstoneDiscardState.notifyChan = make(chan *backgroundNotification, 1)
+	vs.tombstoneDiscardState.batchSize = cfg.tombstoneDiscardBatchSize
 	go vs.tombstoneDiscardLauncher()
 }
 
@@ -209,7 +209,7 @@ func (vs *DefaultValueStore) tombstoneDiscardPassExpiredDeletions() {
 			// Since we shouldn't try to modify what we're scanning while we're
 			// scanning (lock contention) we instead record in localRemovals
 			// what to modify after the scan.
-			rangeBegin, more = vs.vlm.ScanCallback(rangeBegin, rangeEnd, _TSB_DELETION, _TSB_LOCAL_REMOVAL, cutoff, _GLH_TOMBSTONE_DISCARD_BATCH_SIZE, func(keyA uint64, keyB uint64, timestampbits uint64, length uint32) {
+			rangeBegin, more = vs.vlm.ScanCallback(rangeBegin, rangeEnd, _TSB_DELETION, _TSB_LOCAL_REMOVAL, cutoff, uint64(vs.tombstoneDiscardState.batchSize), func(keyA uint64, keyB uint64, timestampbits uint64, length uint32) {
 				e := &localRemovals[localRemovalsIndex]
 				e.keyA = keyA
 				e.keyB = keyB
@@ -227,7 +227,7 @@ func (vs *DefaultValueStore) tombstoneDiscardPassExpiredDeletions() {
 	// To avoid memory churn, the localRemovals scratchpads are allocated just
 	// once and passed in to the workers.
 	for len(vs.tombstoneDiscardState.localRemovals) <= int(workerMax) {
-		vs.tombstoneDiscardState.localRemovals = append(vs.tombstoneDiscardState.localRemovals, make([]localRemovalEntry, _GLH_TOMBSTONE_DISCARD_BATCH_SIZE))
+		vs.tombstoneDiscardState.localRemovals = append(vs.tombstoneDiscardState.localRemovals, make([]localRemovalEntry, vs.tombstoneDiscardState.batchSize))
 	}
 	wg := &sync.WaitGroup{}
 	wg.Add(int(workerMax + 1))

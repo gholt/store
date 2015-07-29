@@ -98,8 +98,6 @@ const (
 	TIMESTAMPMICRO_MAX = int64(uint64(math.MaxUint64) >> _TSB_UTIL_BITS)
 )
 
-const _GLH_RECOVERY_BATCH_SIZE = 1024 * 1024
-
 // ValueStore is an interface for a disk-backed data structure that stores
 // []byte values referenced by 128 bit keys with options for replication.
 //
@@ -158,6 +156,7 @@ type DefaultValueStore struct {
 	pathtoc                 string
 	vlm                     valuelocmap.ValueLocMap
 	workers                 int
+	recoveryBatchSize       int
 	maxValueSize            uint32
 	pageSize                uint32
 	minValueAlloc           int
@@ -238,6 +237,7 @@ func New(opts ...func(*config)) *DefaultValueStore {
 		pathtoc:                 cfg.pathtoc,
 		vlm:                     vlm,
 		workers:                 cfg.workers,
+		recoveryBatchSize:       cfg.recoveryBatchSize,
 		replicationIgnoreRecent: (uint64(cfg.replicationIgnoreRecent) * uint64(time.Second) / 1000) << _TSB_UTIL_BITS,
 		maxValueSize:            uint32(cfg.maxValueSize),
 		pageSize:                uint32(cfg.pageSize),
@@ -753,7 +753,7 @@ func (vs *DefaultValueStore) recovery() {
 		pendingBatchChans[i] = make(chan []writeReq, 4)
 		freeBatchChans[i] = make(chan []writeReq, 4)
 		for j := 0; j < cap(freeBatchChans[i]); j++ {
-			freeBatchChans[i] <- make([]writeReq, _GLH_RECOVERY_BATCH_SIZE)
+			freeBatchChans[i] <- make([]writeReq, vs.recoveryBatchSize)
 		}
 	}
 	wg := &sync.WaitGroup{}
@@ -874,7 +874,7 @@ func (vs *DefaultValueStore) recovery() {
 					wr.offset = binary.BigEndian.Uint32(fromDiskOverflow[24:])
 					wr.length = binary.BigEndian.Uint32(fromDiskOverflow[28:])
 					batchesPos[k]++
-					if batchesPos[k] >= _GLH_RECOVERY_BATCH_SIZE {
+					if batchesPos[k] >= vs.recoveryBatchSize {
 						pendingBatchChans[k] <- batches[k]
 						batches[k] = nil
 					}
@@ -896,7 +896,7 @@ func (vs *DefaultValueStore) recovery() {
 					wr.offset = binary.BigEndian.Uint32(fromDiskBuf[j+24:])
 					wr.length = binary.BigEndian.Uint32(fromDiskBuf[j+28:])
 					batchesPos[k]++
-					if batchesPos[k] >= _GLH_RECOVERY_BATCH_SIZE {
+					if batchesPos[k] >= vs.recoveryBatchSize {
 						pendingBatchChans[k] <- batches[k]
 						batches[k] = nil
 					}
