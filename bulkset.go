@@ -6,17 +6,14 @@ import (
 	"time"
 )
 
-const _GLH_IN_BULK_SET_MSGS = 128
-const _GLH_IN_BULK_SET_HANDLERS = 40
-const _GLH_OUT_BULK_SET_MSGS = 128
-const _GLH_OUT_BULK_SET_MSG_SIZE = 16 * 1024 * 1024
-const _GLH_IN_BULK_SET_MSG_TIMEOUT = 300
 const _MSG_BULK_SET = 0x44f58445991a4aa1
 
 type bulkSetState struct {
 	inMsgChan     chan *bulkSetMsg
 	inFreeMsgChan chan *bulkSetMsg
 	outMsgChan    chan *bulkSetMsg
+	msgSize       int
+	inMsgTimeout  time.Duration
 }
 
 type bulkSetMsg struct {
@@ -28,25 +25,27 @@ type bulkSetMsg struct {
 func (vs *DefaultValueStore) bulkSetInit(cfg *config) {
 	if vs.msgRing != nil {
 		vs.msgRing.SetMsgHandler(_MSG_BULK_SET, vs.newInBulkSetMsg)
-		vs.bulkSetState.inMsgChan = make(chan *bulkSetMsg, _GLH_IN_BULK_SET_MSGS)
-		vs.bulkSetState.inFreeMsgChan = make(chan *bulkSetMsg, _GLH_IN_BULK_SET_MSGS)
+		vs.bulkSetState.inMsgChan = make(chan *bulkSetMsg, cfg.inBulkSetMsgs)
+		vs.bulkSetState.inFreeMsgChan = make(chan *bulkSetMsg, cfg.inBulkSetMsgs)
 		for i := 0; i < cap(vs.bulkSetState.inFreeMsgChan); i++ {
 			vs.bulkSetState.inFreeMsgChan <- &bulkSetMsg{
 				vs:     vs,
 				header: make([]byte, 8),
 			}
 		}
-		for i := 0; i < _GLH_IN_BULK_SET_HANDLERS; i++ {
+		for i := 0; i < cfg.inBulkSetHandlers; i++ {
 			go vs.inBulkSet()
 		}
-		vs.bulkSetState.outMsgChan = make(chan *bulkSetMsg, _GLH_OUT_BULK_SET_MSGS)
+		vs.bulkSetState.msgSize = cfg.outBulkSetMsgSize
+		vs.bulkSetState.outMsgChan = make(chan *bulkSetMsg, cfg.outBulkSetMsgs)
 		for i := 0; i < cap(vs.bulkSetState.outMsgChan); i++ {
 			vs.bulkSetState.outMsgChan <- &bulkSetMsg{
 				vs:     vs,
 				header: make([]byte, 8),
-				body:   make([]byte, _GLH_OUT_BULK_SET_MSG_SIZE),
+				body:   make([]byte, cfg.outBulkSetMsgSize),
 			}
 		}
+		vs.bulkSetState.inMsgTimeout = time.Duration(cfg.inBulkSetMsgTimeout) * time.Second
 	}
 }
 
@@ -90,7 +89,7 @@ func (vs *DefaultValueStore) newInBulkSetMsg(r io.Reader, l uint64) (uint64, err
 	var bsm *bulkSetMsg
 	select {
 	case bsm = <-vs.bulkSetState.inFreeMsgChan:
-	case <-time.After(_GLH_IN_BULK_SET_MSG_TIMEOUT * time.Second):
+	case <-time.After(vs.bulkSetState.inMsgTimeout):
 		left := l
 		var sn int
 		var err error

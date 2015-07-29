@@ -26,7 +26,7 @@ func (vs *DefaultValueStore) pushReplicationInit(cfg *config) {
 	vs.pushReplicationState.outWorkers = cfg.outPushReplicationWorkers
 	vs.pushReplicationState.outInterval = cfg.outPushReplicationInterval
 	if vs.msgRing != nil {
-		vs.pushReplicationState.outMsgChan = make(chan *pullReplicationMsg, _GLH_OUT_PULL_REPLICATION_MSGS)
+		vs.pushReplicationState.outMsgChan = make(chan *pullReplicationMsg, cfg.outPushReplicationMsgs)
 	}
 	vs.pushReplicationState.outNotifyChan = make(chan *backgroundNotification, 1)
 	go vs.outPushReplicationLauncher()
@@ -151,7 +151,7 @@ func (vs *DefaultValueStore) outPushReplicationPass() {
 		timestampbitsNow := uint64(brimtime.TimeToUnixMicro(time.Now())) << _TSB_UTIL_BITS
 		cutoff := timestampbitsNow - vs.replicationIgnoreRecent
 		tombstoneCutoff := timestampbitsNow - vs.tombstoneDiscardState.age
-		availableBytes := int64(_GLH_OUT_BULK_SET_MSG_SIZE)
+		availableBytes := int64(vs.bulkSetState.msgSize)
 		list = list[:0]
 		// We ignore the "more" option from ScanCallback and just send the
 		// first matching batch each full iteration. Once a remote end acks the

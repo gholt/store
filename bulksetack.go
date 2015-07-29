@@ -9,10 +9,10 @@ import (
 const _MSG_BULK_SET_ACK = 0x39589f4746844e3b
 
 type bulkSetAckState struct {
-	inMsgChan              chan *bulkSetAckMsg
-	inFreeMsgChan          chan *bulkSetAckMsg
-	outFreeMsgChan         chan *bulkSetAckMsg
-	inBulkSetAckMsgTimeout time.Duration
+	inMsgChan      chan *bulkSetAckMsg
+	inFreeMsgChan  chan *bulkSetAckMsg
+	outFreeMsgChan chan *bulkSetAckMsg
+	inMsgTimeout   time.Duration
 }
 
 type bulkSetAckMsg struct {
@@ -38,7 +38,7 @@ func (vs *DefaultValueStore) bulkSetAckInit(cfg *config) {
 				body: make([]byte, cfg.outBulkSetAckMsgSize),
 			}
 		}
-		vs.bulkSetAckState.inBulkSetAckMsgTimeout = time.Duration(cfg.inBulkSetAckMsgTimeout) * time.Second
+		vs.bulkSetAckState.inMsgTimeout = time.Duration(cfg.inBulkSetAckMsgTimeout) * time.Second
 	}
 }
 
@@ -68,7 +68,7 @@ func (vs *DefaultValueStore) newInBulkSetAckMsg(r io.Reader, l uint64) (uint64, 
 	var bsam *bulkSetAckMsg
 	select {
 	case bsam = <-vs.bulkSetAckState.inFreeMsgChan:
-	case <-time.After(vs.bulkSetAckState.inBulkSetAckMsgTimeout):
+	case <-time.After(vs.bulkSetAckState.inMsgTimeout):
 		left := l
 		var sn int
 		var err error

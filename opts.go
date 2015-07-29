@@ -14,40 +14,52 @@ import (
 )
 
 type config struct {
-	logCritical                *log.Logger
-	logError                   *log.Logger
-	logWarning                 *log.Logger
-	logInfo                    *log.Logger
-	logDebug                   *log.Logger
-	rand                       *rand.Rand
-	path                       string
-	pathtoc                    string
-	vlm                        valuelocmap.ValueLocMap
-	workers                    int
-	tombstoneDiscardInterval   int
-	outPullReplicationWorkers  int
-	outPullReplicationInterval int
-	outPushReplicationWorkers  int
-	outPushReplicationInterval int
-	maxValueSize               int
-	pageSize                   int
-	minValueAlloc              int
-	writePagesPerWorker        int
-	tombstoneAge               int
-	valuesFileSize             int
-	valuesFileReaders          int
-	checksumInterval           int
-	msgRing                    ring.MsgRing
-	replicationIgnoreRecent    int
-	inBulkSetAckMsgs           int
-	inBulkSetAckHandlers       int
-	inBulkSetAckMsgTimeout     int
-	outBulkSetAckMsgs          int
-	outBulkSetAckMsgSize       int
-	compactionInterval         int
-	compactionThreshold        float64
-	compactionAgeThreshold     int
-	compactionWorkers          int
+	logCritical                 *log.Logger
+	logError                    *log.Logger
+	logWarning                  *log.Logger
+	logInfo                     *log.Logger
+	logDebug                    *log.Logger
+	rand                        *rand.Rand
+	path                        string
+	pathtoc                     string
+	vlm                         valuelocmap.ValueLocMap
+	workers                     int
+	tombstoneDiscardInterval    int
+	inPullReplicationMsgs       int
+	inPullReplicationHandlers   int
+	inPullReplicationMsgTimeout int
+	outPullReplicationWorkers   int
+	outPullReplicationInterval  int
+	outPullReplicationMsgs      int
+	outPullReplicationBloomN    int
+	outPullReplicationBloomP    float64
+	outPushReplicationWorkers   int
+	outPushReplicationInterval  int
+	outPushReplicationMsgs      int
+	maxValueSize                int
+	pageSize                    int
+	minValueAlloc               int
+	writePagesPerWorker         int
+	tombstoneAge                int
+	valuesFileSize              int
+	valuesFileReaders           int
+	checksumInterval            int
+	msgRing                     ring.MsgRing
+	replicationIgnoreRecent     int
+	inBulkSetMsgs               int
+	inBulkSetHandlers           int
+	inBulkSetMsgTimeout         int
+	outBulkSetMsgs              int
+	outBulkSetMsgSize           int
+	inBulkSetAckMsgs            int
+	inBulkSetAckHandlers        int
+	inBulkSetAckMsgTimeout      int
+	outBulkSetAckMsgs           int
+	outBulkSetAckMsgSize        int
+	compactionInterval          int
+	compactionThreshold         float64
+	compactionAgeThreshold      int
+	compactionWorkers           int
 }
 
 func resolveConfig(opts ...func(*config)) *config {
@@ -66,6 +78,24 @@ func resolveConfig(opts ...func(*config)) *config {
 			cfg.tombstoneDiscardInterval = val
 		}
 	}
+	cfg.inPullReplicationMsgs = 128
+	if env := os.Getenv("VALUESTORE_INPULLREPLICATIONMSGS"); env != "" {
+		if val, err := strconv.Atoi(env); err == nil {
+			cfg.inPullReplicationMsgs = val
+		}
+	}
+	cfg.inPullReplicationHandlers = 40
+	if env := os.Getenv("VALUESTORE_INPULLREPLICATIONHANDLERS"); env != "" {
+		if val, err := strconv.Atoi(env); err == nil {
+			cfg.inPullReplicationHandlers = val
+		}
+	}
+	cfg.inPullReplicationMsgTimeout = 300
+	if env := os.Getenv("VALUESTORE_INPULLREPLICATIONMSGTIMEOUT"); env != "" {
+		if val, err := strconv.Atoi(env); err == nil {
+			cfg.inPullReplicationMsgTimeout = val
+		}
+	}
 	cfg.outPullReplicationWorkers = cfg.workers
 	if env := os.Getenv("VALUESTORE_OUTPULLREPLICATIONWORKERS"); env != "" {
 		if val, err := strconv.Atoi(env); err == nil {
@@ -78,6 +108,24 @@ func resolveConfig(opts ...func(*config)) *config {
 			cfg.outPullReplicationInterval = val
 		}
 	}
+	cfg.outPullReplicationMsgs = 128
+	if env := os.Getenv("VALUESTORE_OUTPULLREPLICATIONMSGS"); env != "" {
+		if val, err := strconv.Atoi(env); err == nil {
+			cfg.outPullReplicationMsgs = val
+		}
+	}
+	cfg.outPullReplicationBloomN = 1000000
+	if env := os.Getenv("VALUESTORE_OUTPULLREPLICATIONBLOOMN"); env != "" {
+		if val, err := strconv.Atoi(env); err == nil {
+			cfg.outPullReplicationBloomN = val
+		}
+	}
+	cfg.outPullReplicationBloomP = 0.001
+	if env := os.Getenv("VALUESTORE_OUTPULLREPLICATIONBLOOMP"); env != "" {
+		if val, err := strconv.ParseFloat(env, 64); err == nil {
+			cfg.outPullReplicationBloomP = val
+		}
+	}
 	cfg.outPushReplicationWorkers = cfg.workers
 	if env := os.Getenv("VALUESTORE_OUTPUSHREPLICATIONWORKERS"); env != "" {
 		if val, err := strconv.Atoi(env); err == nil {
@@ -88,6 +136,12 @@ func resolveConfig(opts ...func(*config)) *config {
 	if env := os.Getenv("VALUESTORE_OUTPUSHREPLICATIONINTERVAL"); env != "" {
 		if val, err := strconv.Atoi(env); err == nil {
 			cfg.outPushReplicationInterval = val
+		}
+	}
+	cfg.outPushReplicationMsgs = 128
+	if env := os.Getenv("VALUESTORE_OUTPUSHREPLICATIONMSGS"); env != "" {
+		if val, err := strconv.Atoi(env); err == nil {
+			cfg.outPushReplicationMsgs = val
 		}
 	}
 	cfg.maxValueSize = 4 * 1024 * 1024
@@ -136,6 +190,36 @@ func resolveConfig(opts ...func(*config)) *config {
 	if env := os.Getenv("VALUESTORE_REPLICATIONIGNORERECENT"); env != "" {
 		if val, err := strconv.Atoi(env); err == nil {
 			cfg.replicationIgnoreRecent = val
+		}
+	}
+	cfg.inBulkSetMsgs = 128
+	if env := os.Getenv("VALUESTORE_INBULKSETMSGS"); env != "" {
+		if val, err := strconv.Atoi(env); err == nil {
+			cfg.inBulkSetMsgs = val
+		}
+	}
+	cfg.inBulkSetHandlers = 40
+	if env := os.Getenv("VALUESTORE_INBULKSETHANDLERS"); env != "" {
+		if val, err := strconv.Atoi(env); err == nil {
+			cfg.inBulkSetHandlers = val
+		}
+	}
+	cfg.inBulkSetMsgTimeout = 300
+	if env := os.Getenv("VALUESTORE_INBULKSETMSGTIMEOUT"); env != "" {
+		if val, err := strconv.Atoi(env); err == nil {
+			cfg.inBulkSetMsgTimeout = val
+		}
+	}
+	cfg.outBulkSetMsgs = 128
+	if env := os.Getenv("VALUESTORE_OUTBULKSETMSGS"); env != "" {
+		if val, err := strconv.Atoi(env); err == nil {
+			cfg.outBulkSetMsgs = val
+		}
+	}
+	cfg.outBulkSetMsgSize = 16 * 1024 * 1024
+	if env := os.Getenv("VALUESTORE_OUTBULKSETMSGSIZE"); env != "" {
+		if val, err := strconv.Atoi(env); err == nil {
+			cfg.outBulkSetMsgSize = val
 		}
 	}
 	cfg.inBulkSetAckMsgs = 128
@@ -222,17 +306,38 @@ func resolveConfig(opts ...func(*config)) *config {
 	if cfg.tombstoneDiscardInterval < 1 {
 		cfg.tombstoneDiscardInterval = 1
 	}
+	if cfg.inPullReplicationMsgs < 1 {
+		cfg.inPullReplicationMsgs = 1
+	}
+	if cfg.inPullReplicationHandlers < 1 {
+		cfg.inPullReplicationHandlers = 1
+	}
+	if cfg.inPullReplicationMsgTimeout < 1 {
+		cfg.inPullReplicationMsgTimeout = 1
+	}
 	if cfg.outPullReplicationWorkers < 1 {
 		cfg.outPullReplicationWorkers = 1
 	}
 	if cfg.outPullReplicationInterval < 1 {
 		cfg.outPullReplicationInterval = 1
 	}
+	if cfg.outPullReplicationMsgs < 1 {
+		cfg.outPullReplicationMsgs = 1
+	}
+	if cfg.outPullReplicationBloomN < 1 {
+		cfg.outPullReplicationBloomN = 1
+	}
+	if cfg.outPullReplicationBloomP < 0.000001 {
+		cfg.outPullReplicationBloomP = 0.000001
+	}
 	if cfg.outPushReplicationWorkers < 1 {
 		cfg.outPushReplicationWorkers = 1
 	}
 	if cfg.outPushReplicationInterval < 1 {
 		cfg.outPushReplicationInterval = 1
+	}
+	if cfg.outPushReplicationMsgs < 1 {
+		cfg.outPushReplicationMsgs = 1
 	}
 	if cfg.maxValueSize < 0 {
 		cfg.maxValueSize = 0
@@ -278,6 +383,21 @@ func resolveConfig(opts ...func(*config)) *config {
 	}
 	if cfg.replicationIgnoreRecent < 0 {
 		cfg.replicationIgnoreRecent = 0
+	}
+	if cfg.inBulkSetMsgs < 1 {
+		cfg.inBulkSetMsgs = 1
+	}
+	if cfg.inBulkSetHandlers < 1 {
+		cfg.inBulkSetHandlers = 1
+	}
+	if cfg.inBulkSetMsgTimeout < 1 {
+		cfg.inBulkSetMsgTimeout = 1
+	}
+	if cfg.outBulkSetMsgs < 1 {
+		cfg.outBulkSetMsgs = 1
+	}
+	if cfg.outBulkSetMsgSize < 1 {
+		cfg.outBulkSetMsgSize = 1
 	}
 	if cfg.inBulkSetAckMsgs < 1 {
 		cfg.inBulkSetAckMsgs = 1
@@ -414,6 +534,33 @@ func OptTombstoneDiscardInterval(seconds int) func(*config) {
 	}
 }
 
+// OptInPullReplicationMsgs indicates how many incoming pull-replication
+// messages can be buffered before dropping additional ones. Defaults to env
+// VALUESTORE_INPULLREPLICATIONMSGS or 128.
+func OptInPullReplicationMsgs(count int) func(*config) {
+	return func(cfg *config) {
+		cfg.inPullReplicationMsgs = count
+	}
+}
+
+// OptInPullReplicationHandlers indicates how many incoming pull-replication
+// messages can be processed at the same time. Defaults to env
+// VALUESTORE_INPULLREPLICATIONHANDLERS or 40.
+func OptInPullReplicationHandlers(count int) func(*config) {
+	return func(cfg *config) {
+		cfg.inPullReplicationHandlers = count
+	}
+}
+
+// OptInPullReplicationMsgTimeout indicates the maximum seconds an incoming
+// pull-replication message can be pending before just discarding it. Defaults
+// to env VALUESTORE_INPULLREPLICATIONMSGTIMEOUT or 300.
+func OptInPullReplicationMsgTimeout(seconds int) func(*config) {
+	return func(cfg *config) {
+		cfg.inPullReplicationMsgTimeout = seconds
+	}
+}
+
 // OptOutPullReplicationWorkers indicates how many goroutines may be used for
 // an outgoing pull replication pass. Defaults to env
 // VALUESTORE_OUTPULLREPLICATIONWORKERS or VALUESTORE_WORKERS.
@@ -439,6 +586,37 @@ func OptOutPullReplicationInterval(seconds int) func(*config) {
 	}
 }
 
+// OptOutPullReplicationMsgs indicates how many outgoing pull-replication
+// messages can be buffered before blocking on creating more. Defaults to env
+// VALUESTORE_OUTPULLREPLICATIONMSGS or 128.
+func OptOutPullReplicationMsgs(count int) func(*config) {
+	return func(cfg *config) {
+		cfg.outPullReplicationMsgs = count
+	}
+}
+
+// OptOutPullReplicationBloomN indicates the N-factor for the outgoing
+// pull-replication bloom filters. This indicates how many keys the bloom
+// filter can reasonably hold and, in combination with the P-factor, affects
+// memory usage. Defaults to env VALUESTORE_OUTPULLREPLICATIONBLOOMN or
+// 1000000.
+func OptOutPullReplicationBloomN(count int) func(*config) {
+	return func(cfg *config) {
+		cfg.outPullReplicationBloomN = count
+	}
+}
+
+// OptOutPullReplicationBloomP indicates the P-factor for the outgoing
+// pull-replication bloom filters. This indicates the desired percentage chance
+// of a collision within the bloom filter and, in combination with the
+// N-factor, affects memory usage. Defaults to env
+// VALUESTORE_OUTPULLREPLICATIONBLOOMP or 0.001.
+func OptOutPullReplicationBloomP(percentage float64) func(*config) {
+	return func(cfg *config) {
+		cfg.outPullReplicationBloomP = percentage
+	}
+}
+
 // OptOutPushReplicationWorkers indicates how many goroutines may be used for
 // an outgoing push replication pass. Defaults to env
 // VALUESTORE_OUTPUSHREPLICATIONWORKERS or VALUESTORE_WORKERS.
@@ -461,6 +639,15 @@ func OptOutPushReplicationWorkers(workers int) func(*config) {
 func OptOutPushReplicationInterval(seconds int) func(*config) {
 	return func(cfg *config) {
 		cfg.outPushReplicationInterval = seconds
+	}
+}
+
+// OptOutPushReplicationMsgs indicates how many outgoing push-replication
+// messages can be buffered before blocking on creating more. Defaults to env
+// VALUESTORE_OUTPUSHREPLICATIONMSGS or 128.
+func OptOutPushReplicationMsgs(count int) func(*config) {
+	return func(cfg *config) {
+		cfg.outPushReplicationMsgs = count
 	}
 }
 
@@ -543,7 +730,51 @@ func OptReplicationIgnoreRecent(seconds int) func(*config) {
 	}
 }
 
-// OptInBulkSetAckMsgs indicates how many incoming bulk-set messages can be
+// OptInBulkSetMsgs indicates how many incoming bulk-set messages can be
+// buffered before dropping additional ones. Defaults to env
+// VALUESTORE_INBULKSETMSGS or 128.
+func OptInBulkSetMsgs(count int) func(*config) {
+	return func(cfg *config) {
+		cfg.inBulkSetMsgs = count
+	}
+}
+
+// OptInBulkSetHandlers indicates how many incoming bulk-set messages can be
+// processed at the same time. Defaults to env VALUESTORE_INBULKSETHANDLERS or
+// 40.
+func OptInBulkSetHandlers(count int) func(*config) {
+	return func(cfg *config) {
+		cfg.inBulkSetHandlers = count
+	}
+}
+
+// OptInBulkSetMsgTimeout indicates the maximum seconds an incoming bulk-set
+// message can be pending before just discarding it. Defaults to env
+// VALUESTORE_INBULKSETMSGTIMEOUT or 300.
+func OptInBulkSetMsgTimeout(seconds int) func(*config) {
+	return func(cfg *config) {
+		cfg.inBulkSetMsgTimeout = seconds
+	}
+}
+
+// OptOutBulkSetMsgs indicates how many outgoing bulk-set messages can
+// be buffered before blocking on creating more. Defaults to env
+// VALUESTORE_OUTBULKSETMSGS or 128.
+func OptOutBulkSetMsgs(count int) func(*config) {
+	return func(cfg *config) {
+		cfg.outBulkSetMsgs = count
+	}
+}
+
+// OptOutBulkSetMsgSize indicates the maximum bytes for outgoing bulk-set
+// messages. Defaults to env VALUESTORE_OUTBULKSETMSGSIZE or 16,777,216.
+func OptOutBulkSetMsgSize(bytes int) func(*config) {
+	return func(cfg *config) {
+		cfg.outBulkSetMsgSize = bytes
+	}
+}
+
+// OptInBulkSetAckMsgs indicates how many incoming bulk-set-ack messages can be
 // buffered before dropping additional ones. Defaults to env
 // VALUESTORE_INBULKSETACKMSGS or 128.
 func OptInBulkSetAckMsgs(count int) func(*config) {
@@ -552,26 +783,26 @@ func OptInBulkSetAckMsgs(count int) func(*config) {
 	}
 }
 
-// OptInBulkSetAckHandlers indicates how many incoming bulk-set messages can be
-// processed at the same time. Defaults to env VALUESTORE_INBULKSETACKHANDLERS
-// or 40.
+// OptInBulkSetAckHandlers indicates how many incoming bulk-set-ack messages
+// can be processed at the same time. Defaults to env
+// VALUESTORE_INBULKSETACKHANDLERS or 40.
 func OptInBulkSetAckHandlers(count int) func(*config) {
 	return func(cfg *config) {
 		cfg.inBulkSetAckHandlers = count
 	}
 }
 
-// OptInBulkSetAckMsgTimeout indicates the maximum seconds an incoming bulk-set
-// acknowledgement message can be pending before just discarding it. Defaults
-// to env VALUESTORE_INBULKSETACKMSGTIMEOUT or 300.
+// OptInBulkSetAckMsgTimeout indicates the maximum seconds an incoming
+// bulk-set-ack message can be pending before just discarding it. Defaults to
+// env VALUESTORE_INBULKSETACKMSGTIMEOUT or 300.
 func OptInBulkSetAckMsgTimeout(seconds int) func(*config) {
 	return func(cfg *config) {
 		cfg.inBulkSetAckMsgTimeout = seconds
 	}
 }
 
-// OptOutBulkSetAckMsgs indicates how many outgoing bulk-set messages can be
-// buffered before blocking on creating more. Defaults to env
+// OptOutBulkSetAckMsgs indicates how many outgoing bulk-set-ack messages can
+// be buffered before blocking on creating more. Defaults to env
 // VALUESTORE_OUTBULKSETACKMSGS or 128.
 func OptOutBulkSetAckMsgs(count int) func(*config) {
 	return func(cfg *config) {
@@ -579,8 +810,9 @@ func OptOutBulkSetAckMsgs(count int) func(*config) {
 	}
 }
 
-// OptOutBulkSetAckMsgSize indicates the maximum bytes for outgoing bulk-set
-// messages. Defaults to env VALUESTORE_OUTBULKSETACKMSGSIZE or 16,777,216.
+// OptOutBulkSetAckMsgSize indicates the maximum bytes for outgoing
+// bulk-set-ack messages. Defaults to env VALUESTORE_OUTBULKSETACKMSGSIZE or
+// 16,777,216.
 func OptOutBulkSetAckMsgSize(bytes int) func(*config) {
 	return func(cfg *config) {
 		cfg.outBulkSetAckMsgSize = bytes

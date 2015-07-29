@@ -11,14 +11,8 @@ import (
 	"gopkg.in/gholt/brimtime.v1"
 )
 
-const _GLH_IN_PULL_REPLICATION_MSGS = 128
-const _GLH_IN_PULL_REPLICATION_HANDLERS = 40
-const _GLH_IN_PULL_REPLICATION_MSG_TIMEOUT = 300
-const _GLH_OUT_PULL_REPLICATION_MSGS = 128
-const _GLH_BLOOM_FILTER_N = 1000000
-const _GLH_BLOOM_FILTER_P = 0.001
 const _MSG_PULL_REPLICATION = 0x579c4bd162f045b3
-const pullReplicationMsgHeaderBytes = 44
+const _PULL_REPLICATION_MSG_HEADER_BYTES = 44
 
 type pullReplicationState struct {
 	inMsgChan     chan *pullReplicationMsg
@@ -30,6 +24,9 @@ type pullReplicationState struct {
 	outAbort      uint32
 	outMsgChan    chan *pullReplicationMsg
 	outKTBFs      []*ktBloomFilter
+	inMsgTimeout  time.Duration
+	bloomN        uint64
+	bloomP        float64
 }
 
 type pullReplicationMsg struct {
@@ -45,26 +42,29 @@ func (vs *DefaultValueStore) pullReplicationInit(cfg *config) {
 	vs.pullReplicationState.outIteration = uint16(cfg.rand.Uint32())
 	if vs.msgRing != nil {
 		vs.msgRing.SetMsgHandler(_MSG_PULL_REPLICATION, vs.newInPullReplicationMsg)
-		vs.pullReplicationState.inMsgChan = make(chan *pullReplicationMsg, _GLH_IN_PULL_REPLICATION_MSGS)
-		vs.pullReplicationState.inFreeMsgChan = make(chan *pullReplicationMsg, _GLH_IN_PULL_REPLICATION_MSGS)
+		vs.pullReplicationState.inMsgChan = make(chan *pullReplicationMsg, cfg.inPullReplicationMsgs)
+		vs.pullReplicationState.inFreeMsgChan = make(chan *pullReplicationMsg, cfg.inPullReplicationMsgs)
 		for i := 0; i < cap(vs.pullReplicationState.inFreeMsgChan); i++ {
 			vs.pullReplicationState.inFreeMsgChan <- &pullReplicationMsg{
 				vs:     vs,
-				header: make([]byte, ktBloomFilterHeaderBytes+pullReplicationMsgHeaderBytes),
+				header: make([]byte, ktBloomFilterHeaderBytes+_PULL_REPLICATION_MSG_HEADER_BYTES),
 			}
 		}
-		for i := 0; i < _GLH_IN_PULL_REPLICATION_HANDLERS; i++ {
+		for i := 0; i < cfg.inPullReplicationHandlers; i++ {
 			go vs.inPullReplication()
 		}
-		vs.pullReplicationState.outMsgChan = make(chan *pullReplicationMsg, _GLH_OUT_PULL_REPLICATION_MSGS)
-		vs.pullReplicationState.outKTBFs = []*ktBloomFilter{newKTBloomFilter(_GLH_BLOOM_FILTER_N, _GLH_BLOOM_FILTER_P, 0)}
+		vs.pullReplicationState.outMsgChan = make(chan *pullReplicationMsg, cfg.outPullReplicationMsgs)
+		vs.pullReplicationState.bloomN = uint64(cfg.outPullReplicationBloomN)
+		vs.pullReplicationState.bloomP = cfg.outPullReplicationBloomP
+		vs.pullReplicationState.outKTBFs = []*ktBloomFilter{newKTBloomFilter(vs.pullReplicationState.bloomN, vs.pullReplicationState.bloomP, 0)}
 		for i := 0; i < cap(vs.pullReplicationState.outMsgChan); i++ {
 			vs.pullReplicationState.outMsgChan <- &pullReplicationMsg{
 				vs:     vs,
-				header: make([]byte, ktBloomFilterHeaderBytes+pullReplicationMsgHeaderBytes),
+				header: make([]byte, ktBloomFilterHeaderBytes+_PULL_REPLICATION_MSG_HEADER_BYTES),
 				body:   make([]byte, len(vs.pullReplicationState.outKTBFs[0].bits)),
 			}
 		}
+		vs.pullReplicationState.inMsgTimeout = time.Duration(cfg.inPullReplicationMsgTimeout) * time.Second
 	}
 	vs.pullReplicationState.outNotifyChan = make(chan *backgroundNotification, 1)
 	go vs.outPullReplicationLauncher()
@@ -93,7 +93,7 @@ func (vs *DefaultValueStore) EnableOutPullReplication() {
 
 func (vs *DefaultValueStore) inPullReplication() {
 	// Max keys; 28 = keyA:8, keyB:8, timestampbits:8, length:4, value:0
-	k := make([]uint64, _GLH_OUT_BULK_SET_MSG_SIZE/28)
+	k := make([]uint64, vs.bulkSetState.msgSize/28)
 	v := make([]byte, vs.maxValueSize)
 	for {
 		prm := <-vs.pullReplicationState.inMsgChan
@@ -101,7 +101,7 @@ func (vs *DefaultValueStore) inPullReplication() {
 		cutoff := prm.cutoff()
 		tombstoneCutoff := (uint64(brimtime.TimeToUnixMicro(time.Now())) << _TSB_UTIL_BITS) - vs.tombstoneDiscardState.age
 		ktbf := prm.ktBloomFilter()
-		l := int64(_GLH_OUT_BULK_SET_MSG_SIZE)
+		l := int64(vs.bulkSetState.msgSize)
 		vs.vlm.ScanCallback(prm.rangeStart(), prm.rangeStop(), 0, _TSB_LOCAL_REMOVAL, cutoff, uint64(cap(k)/2), func(keyA uint64, keyB uint64, timestampbits uint64, length uint32) {
 			if l > 0 {
 				if timestampbits&_TSB_DELETION == 0 || timestampbits >= tombstoneCutoff {
@@ -218,7 +218,7 @@ func (vs *DefaultValueStore) outPullReplicationPass() {
 	ringVersion := ring.Version()
 	ws := vs.pullReplicationState.outWorkers
 	for uint64(len(vs.pullReplicationState.outKTBFs)) < ws {
-		vs.pullReplicationState.outKTBFs = append(vs.pullReplicationState.outKTBFs, newKTBloomFilter(_GLH_BLOOM_FILTER_N, _GLH_BLOOM_FILTER_P, 0))
+		vs.pullReplicationState.outKTBFs = append(vs.pullReplicationState.outKTBFs, newKTBloomFilter(vs.pullReplicationState.bloomN, vs.pullReplicationState.bloomP, 0))
 	}
 	f := func(p uint64, w uint64, ktbf *ktBloomFilter) {
 		pb := p << rightwardPartitionShift
@@ -239,7 +239,7 @@ func (vs *DefaultValueStore) outPullReplicationPass() {
 		for {
 			rbThis := rb
 			ktbf.reset(vs.pullReplicationState.outIteration)
-			rb, more = vs.vlm.ScanCallback(rb, re, 0, _TSB_LOCAL_REMOVAL, cutoff, _GLH_BLOOM_FILTER_N, func(keyA uint64, keyB uint64, timestampbits uint64, length uint32) {
+			rb, more = vs.vlm.ScanCallback(rb, re, 0, _TSB_LOCAL_REMOVAL, cutoff, vs.pullReplicationState.bloomN, func(keyA uint64, keyB uint64, timestampbits uint64, length uint32) {
 				ktbf.add(keyA, keyB, timestampbits)
 			})
 			if atomic.LoadUint32(&vs.pullReplicationState.outAbort) != 0 {
@@ -299,7 +299,7 @@ func (vs *DefaultValueStore) newInPullReplicationMsg(r io.Reader, l uint64) (uin
 	var prm *pullReplicationMsg
 	select {
 	case prm = <-vs.pullReplicationState.inFreeMsgChan:
-	case <-time.After(_GLH_IN_PULL_REPLICATION_MSG_TIMEOUT * time.Second):
+	case <-time.After(vs.pullReplicationState.inMsgTimeout):
 		left := l
 		var sn int
 		var err error
@@ -316,7 +316,7 @@ func (vs *DefaultValueStore) newInPullReplicationMsg(r io.Reader, l uint64) (uin
 		}
 		return l, nil
 	}
-	bl := l - pullReplicationMsgHeaderBytes - uint64(ktBloomFilterHeaderBytes)
+	bl := l - _PULL_REPLICATION_MSG_HEADER_BYTES - uint64(ktBloomFilterHeaderBytes)
 	if uint64(cap(prm.body)) < bl {
 		prm.body = make([]byte, bl)
 	}
@@ -351,7 +351,7 @@ func (vs *DefaultValueStore) newOutPullReplicationMsg(ringVersion int64, partiti
 	binary.BigEndian.PutUint64(prm.header[20:], cutoff)
 	binary.BigEndian.PutUint64(prm.header[28:], rangeStart)
 	binary.BigEndian.PutUint64(prm.header[36:], rangeStop)
-	ktbf.toMsg(prm, pullReplicationMsgHeaderBytes)
+	ktbf.toMsg(prm, _PULL_REPLICATION_MSG_HEADER_BYTES)
 	return prm
 }
 
@@ -388,7 +388,7 @@ func (prm *pullReplicationMsg) rangeStop() uint64 {
 }
 
 func (prm *pullReplicationMsg) ktBloomFilter() *ktBloomFilter {
-	return newKTBloomFilterFromMsg(prm, pullReplicationMsgHeaderBytes)
+	return newKTBloomFilterFromMsg(prm, _PULL_REPLICATION_MSG_HEADER_BYTES)
 }
 
 func (prm *pullReplicationMsg) WriteContent(w io.Writer) (uint64, error) {
