@@ -31,7 +31,7 @@ type config struct {
 	tombstoneDiscardInterval    int
 	tombstoneDiscardBatchSize   int
 	inPullReplicationMsgs       int
-	inPullReplicationHandlers   int
+	inPullReplicationWorkers    int
 	inPullReplicationMsgTimeout int
 	outPullReplicationWorkers   int
 	outPullReplicationInterval  int
@@ -53,12 +53,12 @@ type config struct {
 	msgRing                     ring.MsgRing
 	replicationIgnoreRecent     int
 	inBulkSetMsgs               int
-	inBulkSetHandlers           int
+	inBulkSetWorkers            int
 	inBulkSetMsgTimeout         int
 	outBulkSetMsgs              int
 	outBulkSetMsgCap            int
 	inBulkSetAckMsgs            int
-	inBulkSetAckHandlers        int
+	inBulkSetAckWorkers         int
 	inBulkSetAckMsgTimeout      int
 	outBulkSetAckMsgs           int
 	outBulkSetAckMsgCap         int
@@ -120,10 +120,10 @@ func resolveConfig(opts ...func(*config)) *config {
 			cfg.inPullReplicationMsgs = val
 		}
 	}
-	cfg.inPullReplicationHandlers = 40
-	if env := os.Getenv("VALUESTORE_INPULLREPLICATIONHANDLERS"); env != "" {
+	cfg.inPullReplicationWorkers = 40
+	if env := os.Getenv("VALUESTORE_INPULLREPLICATIONWORKERS"); env != "" {
 		if val, err := strconv.Atoi(env); err == nil {
-			cfg.inPullReplicationHandlers = val
+			cfg.inPullReplicationWorkers = val
 		}
 	}
 	cfg.inPullReplicationMsgTimeout = cfg.msgTimeout
@@ -234,10 +234,10 @@ func resolveConfig(opts ...func(*config)) *config {
 			cfg.inBulkSetMsgs = val
 		}
 	}
-	cfg.inBulkSetHandlers = 40
-	if env := os.Getenv("VALUESTORE_INBULKSETHANDLERS"); env != "" {
+	cfg.inBulkSetWorkers = 40
+	if env := os.Getenv("VALUESTORE_INBULKSETWORKERS"); env != "" {
 		if val, err := strconv.Atoi(env); err == nil {
-			cfg.inBulkSetHandlers = val
+			cfg.inBulkSetWorkers = val
 		}
 	}
 	cfg.inBulkSetMsgTimeout = cfg.msgTimeout
@@ -264,10 +264,10 @@ func resolveConfig(opts ...func(*config)) *config {
 			cfg.inBulkSetAckMsgs = val
 		}
 	}
-	cfg.inBulkSetAckHandlers = 40
-	if env := os.Getenv("VALUESTORE_INBULKSETACKHANDLERS"); env != "" {
+	cfg.inBulkSetAckWorkers = 40
+	if env := os.Getenv("VALUESTORE_INBULKSETACKWORKERS"); env != "" {
 		if val, err := strconv.Atoi(env); err == nil {
-			cfg.inBulkSetAckHandlers = val
+			cfg.inBulkSetAckWorkers = val
 		}
 	}
 	cfg.inBulkSetAckMsgTimeout = cfg.msgTimeout
@@ -361,8 +361,8 @@ func resolveConfig(opts ...func(*config)) *config {
 	if cfg.inPullReplicationMsgs < 1 {
 		cfg.inPullReplicationMsgs = 1
 	}
-	if cfg.inPullReplicationHandlers < 1 {
-		cfg.inPullReplicationHandlers = 1
+	if cfg.inPullReplicationWorkers < 1 {
+		cfg.inPullReplicationWorkers = 1
 	}
 	if cfg.inPullReplicationMsgTimeout < 1 {
 		cfg.inPullReplicationMsgTimeout = 1
@@ -439,8 +439,8 @@ func resolveConfig(opts ...func(*config)) *config {
 	if cfg.inBulkSetMsgs < 1 {
 		cfg.inBulkSetMsgs = 1
 	}
-	if cfg.inBulkSetHandlers < 1 {
-		cfg.inBulkSetHandlers = 1
+	if cfg.inBulkSetWorkers < 1 {
+		cfg.inBulkSetWorkers = 1
 	}
 	if cfg.inBulkSetMsgTimeout < 1 {
 		cfg.inBulkSetMsgTimeout = 1
@@ -454,8 +454,8 @@ func resolveConfig(opts ...func(*config)) *config {
 	if cfg.inBulkSetAckMsgs < 1 {
 		cfg.inBulkSetAckMsgs = 1
 	}
-	if cfg.inBulkSetAckHandlers < 1 {
-		cfg.inBulkSetAckHandlers = 1
+	if cfg.inBulkSetAckWorkers < 1 {
+		cfg.inBulkSetAckWorkers = 1
 	}
 	if cfg.inBulkSetAckMsgTimeout < 1 {
 		cfg.inBulkSetAckMsgTimeout = 1
@@ -646,12 +646,12 @@ func OptInPullReplicationMsgs(count int) func(*config) {
 	}
 }
 
-// OptInPullReplicationHandlers indicates how many incoming pull-replication
+// OptInPullReplicationWorkers indicates how many incoming pull-replication
 // messages can be processed at the same time. Defaults to env
-// VALUESTORE_INPULLREPLICATIONHANDLERS or 40.
-func OptInPullReplicationHandlers(count int) func(*config) {
+// VALUESTORE_INPULLREPLICATIONWORKERS or 40.
+func OptInPullReplicationWorkers(count int) func(*config) {
 	return func(cfg *config) {
-		cfg.inPullReplicationHandlers = count
+		cfg.inPullReplicationWorkers = count
 	}
 }
 
@@ -843,12 +843,12 @@ func OptInBulkSetMsgs(count int) func(*config) {
 	}
 }
 
-// OptInBulkSetHandlers indicates how many incoming bulk-set messages can be
-// processed at the same time. Defaults to env VALUESTORE_INBULKSETHANDLERS or
+// OptInBulkSetWorkers indicates how many incoming bulk-set messages can be
+// processed at the same time. Defaults to env VALUESTORE_INBULKSETWORKERS or
 // 40.
-func OptInBulkSetHandlers(count int) func(*config) {
+func OptInBulkSetWorkers(count int) func(*config) {
 	return func(cfg *config) {
-		cfg.inBulkSetHandlers = count
+		cfg.inBulkSetWorkers = count
 	}
 }
 
@@ -888,12 +888,12 @@ func OptInBulkSetAckMsgs(count int) func(*config) {
 	}
 }
 
-// OptInBulkSetAckHandlers indicates how many incoming bulk-set-ack messages
+// OptInBulkSetAckWorkers indicates how many incoming bulk-set-ack messages
 // can be processed at the same time. Defaults to env
-// VALUESTORE_INBULKSETACKHANDLERS or 40.
-func OptInBulkSetAckHandlers(count int) func(*config) {
+// VALUESTORE_INBULKSETACKWORKERS or 40.
+func OptInBulkSetAckWorkers(count int) func(*config) {
 	return func(cfg *config) {
-		cfg.inBulkSetAckHandlers = count
+		cfg.inBulkSetAckWorkers = count
 	}
 }
 

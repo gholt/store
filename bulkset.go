@@ -35,7 +35,7 @@ func (vs *DefaultValueStore) bulkSetInit(cfg *config) {
 				header: make([]byte, 8),
 			}
 		}
-		for i := 0; i < cfg.inBulkSetHandlers; i++ {
+		for i := 0; i < cfg.inBulkSetWorkers; i++ {
 			go vs.inBulkSet()
 		}
 		vs.bulkSetState.msgCap = cfg.outBulkSetMsgCap

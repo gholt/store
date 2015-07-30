@@ -28,7 +28,7 @@ func (vs *DefaultValueStore) bulkSetAckInit(cfg *config) {
 		for i := 0; i < cap(vs.bulkSetAckState.inFreeMsgChan); i++ {
 			vs.bulkSetAckState.inFreeMsgChan <- &bulkSetAckMsg{vs: vs}
 		}
-		for i := 0; i < cfg.inBulkSetAckHandlers; i++ {
+		for i := 0; i < cfg.inBulkSetAckWorkers; i++ {
 			go vs.inBulkSetAck()
 		}
 		vs.bulkSetAckState.outFreeMsgChan = make(chan *bulkSetAckMsg, cfg.outBulkSetAckMsgs)

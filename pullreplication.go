@@ -50,7 +50,7 @@ func (vs *DefaultValueStore) pullReplicationInit(cfg *config) {
 				header: make([]byte, ktBloomFilterHeaderBytes+_PULL_REPLICATION_MSG_HEADER_BYTES),
 			}
 		}
-		for i := 0; i < cfg.inPullReplicationHandlers; i++ {
+		for i := 0; i < cfg.inPullReplicationWorkers; i++ {
 			go vs.inPullReplication()
 		}
 		vs.pullReplicationState.outMsgChan = make(chan *pullReplicationMsg, cfg.outPullReplicationMsgs)
