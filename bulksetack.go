@@ -35,7 +35,7 @@ func (vs *DefaultValueStore) bulkSetAckInit(cfg *config) {
 		for i := 0; i < cap(vs.bulkSetAckState.outFreeMsgChan); i++ {
 			vs.bulkSetAckState.outFreeMsgChan <- &bulkSetAckMsg{
 				vs:   vs,
-				body: make([]byte, cfg.outBulkSetAckMsgSize),
+				body: make([]byte, cfg.outBulkSetAckMsgCap),
 			}
 		}
 		vs.bulkSetAckState.inMsgTimeout = time.Duration(cfg.inBulkSetAckMsgTimeout) * time.Second

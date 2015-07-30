@@ -126,7 +126,7 @@ type ValueStore interface {
 	DisableWrites()
 	Flush()
 	GatherStats(debug bool) (uint64, uint64, fmt.Stringer)
-	MaxValueSize() uint32
+	ValueCap() uint32
 }
 
 var ErrNotFound error = errors.New("not found")
@@ -157,11 +157,11 @@ type DefaultValueStore struct {
 	vlm                     valuelocmap.ValueLocMap
 	workers                 int
 	recoveryBatchSize       int
-	maxValueSize            uint32
+	valueCap                uint32
 	pageSize                uint32
 	minValueAlloc           int
 	writePagesPerWorker     int
-	valuesFileSize          uint32
+	valuesFileCap           uint32
 	valuesFileReaders       int
 	checksumInterval        uint32
 	msgRing                 ring.MsgRing
@@ -239,11 +239,11 @@ func New(opts ...func(*config)) *DefaultValueStore {
 		workers:                 cfg.workers,
 		recoveryBatchSize:       cfg.recoveryBatchSize,
 		replicationIgnoreRecent: (uint64(cfg.replicationIgnoreRecent) * uint64(time.Second) / 1000) << _TSB_UTIL_BITS,
-		maxValueSize:            uint32(cfg.maxValueSize),
+		valueCap:                uint32(cfg.valueCap),
 		pageSize:                uint32(cfg.pageSize),
 		minValueAlloc:           cfg.minValueAlloc,
 		writePagesPerWorker:     cfg.writePagesPerWorker,
-		valuesFileSize:          uint32(cfg.valuesFileSize),
+		valuesFileCap:           uint32(cfg.valuesFileCap),
 		valuesFileReaders:       cfg.valuesFileReaders,
 		checksumInterval:        uint32(cfg.checksumInterval),
 		msgRing:                 cfg.msgRing,
@@ -298,10 +298,10 @@ func New(opts ...func(*config)) *DefaultValueStore {
 	return vs
 }
 
-// MaxValueSize returns the maximum length of a value the ValueStore can
+// ValueCap returns the maximum length of a value the ValueStore can
 // accept.
-func (vs *DefaultValueStore) MaxValueSize() uint32 {
-	return vs.maxValueSize
+func (vs *DefaultValueStore) ValueCap() uint32 {
+	return vs.valueCap
 }
 
 // DisableAll calls DisableAllBackground(), and DisableWrites().
@@ -554,8 +554,8 @@ func (vs *DefaultValueStore) memWriter(pendingVWRChan chan *valueWriteReq) {
 			continue
 		}
 		length := len(vwr.value)
-		if length > int(vs.maxValueSize) {
-			vwr.errChan <- fmt.Errorf("value length of %d > %d", length, vs.maxValueSize)
+		if length > int(vs.valueCap) {
+			vwr.errChan <- fmt.Errorf("value length of %d > %d", length, vs.valueCap)
 			continue
 		}
 		alloc := length
@@ -622,7 +622,7 @@ func (vs *DefaultValueStore) vfWriter() {
 			memWritersFlushLeft = len(vs.pendingVWRChans)
 			continue
 		}
-		if vf != nil && (tocLen+uint64(len(vm.toc)) >= uint64(vs.valuesFileSize) || valueLen+uint64(len(vm.values)) > uint64(vs.valuesFileSize)) {
+		if vf != nil && (tocLen+uint64(len(vm.toc)) >= uint64(vs.valuesFileCap) || valueLen+uint64(len(vm.values)) > uint64(vs.valuesFileCap)) {
 			vf.close()
 			vf = nil
 		}

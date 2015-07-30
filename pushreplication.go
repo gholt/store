@@ -126,10 +126,10 @@ func (vs *DefaultValueStore) outPushReplicationPass() {
 	// To avoid memory churn, the scratchpad areas are allocated just once and
 	// passed in to the workers.
 	for len(vs.pushReplicationState.outLists) < int(workerMax+1) {
-		vs.pushReplicationState.outLists = append(vs.pushReplicationState.outLists, make([]uint64, vs.bulkSetState.msgSize/_MIN_BULK_SET_MSG_ENTRY))
+		vs.pushReplicationState.outLists = append(vs.pushReplicationState.outLists, make([]uint64, vs.bulkSetState.msgCap/_MIN_BULK_SET_MSG_ENTRY))
 	}
 	for len(vs.pushReplicationState.outValBufs) < int(workerMax+1) {
-		vs.pushReplicationState.outValBufs = append(vs.pushReplicationState.outValBufs, make([]byte, vs.maxValueSize))
+		vs.pushReplicationState.outValBufs = append(vs.pushReplicationState.outValBufs, make([]byte, vs.valueCap))
 	}
 	work := func(partition uint64, worker uint64, list []uint64, valbuf []byte) {
 		partitionOnLeftBits := partition << partitionShift
@@ -149,7 +149,7 @@ func (vs *DefaultValueStore) outPushReplicationPass() {
 		timestampbitsNow := uint64(brimtime.TimeToUnixMicro(time.Now())) << _TSB_UTIL_BITS
 		cutoff := timestampbitsNow - vs.replicationIgnoreRecent
 		tombstoneCutoff := timestampbitsNow - vs.tombstoneDiscardState.age
-		availableBytes := int64(vs.bulkSetState.msgSize)
+		availableBytes := int64(vs.bulkSetState.msgCap)
 		list = list[:0]
 		// We ignore the "more" option from ScanCallback and just send the
 		// first matching batch each full iteration. Once a remote end acks the

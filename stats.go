@@ -35,12 +35,12 @@ type valueStoreStats struct {
 	outPullReplicationInterval int
 	outPushReplicationWorkers  int
 	outPushReplicationInterval int
-	maxValueSize               uint32
+	valueCap                   uint32
 	pageSize                   uint32
 	minValueAlloc              int
 	writePagesPerWorker        int
 	tombstoneAge               int
-	valuesFileSize             uint32
+	valuesFileCap              uint32
 	valuesFileReaders          int
 	checksumInterval           uint32
 	replicationIgnoreRecent    int
@@ -85,12 +85,12 @@ func (vs *DefaultValueStore) GatherStats(debug bool) (uint64, uint64, fmt.String
 		stats.outPullReplicationInterval = vs.pullReplicationState.outInterval
 		stats.outPushReplicationWorkers = vs.pushReplicationState.outWorkers
 		stats.outPushReplicationInterval = vs.pushReplicationState.outInterval
-		stats.maxValueSize = vs.maxValueSize
+		stats.valueCap = vs.valueCap
 		stats.pageSize = vs.pageSize
 		stats.minValueAlloc = vs.minValueAlloc
 		stats.writePagesPerWorker = vs.writePagesPerWorker
 		stats.tombstoneAge = int((vs.tombstoneDiscardState.age >> _TSB_UTIL_BITS) * 1000 / uint64(time.Second))
-		stats.valuesFileSize = vs.valuesFileSize
+		stats.valuesFileCap = vs.valuesFileCap
 		stats.valuesFileReaders = vs.valuesFileReaders
 		stats.checksumInterval = vs.checksumInterval
 		stats.replicationIgnoreRecent = int(vs.replicationIgnoreRecent / uint64(time.Second))
@@ -129,12 +129,12 @@ func (stats *valueStoreStats) String() string {
 			[]string{"outPullReplicationInterval", fmt.Sprintf("%d", stats.outPullReplicationInterval)},
 			[]string{"outPushReplicationWorkers", fmt.Sprintf("%d", stats.outPushReplicationWorkers)},
 			[]string{"outPushReplicationInterval", fmt.Sprintf("%d", stats.outPushReplicationInterval)},
-			[]string{"maxValueSize", fmt.Sprintf("%d", stats.maxValueSize)},
+			[]string{"valueCap", fmt.Sprintf("%d", stats.valueCap)},
 			[]string{"pageSize", fmt.Sprintf("%d", stats.pageSize)},
 			[]string{"minValueAlloc", fmt.Sprintf("%d", stats.minValueAlloc)},
 			[]string{"writePagesPerWorker", fmt.Sprintf("%d", stats.writePagesPerWorker)},
 			[]string{"tombstoneAge", fmt.Sprintf("%d", stats.tombstoneAge)},
-			[]string{"valuesFileSize", fmt.Sprintf("%d", stats.valuesFileSize)},
+			[]string{"valuesFileCap", fmt.Sprintf("%d", stats.valuesFileCap)},
 			[]string{"valuesFileReaders", fmt.Sprintf("%d", stats.valuesFileReaders)},
 			[]string{"checksumInterval", fmt.Sprintf("%d", stats.checksumInterval)},
 			[]string{"replicationIgnoreRecent", fmt.Sprintf("%d", stats.replicationIgnoreRecent)},

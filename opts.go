@@ -25,8 +25,8 @@ type config struct {
 	vlm                         valuelocmap.ValueLocMap
 	workers                     int
 	backgroundInterval          int
-	messageTimeout              int
-	messageSize                 int
+	msgTimeout                  int
+	msgCap                      int
 	recoveryBatchSize           int
 	tombstoneDiscardInterval    int
 	tombstoneDiscardBatchSize   int
@@ -42,12 +42,12 @@ type config struct {
 	outPushReplicationInterval  int
 	outPushReplicationMsgs      int
 	outPushReplicationMsgCap    int
-	maxValueSize                int
+	valueCap                    int
 	pageSize                    int
 	minValueAlloc               int
 	writePagesPerWorker         int
 	tombstoneAge                int
-	valuesFileSize              int
+	valuesFileCap               int
 	valuesFileReaders           int
 	checksumInterval            int
 	msgRing                     ring.MsgRing
@@ -56,12 +56,12 @@ type config struct {
 	inBulkSetHandlers           int
 	inBulkSetMsgTimeout         int
 	outBulkSetMsgs              int
-	outBulkSetMsgSize           int
+	outBulkSetMsgCap            int
 	inBulkSetAckMsgs            int
 	inBulkSetAckHandlers        int
 	inBulkSetAckMsgTimeout      int
 	outBulkSetAckMsgs           int
-	outBulkSetAckMsgSize        int
+	outBulkSetAckMsgCap         int
 	compactionInterval          int
 	compactionThreshold         float64
 	compactionAgeThreshold      int
@@ -84,16 +84,16 @@ func resolveConfig(opts ...func(*config)) *config {
 			cfg.backgroundInterval = val
 		}
 	}
-	cfg.messageTimeout = 300
-	if env := os.Getenv("VALUESTORE_MESSAGETIMEOUT"); env != "" {
+	cfg.msgTimeout = 300
+	if env := os.Getenv("VALUESTORE_MSGTIMEOUT"); env != "" {
 		if val, err := strconv.Atoi(env); err == nil {
-			cfg.messageTimeout = val
+			cfg.msgTimeout = val
 		}
 	}
-	cfg.messageSize = 16 * 1024 * 1024
-	if env := os.Getenv("VALUESTORE_MESSAGESIZE"); env != "" {
+	cfg.msgCap = 16 * 1024 * 1024
+	if env := os.Getenv("VALUESTORE_MSGCAP"); env != "" {
 		if val, err := strconv.Atoi(env); err == nil {
-			cfg.messageSize = val
+			cfg.msgCap = val
 		}
 	}
 	cfg.recoveryBatchSize = 1024 * 1024
@@ -126,7 +126,7 @@ func resolveConfig(opts ...func(*config)) *config {
 			cfg.inPullReplicationHandlers = val
 		}
 	}
-	cfg.inPullReplicationMsgTimeout = cfg.messageTimeout
+	cfg.inPullReplicationMsgTimeout = cfg.msgTimeout
 	if env := os.Getenv("VALUESTORE_INPULLREPLICATIONMSGTIMEOUT"); env != "" {
 		if val, err := strconv.Atoi(env); err == nil {
 			cfg.inPullReplicationMsgTimeout = val
@@ -180,10 +180,10 @@ func resolveConfig(opts ...func(*config)) *config {
 			cfg.outPushReplicationMsgs = val
 		}
 	}
-	cfg.maxValueSize = 4 * 1024 * 1024
-	if env := os.Getenv("VALUESTORE_MAXVALUESIZE"); env != "" {
+	cfg.valueCap = 4 * 1024 * 1024
+	if env := os.Getenv("VALUESTORE_VALUECAP"); env != "" {
 		if val, err := strconv.Atoi(env); err == nil {
-			cfg.maxValueSize = val
+			cfg.valueCap = val
 		}
 	}
 	cfg.pageSize = 4 * 1024 * 1024
@@ -204,10 +204,10 @@ func resolveConfig(opts ...func(*config)) *config {
 			cfg.tombstoneAge = val
 		}
 	}
-	cfg.valuesFileSize = math.MaxUint32
-	if env := os.Getenv("VALUESTORE_VALUESFILESIZE"); env != "" {
+	cfg.valuesFileCap = math.MaxUint32
+	if env := os.Getenv("VALUESTORE_VALUESFILECAP"); env != "" {
 		if val, err := strconv.Atoi(env); err == nil {
-			cfg.valuesFileSize = val
+			cfg.valuesFileCap = val
 		}
 	}
 	cfg.valuesFileReaders = cfg.workers
@@ -240,7 +240,7 @@ func resolveConfig(opts ...func(*config)) *config {
 			cfg.inBulkSetHandlers = val
 		}
 	}
-	cfg.inBulkSetMsgTimeout = cfg.messageTimeout
+	cfg.inBulkSetMsgTimeout = cfg.msgTimeout
 	if env := os.Getenv("VALUESTORE_INBULKSETMSGTIMEOUT"); env != "" {
 		if val, err := strconv.Atoi(env); err == nil {
 			cfg.inBulkSetMsgTimeout = val
@@ -252,10 +252,10 @@ func resolveConfig(opts ...func(*config)) *config {
 			cfg.outBulkSetMsgs = val
 		}
 	}
-	cfg.outBulkSetMsgSize = cfg.messageSize
-	if env := os.Getenv("VALUESTORE_OUTBULKSETMSGSIZE"); env != "" {
+	cfg.outBulkSetMsgCap = cfg.msgCap
+	if env := os.Getenv("VALUESTORE_OUTBULKSETMSGCAP"); env != "" {
 		if val, err := strconv.Atoi(env); err == nil {
-			cfg.outBulkSetMsgSize = val
+			cfg.outBulkSetMsgCap = val
 		}
 	}
 	cfg.inBulkSetAckMsgs = 128
@@ -270,7 +270,7 @@ func resolveConfig(opts ...func(*config)) *config {
 			cfg.inBulkSetAckHandlers = val
 		}
 	}
-	cfg.inBulkSetAckMsgTimeout = cfg.messageTimeout
+	cfg.inBulkSetAckMsgTimeout = cfg.msgTimeout
 	if env := os.Getenv("VALUESTORE_INBULKSETACKMSGTIMEOUT"); env != "" {
 		if val, err := strconv.Atoi(env); err == nil {
 			cfg.inBulkSetAckMsgTimeout = val
@@ -282,10 +282,10 @@ func resolveConfig(opts ...func(*config)) *config {
 			cfg.outBulkSetAckMsgs = val
 		}
 	}
-	cfg.outBulkSetAckMsgSize = cfg.messageSize
-	if env := os.Getenv("VALUESTORE_OUTBULKSETACKMSGSIZE"); env != "" {
+	cfg.outBulkSetAckMsgCap = cfg.msgCap
+	if env := os.Getenv("VALUESTORE_OUTBULKSETACKMSGCAP"); env != "" {
 		if val, err := strconv.Atoi(env); err == nil {
-			cfg.outBulkSetAckMsgSize = val
+			cfg.outBulkSetAckMsgCap = val
 		}
 	}
 	cfg.compactionInterval = cfg.backgroundInterval
@@ -342,12 +342,12 @@ func resolveConfig(opts ...func(*config)) *config {
 	if cfg.backgroundInterval < 1 {
 		cfg.backgroundInterval = 1
 	}
-	if cfg.messageTimeout < 1 {
-		cfg.messageTimeout = 1
+	if cfg.msgTimeout < 1 {
+		cfg.msgTimeout = 1
 	}
-	// TODO: This minimum needs to be the max value size plus max overhead.
-	if cfg.messageSize < 1 {
-		cfg.messageSize = 1
+	// TODO: This minimum needs to be the message cap plus max overhead.
+	if cfg.msgCap < 1 {
+		cfg.msgCap = 1
 	}
 	if cfg.recoveryBatchSize < 1 {
 		cfg.recoveryBatchSize = 1
@@ -391,19 +391,19 @@ func resolveConfig(opts ...func(*config)) *config {
 	if cfg.outPushReplicationMsgs < 1 {
 		cfg.outPushReplicationMsgs = 1
 	}
-	if cfg.maxValueSize < 0 {
-		cfg.maxValueSize = 0
+	if cfg.valueCap < 0 {
+		cfg.valueCap = 0
 	}
-	if cfg.maxValueSize > math.MaxUint32 {
-		cfg.maxValueSize = math.MaxUint32
+	if cfg.valueCap > math.MaxUint32 {
+		cfg.valueCap = math.MaxUint32
 	}
 	if cfg.checksumInterval < 1 {
 		cfg.checksumInterval = 1
 	}
 	// Ensure each page will have at least checksumInterval worth of data in it
 	// so that each page written will at least flush the previous page's data.
-	if cfg.pageSize < cfg.maxValueSize+cfg.checksumInterval {
-		cfg.pageSize = cfg.maxValueSize + cfg.checksumInterval
+	if cfg.pageSize < cfg.valueCap+cfg.checksumInterval {
+		cfg.pageSize = cfg.valueCap + cfg.checksumInterval
 	}
 	// Absolute minimum: timestampnano leader plus at least one TOC entry
 	if cfg.pageSize < 40 {
@@ -424,11 +424,11 @@ func resolveConfig(opts ...func(*config)) *config {
 	if cfg.tombstoneAge < 0 {
 		cfg.tombstoneAge = 0
 	}
-	if cfg.valuesFileSize < 48+cfg.maxValueSize { // header value trailer
-		cfg.valuesFileSize = 48 + cfg.maxValueSize
+	if cfg.valuesFileCap < 48+cfg.valueCap { // header value trailer
+		cfg.valuesFileCap = 48 + cfg.valueCap
 	}
-	if cfg.valuesFileSize > math.MaxUint32 {
-		cfg.valuesFileSize = math.MaxUint32
+	if cfg.valuesFileCap > math.MaxUint32 {
+		cfg.valuesFileCap = math.MaxUint32
 	}
 	if cfg.valuesFileReaders < 1 {
 		cfg.valuesFileReaders = 1
@@ -448,8 +448,8 @@ func resolveConfig(opts ...func(*config)) *config {
 	if cfg.outBulkSetMsgs < 1 {
 		cfg.outBulkSetMsgs = 1
 	}
-	if cfg.outBulkSetMsgSize < 1 {
-		cfg.outBulkSetMsgSize = 1
+	if cfg.outBulkSetMsgCap < 1 {
+		cfg.outBulkSetMsgCap = 1
 	}
 	if cfg.inBulkSetAckMsgs < 1 {
 		cfg.inBulkSetAckMsgs = 1
@@ -463,8 +463,8 @@ func resolveConfig(opts ...func(*config)) *config {
 	if cfg.outBulkSetAckMsgs < 1 {
 		cfg.outBulkSetAckMsgs = 1
 	}
-	if cfg.outBulkSetAckMsgSize < 1 {
-		cfg.outBulkSetAckMsgSize = 1
+	if cfg.outBulkSetAckMsgCap < 1 {
+		cfg.outBulkSetAckMsgCap = 1
 	}
 	if cfg.compactionInterval < 1 {
 		cfg.compactionInterval = 1
@@ -586,20 +586,20 @@ func OptBackgroundInterval(seconds int) func(*config) {
 	}
 }
 
-// OptMessageTimeout indicates the maximum seconds an incoming message can be
-// pending before just discarding it. Defaults to env VALUESTORE_MESSAGETIMEOUT
+// OptMsgTimeout indicates the maximum seconds an incoming message can be
+// pending before just discarding it. Defaults to env VALUESTORE_MSGTIMEOUT
 // or 300.
-func OptMessageTimeout(seconds int) func(*config) {
+func OptMsgTimeout(seconds int) func(*config) {
 	return func(cfg *config) {
-		cfg.messageTimeout = seconds
+		cfg.msgTimeout = seconds
 	}
 }
 
-// OptMessageSize indicates the maximum bytes for outgoing messages. Defaults
-// to env VALUESTORE_MESSAGESIZE or 16,777,216.
-func OptMessageSize(bytes int) func(*config) {
+// OptMsgCap indicates the maximum bytes for outgoing messages. Defaults
+// to env VALUESTORE_MSGCAP or 16,777,216.
+func OptMsgCap(bytes int) func(*config) {
 	return func(cfg *config) {
-		cfg.messageSize = bytes
+		cfg.msgCap = bytes
 	}
 }
 
@@ -657,7 +657,7 @@ func OptInPullReplicationHandlers(count int) func(*config) {
 
 // OptInPullReplicationMsgTimeout indicates the maximum seconds an incoming
 // pull-replication message can be pending before just discarding it. Defaults
-// to env VALUESTORE_INPULLREPLICATIONMSGTIMEOUT, VALUESTORE_MESSAGETIMEOUT, or
+// to env VALUESTORE_INPULLREPLICATIONMSGTIMEOUT, VALUESTORE_MSGTIMEOUT, or
 // 300.
 func OptInPullReplicationMsgTimeout(seconds int) func(*config) {
 	return func(cfg *config) {
@@ -755,11 +755,11 @@ func OptOutPushReplicationMsgs(count int) func(*config) {
 	}
 }
 
-// OptMaxValueSize indicates the maximum number of bytes any given value may
-// be. Defaults to env VALUESTORE_MAXVALUESIZE or 4,194,304.
-func OptMaxValueSize(bytes int) func(*config) {
+// OptValueCap indicates the maximum number of bytes any given value may
+// be. Defaults to env VALUESTORE_VALUECAP or 4,194,304.
+func OptValueCap(bytes int) func(*config) {
 	return func(cfg *config) {
-		cfg.maxValueSize = bytes
+		cfg.valueCap = bytes
 	}
 }
 
@@ -789,12 +789,12 @@ func OptTombstoneAge(seconds int) func(*config) {
 	}
 }
 
-// OptValuesFileSize indicates how large a values file can be before closing it
-// and opening a new one. Defaults to env VALUESTORE_VALUESFILESIZE or
+// OptValuesFileCap indicates how large a values file can be before closing it
+// and opening a new one. Defaults to env VALUESTORE_VALUESFILECAP or
 // 4,294,967,295.
-func OptValuesFileSize(bytes int) func(*config) {
+func OptValuesFileCap(bytes int) func(*config) {
 	return func(cfg *config) {
-		cfg.valuesFileSize = bytes
+		cfg.valuesFileCap = bytes
 	}
 }
 
@@ -854,7 +854,7 @@ func OptInBulkSetHandlers(count int) func(*config) {
 
 // OptInBulkSetMsgTimeout indicates the maximum seconds an incoming bulk-set
 // message can be pending before just discarding it. Defaults to env
-// VALUESTORE_INBULKSETMSGTIMEOUT, VALUESTORE_MESSAGETIMEOUT, or 300.
+// VALUESTORE_INBULKSETMSGTIMEOUT, VALUESTORE_MSGTIMEOUT, or 300.
 func OptInBulkSetMsgTimeout(seconds int) func(*config) {
 	return func(cfg *config) {
 		cfg.inBulkSetMsgTimeout = seconds
@@ -870,12 +870,12 @@ func OptOutBulkSetMsgs(count int) func(*config) {
 	}
 }
 
-// OptOutBulkSetMsgSize indicates the maximum bytes for outgoing bulk-set
-// messages. Defaults to env VALUESTORE_OUTBULKSETMSGSIZE,
-// VALUESTORE_MESSAGESIZE, or 16,777,216.
-func OptOutBulkSetMsgSize(bytes int) func(*config) {
+// OptOutBulkSetMsgCap indicates the maximum bytes for outgoing bulk-set
+// messages. Defaults to env VALUESTORE_OUTBULKSETMSGCAP,
+// VALUESTORE_MSGCAP, or 16,777,216.
+func OptOutBulkSetMsgCap(bytes int) func(*config) {
 	return func(cfg *config) {
-		cfg.outBulkSetMsgSize = bytes
+		cfg.outBulkSetMsgCap = bytes
 	}
 }
 
@@ -899,7 +899,7 @@ func OptInBulkSetAckHandlers(count int) func(*config) {
 
 // OptInBulkSetAckMsgTimeout indicates the maximum seconds an incoming
 // bulk-set-ack message can be pending before just discarding it. Defaults to
-// env VALUESTORE_INBULKSETACKMSGTIMEOUT, VALUESTORE_MESSAGETIMEOUT, or 300.
+// env VALUESTORE_INBULKSETACKMSGTIMEOUT, VALUESTORE_MSGTIMEOUT, or 300.
 func OptInBulkSetAckMsgTimeout(seconds int) func(*config) {
 	return func(cfg *config) {
 		cfg.inBulkSetAckMsgTimeout = seconds
@@ -915,12 +915,12 @@ func OptOutBulkSetAckMsgs(count int) func(*config) {
 	}
 }
 
-// OptOutBulkSetAckMsgSize indicates the maximum bytes for outgoing
-// bulk-set-ack messages. Defaults to env VALUESTORE_OUTBULKSETACKMSGSIZE,
-// VALUESTORE_MESSAGESIZE, or 16,777,216.
-func OptOutBulkSetAckMsgSize(bytes int) func(*config) {
+// OptOutBulkSetAckMsgCap indicates the maximum bytes for outgoing
+// bulk-set-ack messages. Defaults to env VALUESTORE_OUTBULKSETACKMSGCAP,
+// VALUESTORE_MSGCAP, or 16,777,216.
+func OptOutBulkSetAckMsgMsgCap(bytes int) func(*config) {
 	return func(cfg *config) {
-		cfg.outBulkSetAckMsgSize = bytes
+		cfg.outBulkSetAckMsgCap = bytes
 	}
 }
 

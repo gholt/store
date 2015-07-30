@@ -14,7 +14,7 @@ type bulkSetState struct {
 	inMsgChan     chan *bulkSetMsg
 	inFreeMsgChan chan *bulkSetMsg
 	outMsgChan    chan *bulkSetMsg
-	msgSize       int
+	msgCap        int
 	inMsgTimeout  time.Duration
 }
 
@@ -38,13 +38,13 @@ func (vs *DefaultValueStore) bulkSetInit(cfg *config) {
 		for i := 0; i < cfg.inBulkSetHandlers; i++ {
 			go vs.inBulkSet()
 		}
-		vs.bulkSetState.msgSize = cfg.outBulkSetMsgSize
+		vs.bulkSetState.msgCap = cfg.outBulkSetMsgCap
 		vs.bulkSetState.outMsgChan = make(chan *bulkSetMsg, cfg.outBulkSetMsgs)
 		for i := 0; i < cap(vs.bulkSetState.outMsgChan); i++ {
 			vs.bulkSetState.outMsgChan <- &bulkSetMsg{
 				vs:     vs,
 				header: make([]byte, 8),
-				body:   make([]byte, cfg.outBulkSetMsgSize),
+				body:   make([]byte, cfg.outBulkSetMsgCap),
 			}
 		}
 		vs.bulkSetState.inMsgTimeout = time.Duration(cfg.inBulkSetMsgTimeout) * time.Second
