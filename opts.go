@@ -24,6 +24,9 @@ type config struct {
 	pathtoc                     string
 	vlm                         valuelocmap.ValueLocMap
 	workers                     int
+	backgroundInterval          int
+	messageTimeout              int
+	messageSize                 int
 	recoveryBatchSize           int
 	tombstoneDiscardInterval    int
 	tombstoneDiscardBatchSize   int
@@ -75,13 +78,31 @@ func resolveConfig(opts ...func(*config)) *config {
 			cfg.workers = val
 		}
 	}
+	cfg.backgroundInterval = 60
+	if env := os.Getenv("VALUESTORE_BACKGROUNDINTERVAL"); env != "" {
+		if val, err := strconv.Atoi(env); err == nil {
+			cfg.backgroundInterval = val
+		}
+	}
+	cfg.messageTimeout = 300
+	if env := os.Getenv("VALUESTORE_MESSAGETIMEOUT"); env != "" {
+		if val, err := strconv.Atoi(env); err == nil {
+			cfg.messageTimeout = val
+		}
+	}
+	cfg.messageSize = 16 * 1024 * 1024
+	if env := os.Getenv("VALUESTORE_MESSAGESIZE"); env != "" {
+		if val, err := strconv.Atoi(env); err == nil {
+			cfg.messageSize = val
+		}
+	}
 	cfg.recoveryBatchSize = 1024 * 1024
 	if env := os.Getenv("VALUESTORE_RECOVERYBATCHSIZE"); env != "" {
 		if val, err := strconv.Atoi(env); err == nil {
 			cfg.recoveryBatchSize = val
 		}
 	}
-	cfg.tombstoneDiscardInterval = 60
+	cfg.tombstoneDiscardInterval = cfg.backgroundInterval
 	if env := os.Getenv("VALUESTORE_TOMBSTONEDISCARDINTERVAL"); env != "" {
 		if val, err := strconv.Atoi(env); err == nil {
 			cfg.tombstoneDiscardInterval = val
@@ -105,7 +126,7 @@ func resolveConfig(opts ...func(*config)) *config {
 			cfg.inPullReplicationHandlers = val
 		}
 	}
-	cfg.inPullReplicationMsgTimeout = 300
+	cfg.inPullReplicationMsgTimeout = cfg.messageTimeout
 	if env := os.Getenv("VALUESTORE_INPULLREPLICATIONMSGTIMEOUT"); env != "" {
 		if val, err := strconv.Atoi(env); err == nil {
 			cfg.inPullReplicationMsgTimeout = val
@@ -117,7 +138,7 @@ func resolveConfig(opts ...func(*config)) *config {
 			cfg.outPullReplicationWorkers = val
 		}
 	}
-	cfg.outPullReplicationInterval = 60
+	cfg.outPullReplicationInterval = cfg.backgroundInterval
 	if env := os.Getenv("VALUESTORE_OUTPULLREPLICATIONINTERVAL"); env != "" {
 		if val, err := strconv.Atoi(env); err == nil {
 			cfg.outPullReplicationInterval = val
@@ -147,7 +168,7 @@ func resolveConfig(opts ...func(*config)) *config {
 			cfg.outPushReplicationWorkers = val
 		}
 	}
-	cfg.outPushReplicationInterval = 60
+	cfg.outPushReplicationInterval = cfg.backgroundInterval
 	if env := os.Getenv("VALUESTORE_OUTPUSHREPLICATIONINTERVAL"); env != "" {
 		if val, err := strconv.Atoi(env); err == nil {
 			cfg.outPushReplicationInterval = val
@@ -219,7 +240,7 @@ func resolveConfig(opts ...func(*config)) *config {
 			cfg.inBulkSetHandlers = val
 		}
 	}
-	cfg.inBulkSetMsgTimeout = 300
+	cfg.inBulkSetMsgTimeout = cfg.messageTimeout
 	if env := os.Getenv("VALUESTORE_INBULKSETMSGTIMEOUT"); env != "" {
 		if val, err := strconv.Atoi(env); err == nil {
 			cfg.inBulkSetMsgTimeout = val
@@ -231,7 +252,7 @@ func resolveConfig(opts ...func(*config)) *config {
 			cfg.outBulkSetMsgs = val
 		}
 	}
-	cfg.outBulkSetMsgSize = 16 * 1024 * 1024
+	cfg.outBulkSetMsgSize = cfg.messageSize
 	if env := os.Getenv("VALUESTORE_OUTBULKSETMSGSIZE"); env != "" {
 		if val, err := strconv.Atoi(env); err == nil {
 			cfg.outBulkSetMsgSize = val
@@ -249,7 +270,7 @@ func resolveConfig(opts ...func(*config)) *config {
 			cfg.inBulkSetAckHandlers = val
 		}
 	}
-	cfg.inBulkSetAckMsgTimeout = 300
+	cfg.inBulkSetAckMsgTimeout = cfg.messageTimeout
 	if env := os.Getenv("VALUESTORE_INBULKSETACKMSGTIMEOUT"); env != "" {
 		if val, err := strconv.Atoi(env); err == nil {
 			cfg.inBulkSetAckMsgTimeout = val
@@ -261,13 +282,13 @@ func resolveConfig(opts ...func(*config)) *config {
 			cfg.outBulkSetAckMsgs = val
 		}
 	}
-	cfg.outBulkSetAckMsgSize = 16 * 1024 * 1024
+	cfg.outBulkSetAckMsgSize = cfg.messageSize
 	if env := os.Getenv("VALUESTORE_OUTBULKSETACKMSGSIZE"); env != "" {
 		if val, err := strconv.Atoi(env); err == nil {
 			cfg.outBulkSetAckMsgSize = val
 		}
 	}
-	cfg.compactionInterval = 300
+	cfg.compactionInterval = cfg.backgroundInterval
 	if env := os.Getenv("VALUESTORE_COMPACTIONINTERVAL"); env != "" {
 		if val, err := strconv.Atoi(env); err == nil {
 			cfg.compactionInterval = val
@@ -317,6 +338,16 @@ func resolveConfig(opts ...func(*config)) *config {
 	}
 	if cfg.workers < 1 {
 		cfg.workers = 1
+	}
+	if cfg.backgroundInterval < 1 {
+		cfg.backgroundInterval = 1
+	}
+	if cfg.messageTimeout < 1 {
+		cfg.messageTimeout = 1
+	}
+	// TODO: This minimum needs to be the max value size plus max overhead.
+	if cfg.messageSize < 1 {
+		cfg.messageSize = 1
 	}
 	if cfg.recoveryBatchSize < 1 {
 		cfg.recoveryBatchSize = 1
@@ -539,6 +570,39 @@ func OptWorkers(count int) func(*config) {
 	}
 }
 
+// OptBackgroundInterval indicates the minimum number of seconds between the
+// starts of background passes (such as discarding expired tombstones [deletion
+// markers]). If set to 60 seconds and the passes take 10 seconds to run, they
+// will wait 50 seconds (with a small amount of randomization) between the stop
+// of one run and the start of the next. This is really just meant to keep
+// nearly empty structures from using a lot of resources doing nearly nothing.
+// Normally, you'd want your background passes to be running constantly so that
+// they are as fast as possible and the load constant. The default of 60
+// seconds is almost always fine. Defaults to env VALUESTORE_BACKGROUNDINTERVAL
+// or 60.
+func OptBackgroundInterval(seconds int) func(*config) {
+	return func(cfg *config) {
+		cfg.backgroundInterval = seconds
+	}
+}
+
+// OptMessageTimeout indicates the maximum seconds an incoming message can be
+// pending before just discarding it. Defaults to env VALUESTORE_MESSAGETIMEOUT
+// or 300.
+func OptMessageTimeout(seconds int) func(*config) {
+	return func(cfg *config) {
+		cfg.messageTimeout = seconds
+	}
+}
+
+// OptMessageSize indicates the maximum bytes for outgoing messages. Defaults
+// to env VALUESTORE_MESSAGESIZE or 16,777,216.
+func OptMessageSize(bytes int) func(*config) {
+	return func(cfg *config) {
+		cfg.messageSize = bytes
+	}
+}
+
 // OptRecoveryBatchSize indicates how many keys to set in a batch while
 // performing recovery (initial start up). Defaults to env
 // VALUESTORE_RECOVERYBATCHSIZE or 1,048,576.
@@ -548,7 +612,7 @@ func OptRecoveryBatchSize(count int) func(*config) {
 	}
 }
 
-// OptTombstoneDiscardInterval indicates the minimum number of seconds betweeen
+// OptTombstoneDiscardInterval indicates the minimum number of seconds between
 // the starts of discard passes (discarding expired tombstones [deletion
 // markers]). If set to 60 seconds and the passes take 10 seconds to run, they
 // will wait 50 seconds (with a small amount of randomization) between the stop
@@ -557,7 +621,7 @@ func OptRecoveryBatchSize(count int) func(*config) {
 // Normally, you'd want your discard passes to be running constantly so that
 // they are as fast as possible and the load constant. The default of 60
 // seconds is almost always fine. Defaults to env
-// VALUESTORE_TOMBSTONEDISCARDINTERVAL or 60.
+// VALUESTORE_TOMBSTONEDISCARDINTERVAL, VALUESTORE_BACKGROUNDINTERVAL, or 60.
 func OptTombstoneDiscardInterval(seconds int) func(*config) {
 	return func(cfg *config) {
 		cfg.tombstoneDiscardInterval = seconds
@@ -593,7 +657,8 @@ func OptInPullReplicationHandlers(count int) func(*config) {
 
 // OptInPullReplicationMsgTimeout indicates the maximum seconds an incoming
 // pull-replication message can be pending before just discarding it. Defaults
-// to env VALUESTORE_INPULLREPLICATIONMSGTIMEOUT or 300.
+// to env VALUESTORE_INPULLREPLICATIONMSGTIMEOUT, VALUESTORE_MESSAGETIMEOUT, or
+// 300.
 func OptInPullReplicationMsgTimeout(seconds int) func(*config) {
 	return func(cfg *config) {
 		cfg.inPullReplicationMsgTimeout = seconds
@@ -618,7 +683,7 @@ func OptOutPullReplicationWorkers(workers int) func(*config) {
 // outgoing pull replication passes to be running constantly so that
 // replication is as fast as possible and the load constant. The default of 60
 // seconds is almost always fine. Defaults to env
-// VALUESTORE_OUTPULLREPLICATIONINTERVAL or 60.
+// VALUESTORE_OUTPULLREPLICATIONINTERVAL, VALUESTORE_BACKGROUNDINTERVAL, or 60.
 func OptOutPullReplicationInterval(seconds int) func(*config) {
 	return func(cfg *config) {
 		cfg.outPullReplicationInterval = seconds
@@ -674,7 +739,7 @@ func OptOutPushReplicationWorkers(workers int) func(*config) {
 // outgoing push replication passes to be running constantly so that
 // replication is as fast as possible and the load constant. The default of 60
 // seconds is almost always fine. Defaults to env
-// VALUESTORE_OUTPUSHREPLICATIONINTERVAL or 60.
+// VALUESTORE_OUTPUSHREPLICATIONINTERVAL, VALUESTORE_BACKGROUNDINTERVAL, or 60.
 func OptOutPushReplicationInterval(seconds int) func(*config) {
 	return func(cfg *config) {
 		cfg.outPushReplicationInterval = seconds
@@ -789,7 +854,7 @@ func OptInBulkSetHandlers(count int) func(*config) {
 
 // OptInBulkSetMsgTimeout indicates the maximum seconds an incoming bulk-set
 // message can be pending before just discarding it. Defaults to env
-// VALUESTORE_INBULKSETMSGTIMEOUT or 300.
+// VALUESTORE_INBULKSETMSGTIMEOUT, VALUESTORE_MESSAGETIMEOUT, or 300.
 func OptInBulkSetMsgTimeout(seconds int) func(*config) {
 	return func(cfg *config) {
 		cfg.inBulkSetMsgTimeout = seconds
@@ -806,7 +871,8 @@ func OptOutBulkSetMsgs(count int) func(*config) {
 }
 
 // OptOutBulkSetMsgSize indicates the maximum bytes for outgoing bulk-set
-// messages. Defaults to env VALUESTORE_OUTBULKSETMSGSIZE or 16,777,216.
+// messages. Defaults to env VALUESTORE_OUTBULKSETMSGSIZE,
+// VALUESTORE_MESSAGESIZE, or 16,777,216.
 func OptOutBulkSetMsgSize(bytes int) func(*config) {
 	return func(cfg *config) {
 		cfg.outBulkSetMsgSize = bytes
@@ -833,7 +899,7 @@ func OptInBulkSetAckHandlers(count int) func(*config) {
 
 // OptInBulkSetAckMsgTimeout indicates the maximum seconds an incoming
 // bulk-set-ack message can be pending before just discarding it. Defaults to
-// env VALUESTORE_INBULKSETACKMSGTIMEOUT or 300.
+// env VALUESTORE_INBULKSETACKMSGTIMEOUT, VALUESTORE_MESSAGETIMEOUT, or 300.
 func OptInBulkSetAckMsgTimeout(seconds int) func(*config) {
 	return func(cfg *config) {
 		cfg.inBulkSetAckMsgTimeout = seconds
@@ -850,16 +916,23 @@ func OptOutBulkSetAckMsgs(count int) func(*config) {
 }
 
 // OptOutBulkSetAckMsgSize indicates the maximum bytes for outgoing
-// bulk-set-ack messages. Defaults to env VALUESTORE_OUTBULKSETACKMSGSIZE or
-// 16,777,216.
+// bulk-set-ack messages. Defaults to env VALUESTORE_OUTBULKSETACKMSGSIZE,
+// VALUESTORE_MESSAGESIZE, or 16,777,216.
 func OptOutBulkSetAckMsgSize(bytes int) func(*config) {
 	return func(cfg *config) {
 		cfg.outBulkSetAckMsgSize = bytes
 	}
 }
 
-// OptCompactionInterval indicates how often compaction will run. Defaults to
-// env VALUESTORE_COMPACTIONINTERVAL or 300.
+// OptCompactionInterval indicates the minimum number of seconds between the
+// starts of compaction passes. If set to 60 seconds and the passes take 10
+// seconds to run, they will wait 50 seconds (with a small amount of
+// randomization) between the stop of one run and the start of the next. This
+// is really just meant to keep nearly empty structures from using a lot of
+// resources doing nearly nothing. Normally, you'd want your compaction passes
+// to be running constantly so that it is as fast as possible and the load
+// constant. The default of 60 seconds is almost always fine. Defaults to env
+// VALUESTORE_OUTPUSHREPLICATIONINTERVAL, VALUESTORE_BACKGROUNDINTERVAL, or 60.
 func OptCompactionInterval(seconds int) func(*config) {
 	return func(cfg *config) {
 		cfg.compactionInterval = seconds
