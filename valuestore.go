@@ -613,7 +613,7 @@ func (vs *DefaultValueStore) vfWriter() {
 			vf = nil
 		}
 		if vf == nil {
-			vf = createValuesFile(vs)
+			vf = createValuesFile(vs, osCreateWriteCloser, osOpenReadSeeker)
 			tocLen = 32
 			valueLen = 32
 		}
@@ -796,7 +796,7 @@ func (vs *DefaultValueStore) recovery() {
 			vs.logError.Printf("bad timestamp in name: %#v\n", names[i])
 			continue
 		}
-		vf := newValuesFile(vs, namets)
+		vf := newValuesFile(vs, namets, osOpenReadSeeker)
 		fp, err := os.Open(path.Join(vs.pathtoc, names[i]))
 		if err != nil {
 			vs.logError.Printf("error opening %s: %s\n", names[i], err)

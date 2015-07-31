@@ -47,7 +47,7 @@ func (vs *DefaultValueStore) pullReplicationInit(cfg *Config) {
 		for i := 0; i < cap(vs.pullReplicationState.inFreeMsgChan); i++ {
 			vs.pullReplicationState.inFreeMsgChan <- &pullReplicationMsg{
 				vs:     vs,
-				header: make([]byte, ktBloomFilterHeaderBytes+_PULL_REPLICATION_MSG_HEADER_BYTES),
+				header: make([]byte, _KT_BLOOM_FILTER_HEADER_BYTES+_PULL_REPLICATION_MSG_HEADER_BYTES),
 			}
 		}
 		for i := 0; i < cfg.InPullReplicationWorkers; i++ {
@@ -60,7 +60,7 @@ func (vs *DefaultValueStore) pullReplicationInit(cfg *Config) {
 		for i := 0; i < cap(vs.pullReplicationState.outMsgChan); i++ {
 			vs.pullReplicationState.outMsgChan <- &pullReplicationMsg{
 				vs:     vs,
-				header: make([]byte, ktBloomFilterHeaderBytes+_PULL_REPLICATION_MSG_HEADER_BYTES),
+				header: make([]byte, _KT_BLOOM_FILTER_HEADER_BYTES+_PULL_REPLICATION_MSG_HEADER_BYTES),
 				body:   make([]byte, len(vs.pullReplicationState.outKTBFs[0].bits)),
 			}
 		}
@@ -316,7 +316,7 @@ func (vs *DefaultValueStore) newInPullReplicationMsg(r io.Reader, l uint64) (uin
 		}
 		return l, nil
 	}
-	bl := l - _PULL_REPLICATION_MSG_HEADER_BYTES - uint64(ktBloomFilterHeaderBytes)
+	bl := l - _PULL_REPLICATION_MSG_HEADER_BYTES - uint64(_KT_BLOOM_FILTER_HEADER_BYTES)
 	if uint64(cap(prm.body)) < bl {
 		prm.body = make([]byte, bl)
 	}

@@ -14,6 +14,9 @@ import (
 	"gopkg.in/gholt/brimutil.v1"
 )
 
+// TODO: No more panicking since we might not be the only reason this go
+// process is running.
+
 type valuesFile struct {
 	vs                  *DefaultValueStore
 	id                  uint32
@@ -38,14 +41,22 @@ type valuesFileWriteBuf struct {
 	vms    []*valuesMem
 }
 
-func newValuesFile(vs *DefaultValueStore, bts int64) *valuesFile {
+func osOpenReadSeeker(name string) (io.ReadSeeker, error) {
+	return os.Open(name)
+}
+
+func osCreateWriteCloser(name string) (io.WriteCloser, error) {
+	return os.Create(name)
+}
+
+func newValuesFile(vs *DefaultValueStore, bts int64, openReadSeeker func(name string) (io.ReadSeeker, error)) *valuesFile {
 	vf := &valuesFile{vs: vs, bts: bts}
-	name := path.Join(vs.path, fmt.Sprintf("%d.values", vf.bts))
+	name := path.Join(vs.path, fmt.Sprintf("%019d.values", vf.bts))
 	vf.readerFPs = make([]brimutil.ChecksummedReader, vs.valuesFileReaders)
 	vf.readerLocks = make([]sync.Mutex, len(vf.readerFPs))
 	vf.readerLens = make([][]byte, len(vf.readerFPs))
 	for i := 0; i < len(vf.readerFPs); i++ {
-		fp, err := os.Open(name)
+		fp, err := openReadSeeker(name)
 		if err != nil {
 			panic(err)
 		}
@@ -56,10 +67,10 @@ func newValuesFile(vs *DefaultValueStore, bts int64) *valuesFile {
 	return vf
 }
 
-func createValuesFile(vs *DefaultValueStore) *valuesFile {
+func createValuesFile(vs *DefaultValueStore, createWriteCloser func(name string) (io.WriteCloser, error), openReadSeeker func(name string) (io.ReadSeeker, error)) *valuesFile {
 	vf := &valuesFile{vs: vs, bts: time.Now().UnixNano()}
-	name := path.Join(vs.path, fmt.Sprintf("%d.values", vf.bts))
-	fp, err := os.Create(name)
+	name := path.Join(vs.path, fmt.Sprintf("%019d.values", vf.bts))
+	fp, err := createWriteCloser(name)
 	if err != nil {
 		panic(err)
 	}
@@ -84,7 +95,7 @@ func createValuesFile(vs *DefaultValueStore) *valuesFile {
 	vf.readerLocks = make([]sync.Mutex, len(vf.readerFPs))
 	vf.readerLens = make([][]byte, len(vf.readerFPs))
 	for i := 0; i < len(vf.readerFPs); i++ {
-		fp, err := os.Open(name)
+		fp, err := openReadSeeker(name)
 		if err != nil {
 			panic(err)
 		}
@@ -100,6 +111,8 @@ func (vf *valuesFile) timestampnano() int64 {
 }
 
 func (vf *valuesFile) read(keyA uint64, keyB uint64, timestampbits uint64, offset uint32, length uint32, value []byte) (uint64, []byte, error) {
+	// TODO: Add calling Verify occasionally on the readerFPs, maybe randomly
+	// inside here or maybe randomly requested by the caller.
 	if timestampbits&_TSB_DELETION != 0 {
 		return timestampbits, value, ErrNotFound
 	}

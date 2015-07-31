@@ -200,7 +200,9 @@ type Config struct {
 
 func resolveConfig(c *Config) *Config {
 	cfg := &Config{}
-	*cfg = *c
+	if c != nil {
+		*cfg = *c
+	}
 	if cfg.LogCritical == nil {
 		cfg.LogCritical = log.New(os.Stderr, "ValueStore ", log.LstdFlags)
 	}

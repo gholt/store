@@ -8,7 +8,7 @@ import (
 	"github.com/spaolacci/murmur3"
 )
 
-const ktBloomFilterHeaderBytes int = 20
+const _KT_BLOOM_FILTER_HEADER_BYTES int = 20
 
 // ktBloomFilter is a key+timestamp bloom filter implementation.
 type ktBloomFilter struct {
