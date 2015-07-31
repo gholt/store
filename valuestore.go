@@ -15,7 +15,7 @@
 // are usually created by a hashing function of the key name, but that duty is
 // left outside this package.
 //
-// Each modification is recorded with an int64 timestamp that is number of
+// Each modification is recorded with an int64 timestamp that is the number of
 // microseconds since the Unix epoch (see
 // github.com/gholt/brimtime.TimeToUnixMicro). With a write and delete for the
 // exact same timestamp, the delete wins. This allows a delete to be issued for
@@ -207,7 +207,7 @@ type backgroundNotification struct {
 // flushed.
 func New(c *Config) *DefaultValueStore {
 	cfg := resolveConfig(c)
-	vlm := cfg.VLM
+	vlm := cfg.ValueLocMap
 	if vlm == nil {
 		vlm = valuelocmap.New()
 	}

@@ -58,7 +58,8 @@ type Config struct {
 	BackgroundInterval int
 	// Workers indicates how many goroutines may be used for various tasks
 	// (processing incoming writes and batching them to disk, background tasks,
-	// etc.). Defaults to GOMAXPROCS.
+	// etc.). This will also have an impact on memory usage. Defaults to
+	// GOMAXPROCS.
 	Workers int
 	// ChecksumInterval indicates how many bytes are output to a file before a
 	// 4-byte checksum is also output. Defaults to 65,532 bytes.
@@ -73,7 +74,7 @@ type Config struct {
 	// ValueLocMap allows overriding the default ValueLocMap, an interface used
 	// by ValueStore for tracking the mappings from keys to the locations of
 	// their values. Defaults to github.com/gholt/valuelocmap.New().
-	VLM valuelocmap.ValueLocMap
+	ValueLocMap valuelocmap.ValueLocMap
 	// MsgRing sets the ring.MsgRing to use for determining the key ranges the
 	// ValueStore is responsible for as well as providing methods to send
 	// messages to other nodes.
