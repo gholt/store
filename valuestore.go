@@ -32,24 +32,24 @@
 // There are background tasks for:
 //
 // * TombstoneDiscard: This will discard older tombstones (deletion markers).
-// Tombstones are kept for OptTombstoneAge seconds and are used to ensure a
+// Tombstones are kept for Config.TombstoneAge seconds and are used to ensure a
 // replicated older value doesn't resurrect a deleted value. But, keeping all
 // tombstones for all time is a waste of resources, so they are discarded over
-// time. OptTombstoneAge controls how long they should be kept and should be
-// set to an amount greater than several replication passes.
+// time. Config.TombstoneAge controls how long they should be kept and should
+// be set to an amount greater than several replication passes.
 //
 // * PullReplication: This will continually send out pull replication requests
 // for all the partitions the ValueStore is responsible for, as determined by
-// the OptMsgRing. The other responsible parties will respond to these requests
-// with data they have that was missing from the pull replication request.
-// Bloom filters are used to reduce bandwidth which has the downside that a
-// very small percentage of items may be missed each pass. A moving salt is
-// used with each bloom filter so that after a few passes there is an
+// the Config.MsgRing. The other responsible parties will respond to these
+// requests with data they have that was missing from the pull replication
+// request. Bloom filters are used to reduce bandwidth which has the downside
+// that a very small percentage of items may be missed each pass. A moving salt
+// is used with each bloom filter so that after a few passes there is an
 // exceptionally high probability that all items will be accounted for.
 //
 // * PushReplication: This will continually send out any data for any
 // partitions the ValueStore is *not* responsible for, as determined by the
-// OptMsgRing. The responsible parties will respond to these requests with
+// Config.MsgRing. The responsible parties will respond to these requests with
 // acknowledgements of the data they received, allowing the requester to
 // discard the out of place data.
 package valuestore
@@ -205,20 +205,6 @@ type backgroundNotification struct {
 // be in use and therefore DisableAll() and Flush() should be called prior to
 // the process exiting to ensure all processing is done and the buffers are
 // flushed.
-//
-// You can provide Opt* functions for optional configuration items, such as
-// OptWorkers:
-//
-//  vsWithDefaults := valuestore.New()
-//  vsWithOptions := valuestore.New(
-//      valuestore.OptWorkers(10),
-//      valuestore.OptPageSize(8388608),
-//  )
-//  opts := valuestore.OptList()
-//  if commandLineOptionForWorkers {
-//      opts = append(opts, valuestore.OptWorkers(commandLineOptionValue))
-//  }
-//  vsWithOptionsBuiltUp := valuestore.New(opts...)
 func New(c *Config) *DefaultValueStore {
 	cfg := resolveConfig(c)
 	vlm := cfg.VLM
