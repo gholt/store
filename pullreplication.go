@@ -35,27 +35,27 @@ type pullReplicationMsg struct {
 	body   []byte
 }
 
-func (vs *DefaultValueStore) pullReplicationInit(cfg *config) {
-	vs.pullReplicationState.outInterval = cfg.outPullReplicationInterval
+func (vs *DefaultValueStore) pullReplicationInit(cfg *Config) {
+	vs.pullReplicationState.outInterval = cfg.OutPullReplicationInterval
 	vs.pullReplicationState.outNotifyChan = make(chan *backgroundNotification, 1)
-	vs.pullReplicationState.outWorkers = uint64(cfg.outPullReplicationWorkers)
-	vs.pullReplicationState.outIteration = uint16(cfg.rand.Uint32())
+	vs.pullReplicationState.outWorkers = uint64(cfg.OutPullReplicationWorkers)
+	vs.pullReplicationState.outIteration = uint16(cfg.Rand.Uint32())
 	if vs.msgRing != nil {
 		vs.msgRing.SetMsgHandler(_MSG_PULL_REPLICATION, vs.newInPullReplicationMsg)
-		vs.pullReplicationState.inMsgChan = make(chan *pullReplicationMsg, cfg.inPullReplicationMsgs)
-		vs.pullReplicationState.inFreeMsgChan = make(chan *pullReplicationMsg, cfg.inPullReplicationMsgs)
+		vs.pullReplicationState.inMsgChan = make(chan *pullReplicationMsg, cfg.InPullReplicationMsgs)
+		vs.pullReplicationState.inFreeMsgChan = make(chan *pullReplicationMsg, cfg.InPullReplicationMsgs)
 		for i := 0; i < cap(vs.pullReplicationState.inFreeMsgChan); i++ {
 			vs.pullReplicationState.inFreeMsgChan <- &pullReplicationMsg{
 				vs:     vs,
 				header: make([]byte, ktBloomFilterHeaderBytes+_PULL_REPLICATION_MSG_HEADER_BYTES),
 			}
 		}
-		for i := 0; i < cfg.inPullReplicationWorkers; i++ {
+		for i := 0; i < cfg.InPullReplicationWorkers; i++ {
 			go vs.inPullReplication()
 		}
-		vs.pullReplicationState.outMsgChan = make(chan *pullReplicationMsg, cfg.outPullReplicationMsgs)
-		vs.pullReplicationState.bloomN = uint64(cfg.outPullReplicationBloomN)
-		vs.pullReplicationState.bloomP = cfg.outPullReplicationBloomP
+		vs.pullReplicationState.outMsgChan = make(chan *pullReplicationMsg, cfg.OutPullReplicationMsgs)
+		vs.pullReplicationState.bloomN = uint64(cfg.OutPullReplicationBloomN)
+		vs.pullReplicationState.bloomP = cfg.OutPullReplicationBloomP
 		vs.pullReplicationState.outKTBFs = []*ktBloomFilter{newKTBloomFilter(vs.pullReplicationState.bloomN, vs.pullReplicationState.bloomP, 0)}
 		for i := 0; i < cap(vs.pullReplicationState.outMsgChan); i++ {
 			vs.pullReplicationState.outMsgChan <- &pullReplicationMsg{
@@ -64,7 +64,7 @@ func (vs *DefaultValueStore) pullReplicationInit(cfg *config) {
 				body:   make([]byte, len(vs.pullReplicationState.outKTBFs[0].bits)),
 			}
 		}
-		vs.pullReplicationState.inMsgTimeout = time.Duration(cfg.inPullReplicationMsgTimeout) * time.Second
+		vs.pullReplicationState.inMsgTimeout = time.Duration(cfg.InPullReplicationMsgTimeout) * time.Second
 	}
 	vs.pullReplicationState.outNotifyChan = make(chan *backgroundNotification, 1)
 	go vs.outPullReplicationLauncher()

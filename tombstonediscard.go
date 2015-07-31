@@ -24,11 +24,11 @@ type localRemovalEntry struct {
 	timestampbits uint64
 }
 
-func (vs *DefaultValueStore) tombstoneDiscardInit(cfg *config) {
-	vs.tombstoneDiscardState.interval = cfg.tombstoneDiscardInterval
-	vs.tombstoneDiscardState.age = (uint64(cfg.tombstoneAge) * uint64(time.Second) / 1000) << _TSB_UTIL_BITS
+func (vs *DefaultValueStore) tombstoneDiscardInit(cfg *Config) {
+	vs.tombstoneDiscardState.interval = cfg.TombstoneDiscardInterval
+	vs.tombstoneDiscardState.age = (uint64(cfg.TombstoneAge) * uint64(time.Second) / 1000) << _TSB_UTIL_BITS
 	vs.tombstoneDiscardState.notifyChan = make(chan *backgroundNotification, 1)
-	vs.tombstoneDiscardState.batchSize = cfg.tombstoneDiscardBatchSize
+	vs.tombstoneDiscardState.batchSize = cfg.TombstoneDiscardBatchSize
 	go vs.tombstoneDiscardLauncher()
 }
 

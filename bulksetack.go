@@ -20,25 +20,25 @@ type bulkSetAckMsg struct {
 	body []byte
 }
 
-func (vs *DefaultValueStore) bulkSetAckInit(cfg *config) {
+func (vs *DefaultValueStore) bulkSetAckInit(cfg *Config) {
 	if vs.msgRing != nil {
 		vs.msgRing.SetMsgHandler(_MSG_BULK_SET_ACK, vs.newInBulkSetAckMsg)
-		vs.bulkSetAckState.inMsgChan = make(chan *bulkSetAckMsg, cfg.inBulkSetAckMsgs)
-		vs.bulkSetAckState.inFreeMsgChan = make(chan *bulkSetAckMsg, cfg.inBulkSetAckMsgs)
+		vs.bulkSetAckState.inMsgChan = make(chan *bulkSetAckMsg, cfg.InBulkSetAckMsgs)
+		vs.bulkSetAckState.inFreeMsgChan = make(chan *bulkSetAckMsg, cfg.InBulkSetAckMsgs)
 		for i := 0; i < cap(vs.bulkSetAckState.inFreeMsgChan); i++ {
 			vs.bulkSetAckState.inFreeMsgChan <- &bulkSetAckMsg{vs: vs}
 		}
-		for i := 0; i < cfg.inBulkSetAckWorkers; i++ {
+		for i := 0; i < cfg.InBulkSetAckWorkers; i++ {
 			go vs.inBulkSetAck()
 		}
-		vs.bulkSetAckState.outFreeMsgChan = make(chan *bulkSetAckMsg, cfg.outBulkSetAckMsgs)
+		vs.bulkSetAckState.outFreeMsgChan = make(chan *bulkSetAckMsg, cfg.OutBulkSetAckMsgs)
 		for i := 0; i < cap(vs.bulkSetAckState.outFreeMsgChan); i++ {
 			vs.bulkSetAckState.outFreeMsgChan <- &bulkSetAckMsg{
 				vs:   vs,
-				body: make([]byte, cfg.outBulkSetAckMsgCap),
+				body: make([]byte, cfg.OutBulkSetAckMsgCap),
 			}
 		}
-		vs.bulkSetAckState.inMsgTimeout = time.Duration(cfg.inBulkSetAckMsgTimeout) * time.Second
+		vs.bulkSetAckState.inMsgTimeout = time.Duration(cfg.InBulkSetAckMsgTimeout) * time.Second
 	}
 }
 

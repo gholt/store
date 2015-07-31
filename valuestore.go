@@ -219,34 +219,34 @@ type backgroundNotification struct {
 //      opts = append(opts, valuestore.OptWorkers(commandLineOptionValue))
 //  }
 //  vsWithOptionsBuiltUp := valuestore.New(opts...)
-func New(opts ...func(*config)) *DefaultValueStore {
-	cfg := resolveConfig(opts...)
-	vlm := cfg.vlm
+func New(c *Config) *DefaultValueStore {
+	cfg := resolveConfig(c)
+	vlm := cfg.VLM
 	if vlm == nil {
 		vlm = valuelocmap.New()
 	}
 	vs := &DefaultValueStore{
-		logCritical:             cfg.logCritical,
-		logError:                cfg.logError,
-		logWarning:              cfg.logWarning,
-		logInfo:                 cfg.logInfo,
-		logDebug:                cfg.logDebug,
-		rand:                    cfg.rand,
+		logCritical:             cfg.LogCritical,
+		logError:                cfg.LogError,
+		logWarning:              cfg.LogWarning,
+		logInfo:                 cfg.LogInfo,
+		logDebug:                cfg.LogDebug,
+		rand:                    cfg.Rand,
 		valueLocBlocks:          make([]valueLocBlock, math.MaxUint16),
-		path:                    cfg.path,
-		pathtoc:                 cfg.pathtoc,
+		path:                    cfg.Path,
+		pathtoc:                 cfg.PathTOC,
 		vlm:                     vlm,
-		workers:                 cfg.workers,
-		recoveryBatchSize:       cfg.recoveryBatchSize,
-		replicationIgnoreRecent: (uint64(cfg.replicationIgnoreRecent) * uint64(time.Second) / 1000) << _TSB_UTIL_BITS,
-		valueCap:                uint32(cfg.valueCap),
-		pageSize:                uint32(cfg.pageSize),
+		workers:                 cfg.Workers,
+		recoveryBatchSize:       cfg.RecoveryBatchSize,
+		replicationIgnoreRecent: (uint64(cfg.ReplicationIgnoreRecent) * uint64(time.Second) / 1000) << _TSB_UTIL_BITS,
+		valueCap:                uint32(cfg.ValueCap),
+		pageSize:                uint32(cfg.PageSize),
 		minValueAlloc:           cfg.minValueAlloc,
-		writePagesPerWorker:     cfg.writePagesPerWorker,
-		valuesFileCap:           uint32(cfg.valuesFileCap),
-		valuesFileReaders:       cfg.valuesFileReaders,
-		checksumInterval:        uint32(cfg.checksumInterval),
-		msgRing:                 cfg.msgRing,
+		writePagesPerWorker:     cfg.WritePagesPerWorker,
+		valuesFileCap:           uint32(cfg.ValuesFileCap),
+		valuesFileReaders:       cfg.ValuesFileReaders,
+		checksumInterval:        uint32(cfg.ChecksumInterval),
+		msgRing:                 cfg.MsgRing,
 	}
 	vs.freeableVMChans = make([]chan *valuesMem, vs.workers)
 	for i := 0; i < cap(vs.freeableVMChans); i++ {
