@@ -1,6 +1,7 @@
 package valuestore
 
 import (
+	"bytes"
 	"encoding/binary"
 	"io"
 	"testing"
@@ -39,7 +40,7 @@ func (f *memFile) Seek(offset int64, whence int) (int64, error) {
 func (f *memFile) Write(p []byte) (int, error) {
 	pl := int64(len(p))
 	if int64(len(f.buf.buf))-f.pos < pl {
-		buf := make([]byte, int64(len(f.buf.buf))-f.pos+pl)
+		buf := make([]byte, int64(f.pos+pl))
 		copy(buf, f.buf.buf)
 		copy(buf[f.pos:], p)
 		f.buf.buf = buf
@@ -150,8 +151,9 @@ func TestValuesFileWritingEmpty(t *testing.T) {
 		t.Fatal("")
 	}
 	vf.close()
-	if len(buf.buf) != 52 {
-		t.Fatal(len(buf.buf))
+	bl := len(buf.buf)
+	if bl != 52 {
+		t.Fatal(bl)
 	}
 	if string(buf.buf[:28]) != "VALUESTORE v0               " {
 		t.Fatal(string(buf.buf[:28]))
@@ -159,16 +161,103 @@ func TestValuesFileWritingEmpty(t *testing.T) {
 	if binary.BigEndian.Uint32(buf.buf[28:]) != vs.checksumInterval {
 		t.Fatal(binary.BigEndian.Uint32(buf.buf[28:]), vs.checksumInterval)
 	}
-	if binary.BigEndian.Uint32(buf.buf[32:]) != 0 { // unused at this time
-		t.Fatal(binary.BigEndian.Uint32(buf.buf[32:]))
+	if binary.BigEndian.Uint32(buf.buf[bl-20:]) != 0 { // unused at this time
+		t.Fatal(binary.BigEndian.Uint32(buf.buf[bl-20:]))
 	}
-	if binary.BigEndian.Uint64(buf.buf[36:]) != 32 { // last offset, 0 past header
-		t.Fatal(binary.BigEndian.Uint64(buf.buf[36:]))
+	if binary.BigEndian.Uint64(buf.buf[bl-16:]) != 32 { // last offset, 0 past header
+		t.Fatal(binary.BigEndian.Uint64(buf.buf[bl-16:]))
 	}
-	if string(buf.buf[44:48]) != "TERM" {
-		t.Fatal(string(buf.buf[44:48]))
+	if string(buf.buf[bl-8:bl-4]) != "TERM" {
+		t.Fatal(string(buf.buf[bl-8 : bl-4]))
 	}
-	if binary.BigEndian.Uint32(buf.buf[48:]) != 0xcd80c728 { // checksum
-		t.Fatal(binary.BigEndian.Uint32(buf.buf[48:]))
+	if binary.BigEndian.Uint32(buf.buf[bl-4:]) != 0xcd80c728 { // checksum
+		t.Fatal(binary.BigEndian.Uint32(buf.buf[bl-4:]))
+	}
+}
+
+func TestValuesFileWriting(t *testing.T) {
+	vs := New(nil)
+	buf := &memBuf{}
+	createWriteCloser := func(name string) (io.WriteCloser, error) {
+		return &memFile{buf: buf}, nil
+	}
+	openReadSeeker := func(name string) (io.ReadSeeker, error) {
+		return &memFile{buf: buf}, nil
+	}
+	vf := createValuesFile(vs, createWriteCloser, openReadSeeker)
+	if vf == nil {
+		t.Fatal("")
+	}
+	values := make([]byte, 1234)
+	copy(values, []byte("0123456789abcdef"))
+	values[1233] = 1
+	vf.write(&valuesMem{values: values})
+	vf.close()
+	bl := len(buf.buf)
+	if bl != 1234+52 {
+		t.Fatal(bl)
+	}
+	if string(buf.buf[:28]) != "VALUESTORE v0               " {
+		t.Fatal(string(buf.buf[:28]))
+	}
+	if binary.BigEndian.Uint32(buf.buf[28:]) != vs.checksumInterval {
+		t.Fatal(binary.BigEndian.Uint32(buf.buf[28:]), vs.checksumInterval)
+	}
+	if !bytes.Equal(buf.buf[32:bl-20], values) {
+		t.Fatal("")
+	}
+	if binary.BigEndian.Uint32(buf.buf[bl-20:]) != 0 { // unused at this time
+		t.Fatal(binary.BigEndian.Uint32(buf.buf[bl-20:]))
+	}
+	if binary.BigEndian.Uint64(buf.buf[bl-16:]) != 1234+32 { // last offset
+		t.Fatal(binary.BigEndian.Uint64(buf.buf[bl-16:]))
+	}
+	if string(buf.buf[bl-8:bl-4]) != "TERM" {
+		t.Fatal(string(buf.buf[bl-8 : bl-4]))
+	}
+	if binary.BigEndian.Uint32(buf.buf[bl-4:]) != 0x941edfb6 { // checksum
+		t.Fatal(binary.BigEndian.Uint32(buf.buf[bl-4:]))
+	}
+}
+
+func TestValuesFileWritingMore(t *testing.T) {
+	vs := New(nil)
+	buf := &memBuf{}
+	createWriteCloser := func(name string) (io.WriteCloser, error) {
+		return &memFile{buf: buf}, nil
+	}
+	openReadSeeker := func(name string) (io.ReadSeeker, error) {
+		return &memFile{buf: buf}, nil
+	}
+	vf := createValuesFile(vs, createWriteCloser, openReadSeeker)
+	if vf == nil {
+		t.Fatal("")
+	}
+	values := make([]byte, 123456)
+	copy(values, []byte("0123456789abcdef"))
+	values[1233] = 1
+	vf.write(&valuesMem{values: values})
+	vf.close()
+	bl := len(buf.buf)
+	if bl != 123456+int(123512/vs.checksumInterval*4)+52 {
+		t.Fatal(bl)
+	}
+	if string(buf.buf[:28]) != "VALUESTORE v0               " {
+		t.Fatal(string(buf.buf[:28]))
+	}
+	if binary.BigEndian.Uint32(buf.buf[28:]) != vs.checksumInterval {
+		t.Fatal(binary.BigEndian.Uint32(buf.buf[28:]), vs.checksumInterval)
+	}
+	if binary.BigEndian.Uint32(buf.buf[bl-20:]) != 0 { // unused at this time
+		t.Fatal(binary.BigEndian.Uint32(buf.buf[bl-20:]))
+	}
+	if binary.BigEndian.Uint64(buf.buf[bl-16:]) != 123456+32 { // last offset
+		t.Fatal(binary.BigEndian.Uint64(buf.buf[bl-16:]))
+	}
+	if string(buf.buf[bl-8:bl-4]) != "TERM" {
+		t.Fatal(string(buf.buf[bl-8 : bl-4]))
+	}
+	if binary.BigEndian.Uint32(buf.buf[bl-4:]) != 0x6aa30474 { // checksum
+		t.Fatal(binary.BigEndian.Uint32(buf.buf[bl-4:]))
 	}
 }
