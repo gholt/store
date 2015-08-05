@@ -61,7 +61,6 @@ func (vs *DefaultValueStore) inBulkSet() {
 		body := bsm.body
 		var err error
 		ring := vs.msgRing.Ring()
-		ringVersion := ring.Version()
 		rightwardPartitionShift := 64 - ring.PartitionBitCount()
 		for len(body) > 0 {
 			keyA := binary.BigEndian.Uint64(body)
@@ -70,10 +69,6 @@ func (vs *DefaultValueStore) inBulkSet() {
 			l := binary.BigEndian.Uint32(body[24:])
 			_, err = vs.write(keyA, keyB, timestampbits, body[28:28+l])
 			if bsam != nil && err == nil {
-				if ringVersion != ring.Version() {
-					ringVersion = ring.Version()
-					rightwardPartitionShift = 64 - ring.PartitionBitCount()
-				}
 				if ring.Responsible(uint32(keyA >> rightwardPartitionShift)) {
 					bsam.add(keyA, keyB, timestampbits)
 				}
