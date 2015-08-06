@@ -209,7 +209,7 @@ func New(c *Config) *DefaultValueStore {
 	cfg := resolveConfig(c)
 	vlm := cfg.ValueLocMap
 	if vlm == nil {
-		vlm = valuelocmap.New()
+		vlm = valuelocmap.New(nil)
 	}
 	vs := &DefaultValueStore{
 		logCritical:             cfg.LogCritical,
