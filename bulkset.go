@@ -36,6 +36,7 @@ func (vs *DefaultValueStore) bulkSetInit(cfg *Config) {
 			vs.bulkSetState.inFreeMsgChan <- &bulkSetMsg{
 				vs:     vs,
 				header: make([]byte, _BULK_SET_MSG_HEADER_LENGTH),
+				body:   make([]byte, cfg.OutBulkSetMsgCap),
 			}
 		}
 		for i := 0; i < cfg.InBulkSetWorkers; i++ {
