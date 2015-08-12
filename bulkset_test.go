@@ -225,3 +225,59 @@ func TestBulkSetMsgWithAck(t *testing.T) {
 		t.Fatal(m.msgToNodeIDs[0])
 	}
 }
+
+func TestBulkSetMsgOut(t *testing.T) {
+	vs := New(&Config{MsgRing: &testBulkSetMsgRing{}})
+	bsm := vs.newOutBulkSetMsg()
+	if bsm.MsgType() != _BULK_SET_MSG_TYPE {
+		t.Fatal(bsm.MsgType())
+	}
+	if bsm.MsgLength() != _BULK_SET_MSG_HEADER_LENGTH {
+		t.Fatal(bsm.MsgLength())
+	}
+	buf := bytes.NewBuffer(nil)
+	n, err := bsm.WriteContent(buf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != _BULK_SET_MSG_HEADER_LENGTH {
+		t.Fatal(n)
+	}
+	if !bytes.Equal(buf.Bytes(), []byte{0, 0, 0, 0, 0, 0, 0, 0}) {
+		t.Fatal(buf.Bytes())
+	}
+	bsm.Done()
+	bsm = vs.newOutBulkSetMsg()
+	binary.BigEndian.PutUint64(bsm.header, 12345)
+	bsm.add(1, 2, 0x300, nil)
+	bsm.add(4, 5, 0x600, []byte("testing"))
+	if bsm.MsgType() != _BULK_SET_MSG_TYPE {
+		t.Fatal(bsm.MsgType())
+	}
+	if bsm.MsgLength() != _BULK_SET_MSG_HEADER_LENGTH+_BULK_SET_MSG_ENTRY_HEADER_LENGTH+0+_BULK_SET_MSG_ENTRY_HEADER_LENGTH+7 {
+		t.Fatal(bsm.MsgLength())
+	}
+	buf = bytes.NewBuffer(nil)
+	n, err = bsm.WriteContent(buf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != _BULK_SET_MSG_HEADER_LENGTH+_BULK_SET_MSG_ENTRY_HEADER_LENGTH+0+_BULK_SET_MSG_ENTRY_HEADER_LENGTH+7 {
+		t.Fatal(n)
+	}
+	if !bytes.Equal(buf.Bytes(), []byte{
+		0, 0, 0, 0, 0, 0, 48, 57, // header
+		0, 0, 0, 0, 0, 0, 0, 1, // keyA
+		0, 0, 0, 0, 0, 0, 0, 2, // keyB
+		0, 0, 0, 0, 0, 0, 3, 0, // timestamp
+		0, 0, 0, 0, // length
+		0, 0, 0, 0, 0, 0, 0, 4, // keyA
+		0, 0, 0, 0, 0, 0, 0, 5, // keyB
+		0, 0, 0, 0, 0, 0, 6, 0, // timestamp
+		0, 0, 0, 7, // length
+		116, 101, 115, 116, 105, 110, 103, // "testing"
+	}) {
+		t.Fatal(buf.Bytes())
+	}
+	bsm.Done()
+}
