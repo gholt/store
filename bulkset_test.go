@@ -32,6 +32,23 @@ func (m *testBulkSetMsgRing) MsgToNode(nodeID uint64, msg ring.Msg) {
 func (m *testBulkSetMsgRing) MsgToOtherReplicas(ringVersion int64, partition uint32, msg ring.Msg) {
 }
 
+type testErrorWriter struct {
+	goodBytes int
+}
+
+func (w *testErrorWriter) Write(p []byte) (int, error) {
+	if w.goodBytes >= len(p) {
+		w.goodBytes -= len(p)
+		return len(p), nil
+	}
+	if w.goodBytes > 0 {
+		n := w.goodBytes
+		w.goodBytes = 0
+		return n, io.EOF
+	}
+	return 0, io.EOF
+}
+
 func TestBulkSetInTimeout(t *testing.T) {
 	vs := New(&Config{
 		MsgRing:             &testBulkSetMsgRing{},
@@ -280,4 +297,25 @@ func TestBulkSetMsgOut(t *testing.T) {
 		t.Fatal(buf.Bytes())
 	}
 	bsm.Done()
+}
+
+func TestBulkSetMsgOutWriteError(t *testing.T) {
+	vs := New(&Config{MsgRing: &testBulkSetMsgRing{}})
+	bsm := vs.newOutBulkSetMsg()
+	_, err := bsm.WriteContent(&testErrorWriter{})
+	if err == nil {
+		t.Fatal(err)
+	}
+	bsm.Done()
+}
+
+func TestBulkSetMsgOutHitCap(t *testing.T) {
+	vs := New(&Config{MsgRing: &testBulkSetMsgRing{}, OutBulkSetMsgCap: _BULK_SET_MSG_HEADER_LENGTH + _BULK_SET_MSG_ENTRY_HEADER_LENGTH + 3})
+	bsm := vs.newOutBulkSetMsg()
+	if !bsm.add(1, 2, 0x300, []byte("1")) {
+		t.Fatal("")
+	}
+	if bsm.add(1, 2, 0x300, []byte("12345678901234567890")) {
+		t.Fatal("")
+	}
 }
