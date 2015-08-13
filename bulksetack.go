@@ -6,7 +6,10 @@ import (
 	"time"
 )
 
-const _MSG_BULK_SET_ACK = 0x39589f4746844e3b
+// bsam: entries:n
+// bsam entry: keyA:8, keyB:8, timestampbits:8
+const _BULK_SET_ACK_MSG_TYPE = 0x39589f4746844e3b
+const _BULK_SET_ACK_MSG_ENTRY_LENGTH = 24
 
 type bulkSetAckState struct {
 	inMsgChan      chan *bulkSetAckMsg
@@ -22,7 +25,7 @@ type bulkSetAckMsg struct {
 
 func (vs *DefaultValueStore) bulkSetAckInit(cfg *Config) {
 	if vs.msgRing != nil {
-		vs.msgRing.SetMsgHandler(_MSG_BULK_SET_ACK, vs.newInBulkSetAckMsg)
+		vs.msgRing.SetMsgHandler(_BULK_SET_ACK_MSG_TYPE, vs.newInBulkSetAckMsg)
 		vs.bulkSetAckState.inMsgChan = make(chan *bulkSetAckMsg, cfg.InBulkSetAckMsgs)
 		vs.bulkSetAckState.inFreeMsgChan = make(chan *bulkSetAckMsg, cfg.InBulkSetAckMsgs)
 		for i := 0; i < cap(vs.bulkSetAckState.inFreeMsgChan); i++ {
@@ -45,32 +48,14 @@ func (vs *DefaultValueStore) bulkSetAckInit(cfg *Config) {
 	}
 }
 
-func (vs *DefaultValueStore) inBulkSetAck() {
-	for {
-		bsam := <-vs.bulkSetAckState.inMsgChan
-		ring := vs.msgRing.Ring()
-		version := ring.Version()
-		rightwardPartitionShift := 64 - ring.PartitionBitCount()
-		b := bsam.body
-		l := len(b)
-		for o := 0; o < l; o += 24 {
-			if version != ring.Version() {
-				version = ring.Version()
-				rightwardPartitionShift = 64 - ring.PartitionBitCount()
-			}
-			keyA := binary.BigEndian.Uint64(b[o:])
-			if !ring.Responsible(uint32(keyA >> rightwardPartitionShift)) {
-				vs.write(keyA, binary.BigEndian.Uint64(b[o+8:]), binary.BigEndian.Uint64(b[o+16:])|_TSB_LOCAL_REMOVAL, nil)
-			}
-		}
-		vs.bulkSetAckState.inFreeMsgChan <- bsam
-	}
-}
-
+// newInBulkSetAckMsg reads bulk-set-ack messages from the MsgRing and puts
+// them on the inMsgChan for the inBulkSetAck workers to work on.
 func (vs *DefaultValueStore) newInBulkSetAckMsg(r io.Reader, l uint64) (uint64, error) {
 	var bsam *bulkSetAckMsg
 	select {
 	case bsam = <-vs.bulkSetAckState.inFreeMsgChan:
+		// If there isn't a free bulkSetAckMsg after some time, give up and
+		// just read and discard the incoming bulk-set-ack message.
 	case <-time.After(vs.bulkSetAckState.inMsgTimeout):
 		left := l
 		var sn int
@@ -91,6 +76,18 @@ func (vs *DefaultValueStore) newInBulkSetAckMsg(r io.Reader, l uint64) (uint64, 
 	var n int
 	var sn int
 	var err error
+	// TODO: I think we should cap the body size to the message cap but that
+	// also means that the inBulkSetAck worker will need to handle the likely
+	// trailing truncated entry. Once all this is done, the overall cluster
+	// should work even if the caps are set differently from node to node
+	// (definitely not recommended though), as the bulk-set-ack messages would
+	// eventually start falling under the minimum cap as the front-end data is
+	// tranferred and acknowledged. Anyway, I think this is needed in case
+	// someone accidentally screws up the cap on one node, making it way too
+	// big. Rather just have that one node abuse/run-out-of memory instead of
+	// it causing every other node it sends bulk-set-ack messages to also have
+	// memory issues. This is less likely of an issue than the same issue with
+	// bulk-set messaging.
 	if l > uint64(cap(bsam.body)) {
 		bsam.body = make([]byte, l)
 	}
@@ -107,6 +104,32 @@ func (vs *DefaultValueStore) newInBulkSetAckMsg(r io.Reader, l uint64) (uint64, 
 	return l, nil
 }
 
+// inBulkSetAck actually processes incoming bulk-set-ack messages; there may be
+// more than one of these workers.
+func (vs *DefaultValueStore) inBulkSetAck() {
+	for {
+		bsam := <-vs.bulkSetAckState.inMsgChan
+		ring := vs.msgRing.Ring()
+		rightwardPartitionShift := 64 - ring.PartitionBitCount()
+		b := bsam.body
+		l := len(b)
+		for o := 0; o < l; o += _BULK_SET_ACK_MSG_ENTRY_LENGTH {
+			keyA := binary.BigEndian.Uint64(b[o:])
+			if !ring.Responsible(uint32(keyA >> rightwardPartitionShift)) {
+				vs.write(keyA, binary.BigEndian.Uint64(b[o+8:]), binary.BigEndian.Uint64(b[o+16:])|_TSB_LOCAL_REMOVAL, nil)
+			}
+		}
+		vs.bulkSetAckState.inFreeMsgChan <- bsam
+	}
+}
+
+// newOutBulkSetAckMsg gives an initialized bulkSetAckMsg for filling out and
+// eventually sending using the MsgRing. The MsgRing (or someone else if the
+// message doesn't end up with the MsgRing) will call bulkSetAckMsg.Done()
+// eventually and the bulkSetAckMsg will be requeued for reuse later. There is
+// a fixed number of outgoing bulkSetAckMsg instances that can exist at any
+// given time, capping memory usage. Once the limit is reached, this method
+// will block until a bulkSetAckMsg is available to return.
 func (vs *DefaultValueStore) newOutBulkSetAckMsg() *bulkSetAckMsg {
 	bsam := <-vs.bulkSetAckState.outFreeMsgChan
 	bsam.body = bsam.body[:0]
@@ -114,7 +137,7 @@ func (vs *DefaultValueStore) newOutBulkSetAckMsg() *bulkSetAckMsg {
 }
 
 func (bsam *bulkSetAckMsg) MsgType() uint64 {
-	return _MSG_BULK_SET_ACK
+	return _BULK_SET_ACK_MSG_TYPE
 }
 
 func (bsam *bulkSetAckMsg) MsgLength() uint64 {
@@ -132,10 +155,10 @@ func (bsam *bulkSetAckMsg) Done() {
 
 func (bsam *bulkSetAckMsg) add(keyA uint64, keyB uint64, timestampbits uint64) bool {
 	o := len(bsam.body)
-	if o+24 >= cap(bsam.body) {
+	if o+_BULK_SET_ACK_MSG_ENTRY_LENGTH >= cap(bsam.body) {
 		return false
 	}
-	bsam.body = bsam.body[:o+24]
+	bsam.body = bsam.body[:o+_BULK_SET_ACK_MSG_ENTRY_LENGTH]
 	binary.BigEndian.PutUint64(bsam.body[o:], keyA)
 	binary.BigEndian.PutUint64(bsam.body[o+8:], keyB)
 	binary.BigEndian.PutUint64(bsam.body[o+16:], timestampbits)
