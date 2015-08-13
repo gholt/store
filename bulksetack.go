@@ -110,12 +110,15 @@ func (vs *DefaultValueStore) inBulkSetAck() {
 	for {
 		bsam := <-vs.bulkSetAckState.inMsgChan
 		ring := vs.msgRing.Ring()
-		rightwardPartitionShift := 64 - ring.PartitionBitCount()
+		var rightwardPartitionShift uint64
+		if ring != nil {
+			rightwardPartitionShift = 64 - uint64(ring.PartitionBitCount())
+		}
 		b := bsam.body
 		l := len(b)
 		for o := 0; o < l; o += _BULK_SET_ACK_MSG_ENTRY_LENGTH {
 			keyA := binary.BigEndian.Uint64(b[o:])
-			if !ring.Responsible(uint32(keyA >> rightwardPartitionShift)) {
+			if ring != nil && !ring.Responsible(uint32(keyA>>rightwardPartitionShift)) {
 				vs.write(keyA, binary.BigEndian.Uint64(b[o+8:]), binary.BigEndian.Uint64(b[o+16:])|_TSB_LOCAL_REMOVAL, nil)
 			}
 		}

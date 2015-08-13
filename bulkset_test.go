@@ -243,6 +243,39 @@ func TestBulkSetMsgWithAck(t *testing.T) {
 	}
 }
 
+func TestBulkSetMsgWithoutRing(t *testing.T) {
+	m := &msgRingPlaceholder{}
+	vs := New(&Config{
+		MsgRing:          m,
+		InBulkSetWorkers: 1,
+		InBulkSetMsgs:    1,
+	})
+	vs.EnableAll()
+	bsm := <-vs.bulkSetState.inFreeMsgChan
+	binary.BigEndian.PutUint64(bsm.header, 123)
+	bsm.body = bsm.body[:0]
+	if !bsm.add(1, 2, 0x300, []byte("testing")) {
+		t.Fatal("")
+	}
+	vs.bulkSetState.inMsgChan <- bsm
+	// only one of these, so if we get it back we know the previous data was
+	// processed
+	<-vs.bulkSetState.inFreeMsgChan
+	ts, v, err := vs.Read(1, 2, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ts != 3 { // the bottom 8 bits are discarded for the public Read
+		t.Fatal(ts)
+	}
+	if string(v) != "testing" {
+		t.Fatal(string(v))
+	}
+	if len(m.msgToNodeIDs) != 0 {
+		t.Fatal(len(m.msgToNodeIDs))
+	}
+}
+
 func TestBulkSetMsgOut(t *testing.T) {
 	vs := New(&Config{MsgRing: &msgRingPlaceholder{}})
 	bsm := vs.newOutBulkSetMsg()

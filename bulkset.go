@@ -141,16 +141,19 @@ func (vs *DefaultValueStore) newInBulkSetMsg(r io.Reader, l uint64) (uint64, err
 func (vs *DefaultValueStore) inBulkSet() {
 	for {
 		bsm := <-vs.bulkSetState.inMsgChan
-		var bsam *bulkSetAckMsg
-		// Only ack if there is someone to ack to, which should always be the
-		// case but just in case.
-		if bsm.nodeID() != 0 {
-			bsam = vs.newOutBulkSetAckMsg()
-		}
 		body := bsm.body
 		var err error
 		ring := vs.msgRing.Ring()
-		rightwardPartitionShift := 64 - ring.PartitionBitCount()
+		var rightwardPartitionShift uint64
+		var bsam *bulkSetAckMsg
+		if ring != nil {
+			rightwardPartitionShift = 64 - uint64(ring.PartitionBitCount())
+			// Only ack if there is someone to ack to, which should always be
+			// the case but just in case.
+			if bsm.nodeID() != 0 {
+				bsam = vs.newOutBulkSetAckMsg()
+			}
+		}
 		for len(body) > 0 {
 			keyA := binary.BigEndian.Uint64(body)
 			keyB := binary.BigEndian.Uint64(body[8:])
@@ -160,7 +163,7 @@ func (vs *DefaultValueStore) inBulkSet() {
 			_, err = vs.write(keyA, keyB, timestampbits, body[_BULK_SET_MSG_ENTRY_HEADER_LENGTH:_BULK_SET_MSG_ENTRY_HEADER_LENGTH+l])
 			// But only ack on success, there is someone to ack to, and the
 			// local node is responsible for the data.
-			if err == nil && bsam != nil && ring.Responsible(uint32(keyA>>rightwardPartitionShift)) {
+			if err == nil && bsam != nil && ring != nil && ring.Responsible(uint32(keyA>>rightwardPartitionShift)) {
 				bsam.add(keyA, keyB, timestampbits)
 			}
 			body = body[_BULK_SET_MSG_ENTRY_HEADER_LENGTH+l:]

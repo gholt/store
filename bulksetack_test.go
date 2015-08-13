@@ -134,8 +134,54 @@ func TestBulkSetAckMsgIncoming(t *testing.T) {
 	if string(v) != "" {
 		t.Fatal(string(v))
 	}
-	if len(m.msgToNodeIDs) != 0 {
-		t.Fatal(len(m.msgToNodeIDs))
+}
+
+func TestBulkSetAckMsgIncomingNoRing(t *testing.T) {
+	m := &msgRingPlaceholder{}
+	vs := New(&Config{
+		MsgRing:             m,
+		InBulkSetAckWorkers: 1,
+		InBulkSetAckMsgs:    1,
+	})
+	vs.EnableAll()
+	ts, err := vs.write(1, 2, 0x300, []byte("testing"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ts != 0 {
+		t.Fatal(ts)
+	}
+	// just double check the item is there
+	ts2, v, err := vs.read(1, 2, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ts2 != 0x300 {
+		t.Fatal(ts2)
+	}
+	if string(v) != "testing" {
+		t.Fatal(string(v))
+	}
+	bsam := <-vs.bulkSetAckState.inFreeMsgChan
+	bsam.body = bsam.body[:0]
+	if !bsam.add(1, 2, 0x300) {
+		t.Fatal("")
+	}
+	vs.bulkSetAckState.inMsgChan <- bsam
+	// only one of these, so if we get it back we know the previous data was
+	// processed
+	<-vs.bulkSetAckState.inFreeMsgChan
+	// Make sure the item is not gone since we don't know if we're responsible
+	// or not since we don't have a ring
+	ts2, v, err = vs.read(1, 2, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ts2 != 0x300 {
+		t.Fatal(ts2)
+	}
+	if string(v) != "testing" {
+		t.Fatal(string(v))
 	}
 }
 
