@@ -9,27 +9,27 @@ import (
 	"github.com/gholt/ring"
 )
 
-type testBulkSetMsgRing struct {
+type msgRingPlaceholder struct {
 	ring         ring.Ring
 	msgToNodeIDs []uint64
 }
 
-func (m *testBulkSetMsgRing) Ring() ring.Ring {
+func (m *msgRingPlaceholder) Ring() ring.Ring {
 	return m.ring
 }
 
-func (m *testBulkSetMsgRing) MaxMsgLength() uint64 {
+func (m *msgRingPlaceholder) MaxMsgLength() uint64 {
 	return 65536
 }
 
-func (m *testBulkSetMsgRing) SetMsgHandler(msgType uint64, handler ring.MsgUnmarshaller) {
+func (m *msgRingPlaceholder) SetMsgHandler(msgType uint64, handler ring.MsgUnmarshaller) {
 }
 
-func (m *testBulkSetMsgRing) MsgToNode(nodeID uint64, msg ring.Msg) {
+func (m *msgRingPlaceholder) MsgToNode(nodeID uint64, msg ring.Msg) {
 	m.msgToNodeIDs = append(m.msgToNodeIDs, nodeID)
 }
 
-func (m *testBulkSetMsgRing) MsgToOtherReplicas(ringVersion int64, partition uint32, msg ring.Msg) {
+func (m *msgRingPlaceholder) MsgToOtherReplicas(ringVersion int64, partition uint32, msg ring.Msg) {
 }
 
 type testErrorWriter struct {
@@ -51,7 +51,7 @@ func (w *testErrorWriter) Write(p []byte) (int, error) {
 
 func TestBulkSetInTimeout(t *testing.T) {
 	vs := New(&Config{
-		MsgRing:             &testBulkSetMsgRing{},
+		MsgRing:             &msgRingPlaceholder{},
 		InBulkSetMsgTimeout: 1,
 	})
 	// This means that the subsystem can never get a free bulkSetMsg since we
@@ -77,7 +77,7 @@ func TestBulkSetInTimeout(t *testing.T) {
 }
 
 func TestBulkSetReadObviouslyTooShort(t *testing.T) {
-	vs := New(&Config{MsgRing: &testBulkSetMsgRing{}})
+	vs := New(&Config{MsgRing: &msgRingPlaceholder{}})
 	// Just in case the test fails, we don't want the subsystem to try to
 	// interpret our junk bytes.
 	vs.bulkSetState.inMsgChan = make(chan *bulkSetMsg, 1)
@@ -106,7 +106,7 @@ func TestBulkSetReadObviouslyTooShort(t *testing.T) {
 }
 
 func TestBulkSetRead(t *testing.T) {
-	vs := New(&Config{MsgRing: &testBulkSetMsgRing{}})
+	vs := New(&Config{MsgRing: &msgRingPlaceholder{}})
 	// We don't want the subsystem to try to interpret our junk bytes.
 	vs.bulkSetState.inMsgChan = make(chan *bulkSetMsg, 1)
 	n, err := vs.newInBulkSetMsg(bytes.NewBuffer(make([]byte, 100)), 100)
@@ -150,7 +150,7 @@ func TestBulkSetRead(t *testing.T) {
 }
 
 func TestBulkSetReadLowSendCap(t *testing.T) {
-	vs := New(&Config{MsgRing: &testBulkSetMsgRing{}, BulkSetMsgCap: _BULK_SET_MSG_HEADER_LENGTH + 1})
+	vs := New(&Config{MsgRing: &msgRingPlaceholder{}, BulkSetMsgCap: _BULK_SET_MSG_HEADER_LENGTH + 1})
 	// We don't want the subsystem to try to interpret our junk bytes.
 	vs.bulkSetState.inMsgChan = make(chan *bulkSetMsg, 1)
 	n, err := vs.newInBulkSetMsg(bytes.NewBuffer(make([]byte, 100)), 100)
@@ -172,7 +172,7 @@ func TestBulkSetMsgWithoutAck(t *testing.T) {
 	n := b.AddNode(true, 1, nil, nil, "", nil)
 	r := b.Ring()
 	r.SetLocalNode(n.ID())
-	m := &testBulkSetMsgRing{ring: r}
+	m := &msgRingPlaceholder{ring: r}
 	vs := New(&Config{
 		MsgRing:          m,
 		InBulkSetWorkers: 1,
@@ -208,7 +208,7 @@ func TestBulkSetMsgWithAck(t *testing.T) {
 	n := b.AddNode(true, 1, nil, nil, "", nil)
 	r := b.Ring()
 	r.SetLocalNode(n.ID())
-	m := &testBulkSetMsgRing{ring: r}
+	m := &msgRingPlaceholder{ring: r}
 	vs := New(&Config{
 		MsgRing:          m,
 		InBulkSetWorkers: 1,
@@ -244,7 +244,7 @@ func TestBulkSetMsgWithAck(t *testing.T) {
 }
 
 func TestBulkSetMsgOut(t *testing.T) {
-	vs := New(&Config{MsgRing: &testBulkSetMsgRing{}})
+	vs := New(&Config{MsgRing: &msgRingPlaceholder{}})
 	bsm := vs.newOutBulkSetMsg()
 	if bsm.MsgType() != _BULK_SET_MSG_TYPE {
 		t.Fatal(bsm.MsgType())
@@ -300,7 +300,7 @@ func TestBulkSetMsgOut(t *testing.T) {
 }
 
 func TestBulkSetMsgOutWriteError(t *testing.T) {
-	vs := New(&Config{MsgRing: &testBulkSetMsgRing{}})
+	vs := New(&Config{MsgRing: &msgRingPlaceholder{}})
 	bsm := vs.newOutBulkSetMsg()
 	_, err := bsm.WriteContent(&testErrorWriter{})
 	if err == nil {
@@ -310,12 +310,12 @@ func TestBulkSetMsgOutWriteError(t *testing.T) {
 }
 
 func TestBulkSetMsgOutHitCap(t *testing.T) {
-	vs := New(&Config{MsgRing: &testBulkSetMsgRing{}, BulkSetMsgCap: _BULK_SET_MSG_HEADER_LENGTH + _BULK_SET_MSG_ENTRY_HEADER_LENGTH + 3})
+	vs := New(&Config{MsgRing: &msgRingPlaceholder{}, BulkSetMsgCap: _BULK_SET_MSG_HEADER_LENGTH + _BULK_SET_MSG_ENTRY_HEADER_LENGTH + 3})
 	bsm := vs.newOutBulkSetMsg()
 	if !bsm.add(1, 2, 0x300, []byte("1")) {
 		t.Fatal("")
 	}
-	if bsm.add(1, 2, 0x300, []byte("12345678901234567890")) {
+	if bsm.add(4, 5, 0x600, []byte("12345678901234567890")) {
 		t.Fatal("")
 	}
 }

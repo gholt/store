@@ -372,7 +372,7 @@ func (vs *DefaultValueStore) Read(keyA uint64, keyB uint64, value []byte) (int64
 
 func (vs *DefaultValueStore) read(keyA uint64, keyB uint64, value []byte) (uint64, []byte, error) {
 	timestampbits, id, offset, length := vs.vlm.Get(keyA, keyB)
-	if id == 0 || timestampbits&_TSB_DELETION != 0 {
+	if id == 0 || timestampbits&_TSB_DELETION != 0 || timestampbits&_TSB_LOCAL_REMOVAL != 0 {
 		return timestampbits, value, ErrNotFound
 	}
 	return vs.valueLocBlock(id).read(keyA, keyB, timestampbits, offset, length, value)
