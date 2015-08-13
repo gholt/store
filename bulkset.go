@@ -36,19 +36,19 @@ func (vs *DefaultValueStore) bulkSetInit(cfg *Config) {
 			vs.bulkSetState.inFreeMsgChan <- &bulkSetMsg{
 				vs:     vs,
 				header: make([]byte, _BULK_SET_MSG_HEADER_LENGTH),
-				body:   make([]byte, cfg.OutBulkSetMsgCap),
+				body:   make([]byte, cfg.BulkSetMsgCap),
 			}
 		}
 		for i := 0; i < cfg.InBulkSetWorkers; i++ {
 			go vs.inBulkSet()
 		}
-		vs.bulkSetState.msgCap = cfg.OutBulkSetMsgCap
+		vs.bulkSetState.msgCap = cfg.BulkSetMsgCap
 		vs.bulkSetState.outFreeMsgChan = make(chan *bulkSetMsg, cfg.OutBulkSetMsgs)
 		for i := 0; i < cap(vs.bulkSetState.outFreeMsgChan); i++ {
 			vs.bulkSetState.outFreeMsgChan <- &bulkSetMsg{
 				vs:     vs,
 				header: make([]byte, _BULK_SET_MSG_HEADER_LENGTH),
-				body:   make([]byte, cfg.OutBulkSetMsgCap),
+				body:   make([]byte, cfg.BulkSetMsgCap),
 			}
 		}
 		vs.bulkSetState.inMsgTimeout = time.Duration(cfg.InBulkSetMsgTimeout) * time.Second

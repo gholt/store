@@ -26,7 +26,10 @@ func (vs *DefaultValueStore) bulkSetAckInit(cfg *Config) {
 		vs.bulkSetAckState.inMsgChan = make(chan *bulkSetAckMsg, cfg.InBulkSetAckMsgs)
 		vs.bulkSetAckState.inFreeMsgChan = make(chan *bulkSetAckMsg, cfg.InBulkSetAckMsgs)
 		for i := 0; i < cap(vs.bulkSetAckState.inFreeMsgChan); i++ {
-			vs.bulkSetAckState.inFreeMsgChan <- &bulkSetAckMsg{vs: vs}
+			vs.bulkSetAckState.inFreeMsgChan <- &bulkSetAckMsg{
+				vs:   vs,
+				body: make([]byte, cfg.BulkSetAckMsgCap),
+			}
 		}
 		for i := 0; i < cfg.InBulkSetAckWorkers; i++ {
 			go vs.inBulkSetAck()
@@ -35,7 +38,7 @@ func (vs *DefaultValueStore) bulkSetAckInit(cfg *Config) {
 		for i := 0; i < cap(vs.bulkSetAckState.outFreeMsgChan); i++ {
 			vs.bulkSetAckState.outFreeMsgChan <- &bulkSetAckMsg{
 				vs:   vs,
-				body: make([]byte, cfg.OutBulkSetAckMsgCap),
+				body: make([]byte, cfg.BulkSetAckMsgCap),
 			}
 		}
 		vs.bulkSetAckState.inMsgTimeout = time.Duration(cfg.InBulkSetAckMsgTimeout) * time.Second

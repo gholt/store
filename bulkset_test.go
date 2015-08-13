@@ -150,7 +150,7 @@ func TestBulkSetRead(t *testing.T) {
 }
 
 func TestBulkSetReadLowSendCap(t *testing.T) {
-	vs := New(&Config{MsgRing: &testBulkSetMsgRing{}, OutBulkSetMsgCap: _BULK_SET_MSG_HEADER_LENGTH + 1})
+	vs := New(&Config{MsgRing: &testBulkSetMsgRing{}, BulkSetMsgCap: _BULK_SET_MSG_HEADER_LENGTH + 1})
 	// We don't want the subsystem to try to interpret our junk bytes.
 	vs.bulkSetState.inMsgChan = make(chan *bulkSetMsg, 1)
 	n, err := vs.newInBulkSetMsg(bytes.NewBuffer(make([]byte, 100)), 100)
@@ -310,7 +310,7 @@ func TestBulkSetMsgOutWriteError(t *testing.T) {
 }
 
 func TestBulkSetMsgOutHitCap(t *testing.T) {
-	vs := New(&Config{MsgRing: &testBulkSetMsgRing{}, OutBulkSetMsgCap: _BULK_SET_MSG_HEADER_LENGTH + _BULK_SET_MSG_ENTRY_HEADER_LENGTH + 3})
+	vs := New(&Config{MsgRing: &testBulkSetMsgRing{}, BulkSetMsgCap: _BULK_SET_MSG_HEADER_LENGTH + _BULK_SET_MSG_ENTRY_HEADER_LENGTH + 3})
 	bsm := vs.newOutBulkSetMsg()
 	if !bsm.add(1, 2, 0x300, []byte("1")) {
 		t.Fatal("")

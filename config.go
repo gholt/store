@@ -148,13 +148,13 @@ type Config struct {
 	// messages can be buffered before blocking on creating more. Defaults to
 	// OutPushReplicationWorkers * 4.
 	OutPushReplicationMsgs int
+	// BulkSetMsgCap indicates the maximum bytes for bulk-set messages.
+	// Defaults to MsgCap.
+	BulkSetMsgCap int
 	// OutBulkSetMsgs indicates how many outgoing bulk-set messages can be
 	// buffered before blocking on creating more. Defaults to
 	// OutPushReplicationWorkers * 4.
 	OutBulkSetMsgs int
-	// OutBulkSetMsgCap indicates the maximum bytes for outgoing bulk-set
-	// messages. Defaults to MsgCap.
-	OutBulkSetMsgCap int
 	// InBulkSetWorkers indicates how many incoming bulk-set messages can be
 	// processed at the same time. Defaults to Workers.
 	InBulkSetWorkers int
@@ -166,6 +166,9 @@ type Config struct {
 	// message can be pending before just discarding it. Defaults to
 	// MessageTimeout.
 	InBulkSetMsgTimeout int
+	// BulkSetAckMsgCap indicates the maximum bytes for bulk-set-ack messages.
+	// Defaults to MsgCap.
+	BulkSetAckMsgCap int
 	// InBulkSetAckWorkers indicates how many incoming bulk-set-ack messages
 	// can be processed at the same time. Defaults to Workers.
 	InBulkSetAckWorkers int
@@ -181,9 +184,6 @@ type Config struct {
 	// be buffered before blocking on creating more. Defaults to
 	// InBulkSetWorkers * 4.
 	OutBulkSetAckMsgs int
-	// OutBulkSetAckMsgCap indicates the maximum bytes for outgoing
-	// bulk-set-ack messages. Defaults to MsgCap.
-	OutBulkSetAckMsgCap int
 	// CompactionInterval overrides the BackgroundInterval value just for
 	// compaction passes.
 	CompactionInterval int
@@ -542,6 +542,17 @@ func resolveConfig(c *Config) *Config {
 	if cfg.OutPushReplicationMsgs < 1 {
 		cfg.OutPushReplicationMsgs = 1
 	}
+	if cfg.BulkSetMsgCap == 0 {
+		cfg.BulkSetMsgCap = cfg.MsgCap
+		if env := os.Getenv("VALUESTORE_BULK_SET_MSG_CAP"); env != "" {
+			if val, err := strconv.Atoi(env); err == nil {
+				cfg.BulkSetMsgCap = val
+			}
+		}
+	}
+	if cfg.BulkSetMsgCap < 1 {
+		cfg.BulkSetMsgCap = 1
+	}
 	if cfg.OutBulkSetMsgs == 0 {
 		cfg.OutBulkSetMsgs = cfg.OutPushReplicationWorkers * 4
 		if env := os.Getenv("VALUESTORE_OUT_BULK_SET_MSGS"); env != "" {
@@ -552,17 +563,6 @@ func resolveConfig(c *Config) *Config {
 	}
 	if cfg.OutBulkSetMsgs < 1 {
 		cfg.OutBulkSetMsgs = 1
-	}
-	if cfg.OutBulkSetMsgCap == 0 {
-		cfg.OutBulkSetMsgCap = cfg.MsgCap
-		if env := os.Getenv("VALUESTORE_OUT_BULK_SET_MSG_CAP"); env != "" {
-			if val, err := strconv.Atoi(env); err == nil {
-				cfg.OutBulkSetMsgCap = val
-			}
-		}
-	}
-	if cfg.OutBulkSetMsgCap < 1 {
-		cfg.OutBulkSetMsgCap = 1
 	}
 	if cfg.InBulkSetWorkers == 0 {
 		cfg.InBulkSetWorkers = cfg.Workers
@@ -596,6 +596,17 @@ func resolveConfig(c *Config) *Config {
 	}
 	if cfg.InBulkSetMsgTimeout < 1 {
 		cfg.InBulkSetMsgTimeout = 1
+	}
+	if cfg.BulkSetAckMsgCap == 0 {
+		cfg.BulkSetAckMsgCap = cfg.MsgCap
+		if env := os.Getenv("VALUESTORE_OUT_BULK_SET_ACK_MSG_CAP"); env != "" {
+			if val, err := strconv.Atoi(env); err == nil {
+				cfg.BulkSetAckMsgCap = val
+			}
+		}
+	}
+	if cfg.BulkSetAckMsgCap < 1 {
+		cfg.BulkSetAckMsgCap = 1
 	}
 	if cfg.InBulkSetAckWorkers == 0 {
 		cfg.InBulkSetAckWorkers = cfg.Workers
@@ -640,17 +651,6 @@ func resolveConfig(c *Config) *Config {
 	}
 	if cfg.OutBulkSetAckMsgs < 1 {
 		cfg.OutBulkSetAckMsgs = 1
-	}
-	if cfg.OutBulkSetAckMsgCap == 0 {
-		cfg.OutBulkSetAckMsgCap = cfg.MsgCap
-		if env := os.Getenv("VALUESTORE_OUT_BULK_SET_ACK_MSG_CAP"); env != "" {
-			if val, err := strconv.Atoi(env); err == nil {
-				cfg.OutBulkSetAckMsgCap = val
-			}
-		}
-	}
-	if cfg.OutBulkSetAckMsgCap < 1 {
-		cfg.OutBulkSetAckMsgCap = 1
 	}
 	if cfg.CompactionInterval == 0 {
 		cfg.CompactionInterval = cfg.BackgroundInterval
