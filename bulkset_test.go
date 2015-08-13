@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"io"
 	"testing"
+	"time"
 
 	"github.com/gholt/ring"
 )
@@ -78,9 +79,10 @@ func TestBulkSetInTimeout(t *testing.T) {
 
 func TestBulkSetReadObviouslyTooShort(t *testing.T) {
 	vs := New(&Config{MsgRing: &msgRingPlaceholder{}})
-	// Just in case the test fails, we don't want the subsystem to try to
-	// interpret our junk bytes.
-	vs.bulkSetState.inMsgChan = make(chan *bulkSetMsg, 1)
+	vs.bulkSetState.inMsgChan <- nil
+	for len(vs.bulkSetState.inMsgChan) > 0 {
+		time.Sleep(time.Millisecond)
+	}
 	n, err := vs.newInBulkSetMsg(bytes.NewBuffer(make([]byte, 1)), 1)
 	if err != nil {
 		t.Fatal(err)
@@ -107,8 +109,10 @@ func TestBulkSetReadObviouslyTooShort(t *testing.T) {
 
 func TestBulkSetRead(t *testing.T) {
 	vs := New(&Config{MsgRing: &msgRingPlaceholder{}})
-	// We don't want the subsystem to try to interpret our junk bytes.
-	vs.bulkSetState.inMsgChan = make(chan *bulkSetMsg, 1)
+	vs.bulkSetState.inMsgChan <- nil
+	for len(vs.bulkSetState.inMsgChan) > 0 {
+		time.Sleep(time.Millisecond)
+	}
 	n, err := vs.newInBulkSetMsg(bytes.NewBuffer(make([]byte, 100)), 100)
 	if err != nil {
 		t.Fatal(err)
@@ -151,8 +155,10 @@ func TestBulkSetRead(t *testing.T) {
 
 func TestBulkSetReadLowSendCap(t *testing.T) {
 	vs := New(&Config{MsgRing: &msgRingPlaceholder{}, BulkSetMsgCap: _BULK_SET_MSG_HEADER_LENGTH + 1})
-	// We don't want the subsystem to try to interpret our junk bytes.
-	vs.bulkSetState.inMsgChan = make(chan *bulkSetMsg, 1)
+	vs.bulkSetState.inMsgChan <- nil
+	for len(vs.bulkSetState.inMsgChan) > 0 {
+		time.Sleep(time.Millisecond)
+	}
 	n, err := vs.newInBulkSetMsg(bytes.NewBuffer(make([]byte, 100)), 100)
 	if err != nil {
 		t.Fatal(err)

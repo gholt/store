@@ -76,18 +76,7 @@ func (vs *DefaultValueStore) newInBulkSetAckMsg(r io.Reader, l uint64) (uint64, 
 	var n int
 	var sn int
 	var err error
-	// TODO: I think we should cap the body size to the message cap but that
-	// also means that the inBulkSetAck worker will need to handle the likely
-	// trailing truncated entry. Once all this is done, the overall cluster
-	// should work even if the caps are set differently from node to node
-	// (definitely not recommended though), as the bulk-set-ack messages would
-	// eventually start falling under the minimum cap as the front-end data is
-	// tranferred and acknowledged. Anyway, I think this is needed in case
-	// someone accidentally screws up the cap on one node, making it way too
-	// big. Rather just have that one node abuse/run-out-of memory instead of
-	// it causing every other node it sends bulk-set-ack messages to also have
-	// memory issues. This is less likely of an issue than the same issue with
-	// bulk-set messaging.
+	// TODO: Need to read up the actual msg cap and toss rest.
 	if l > uint64(cap(bsam.body)) {
 		bsam.body = make([]byte, l)
 	}
@@ -97,6 +86,7 @@ func (vs *DefaultValueStore) newInBulkSetAckMsg(r io.Reader, l uint64) (uint64, 
 		sn, err = r.Read(bsam.body[n:])
 		n += sn
 		if err != nil {
+			vs.bulkSetAckState.inFreeMsgChan <- bsam
 			return uint64(n), err
 		}
 	}
@@ -109,13 +99,17 @@ func (vs *DefaultValueStore) newInBulkSetAckMsg(r io.Reader, l uint64) (uint64, 
 func (vs *DefaultValueStore) inBulkSetAck() {
 	for {
 		bsam := <-vs.bulkSetAckState.inMsgChan
+		if bsam == nil {
+			break
+		}
 		ring := vs.msgRing.Ring()
 		var rightwardPartitionShift uint64
 		if ring != nil {
 			rightwardPartitionShift = 64 - uint64(ring.PartitionBitCount())
 		}
 		b := bsam.body
-		l := len(b)
+		// div mul just ensures any trailing bytes are dropped
+		l := len(b) / _BULK_SET_ACK_MSG_ENTRY_LENGTH * _BULK_SET_ACK_MSG_ENTRY_LENGTH
 		for o := 0; o < l; o += _BULK_SET_ACK_MSG_ENTRY_LENGTH {
 			keyA := binary.BigEndian.Uint64(b[o:])
 			if ring != nil && !ring.Responsible(uint32(keyA>>rightwardPartitionShift)) {

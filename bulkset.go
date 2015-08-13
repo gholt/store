@@ -82,6 +82,7 @@ func (vs *DefaultValueStore) newInBulkSetMsg(r io.Reader, l uint64) (uint64, err
 	}
 	// If the message is obviously too short, just throw it away.
 	if l < _BULK_SET_MSG_HEADER_LENGTH+_BULK_SET_MSG_MIN_ENTRY_LENGTH {
+		vs.bulkSetState.inFreeMsgChan <- bsm
 		left := l
 		var sn int
 		var err error
@@ -105,6 +106,7 @@ func (vs *DefaultValueStore) newInBulkSetMsg(r io.Reader, l uint64) (uint64, err
 		sn, err = r.Read(bsm.header[n:])
 		n += sn
 		if err != nil {
+			vs.bulkSetState.inFreeMsgChan <- bsm
 			return uint64(n), err
 		}
 	}
@@ -129,6 +131,7 @@ func (vs *DefaultValueStore) newInBulkSetMsg(r io.Reader, l uint64) (uint64, err
 		sn, err = r.Read(bsm.body[n:])
 		n += sn
 		if err != nil {
+			vs.bulkSetState.inFreeMsgChan <- bsm
 			return uint64(len(bsm.header)) + uint64(n), err
 		}
 	}
@@ -141,6 +144,9 @@ func (vs *DefaultValueStore) newInBulkSetMsg(r io.Reader, l uint64) (uint64, err
 func (vs *DefaultValueStore) inBulkSet() {
 	for {
 		bsm := <-vs.bulkSetState.inMsgChan
+		if bsm == nil {
+			break
+		}
 		body := bsm.body
 		var err error
 		ring := vs.msgRing.Ring()

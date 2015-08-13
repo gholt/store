@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"io"
 	"testing"
+	"time"
 
 	"github.com/gholt/ring"
 )
@@ -37,8 +38,10 @@ func TestBulkSetAckInTimeout(t *testing.T) {
 
 func TestBulkSetAckRead(t *testing.T) {
 	vs := New(&Config{MsgRing: &msgRingPlaceholder{}})
-	// We don't want the subsystem to try to interpret our junk bytes.
-	vs.bulkSetAckState.inMsgChan = make(chan *bulkSetAckMsg, 1)
+	vs.bulkSetAckState.inMsgChan <- nil
+	for len(vs.bulkSetAckState.inMsgChan) > 0 {
+		time.Sleep(time.Millisecond)
+	}
 	n, err := vs.newInBulkSetAckMsg(bytes.NewBuffer(make([]byte, 100)), 100)
 	if err != nil {
 		t.Fatal(err)
@@ -68,8 +71,10 @@ func TestBulkSetAckRead(t *testing.T) {
 
 func TestBulkSetAckReadLowSendCap(t *testing.T) {
 	vs := New(&Config{MsgRing: &msgRingPlaceholder{}, BulkSetAckMsgCap: 1})
-	// We don't want the subsystem to try to interpret our junk bytes.
-	vs.bulkSetAckState.inMsgChan = make(chan *bulkSetAckMsg, 1)
+	vs.bulkSetAckState.inMsgChan <- nil
+	for len(vs.bulkSetAckState.inMsgChan) > 0 {
+		time.Sleep(time.Millisecond)
+	}
 	n, err := vs.newInBulkSetAckMsg(bytes.NewBuffer(make([]byte, 100)), 100)
 	if err != nil {
 		t.Fatal(err)
