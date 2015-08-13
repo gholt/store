@@ -51,7 +51,7 @@ func TestBulkSetAckRead(t *testing.T) {
 	}
 	select {
 	case <-vs.bulkSetAckState.inMsgChan:
-	default:
+	case <-time.After(100 * time.Millisecond):
 		t.Fatal("")
 	}
 	// Once again, but with an error in the body.
@@ -65,7 +65,7 @@ func TestBulkSetAckRead(t *testing.T) {
 	select {
 	case <-vs.bulkSetAckState.inMsgChan:
 		t.Fatal("")
-	default:
+	case <-time.After(100 * time.Millisecond):
 	}
 }
 
@@ -84,7 +84,7 @@ func TestBulkSetAckReadLowSendCap(t *testing.T) {
 	}
 	select {
 	case <-vs.bulkSetAckState.inMsgChan:
-	default:
+	case <-time.After(100 * time.Millisecond):
 		t.Fatal("")
 	}
 }
