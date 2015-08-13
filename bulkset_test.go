@@ -90,20 +90,16 @@ func TestBulkSetReadObviouslyTooShort(t *testing.T) {
 	if n != 1 {
 		t.Fatal(n)
 	}
-	select {
-	case <-vs.bulkSetState.inMsgChan:
+	if len(vs.bulkSetState.inMsgChan) > 0 {
 		t.Fatal("")
-	case <-time.After(100 * time.Millisecond):
 	}
 	// Once again, way too short but with an error too.
 	_, err = vs.newInBulkSetMsg(bytes.NewBuffer(make([]byte, 1)), 2)
 	if err != io.EOF {
 		t.Fatal(err)
 	}
-	select {
-	case <-vs.bulkSetState.inMsgChan:
+	if len(vs.bulkSetState.inMsgChan) > 0 {
 		t.Fatal("")
-	case <-time.After(100 * time.Millisecond):
 	}
 }
 
@@ -120,11 +116,10 @@ func TestBulkSetRead(t *testing.T) {
 	if n != 100 {
 		t.Fatal(n)
 	}
-	select {
-	case <-vs.bulkSetState.inMsgChan:
-	case <-time.After(100 * time.Millisecond):
+	if len(vs.bulkSetState.inMsgChan) < 1 {
 		t.Fatal("")
 	}
+	<-vs.bulkSetState.inMsgChan
 	// Again, but with an error in the header.
 	n, err = vs.newInBulkSetMsg(bytes.NewBuffer(make([]byte, _BULK_SET_MSG_HEADER_LENGTH-1)), 100)
 	if err != io.EOF {
@@ -133,10 +128,8 @@ func TestBulkSetRead(t *testing.T) {
 	if n != _BULK_SET_MSG_HEADER_LENGTH-1 {
 		t.Fatal(n)
 	}
-	select {
-	case <-vs.bulkSetState.inMsgChan:
+	if len(vs.bulkSetState.inMsgChan) > 0 {
 		t.Fatal("")
-	case <-time.After(100 * time.Millisecond):
 	}
 	// Once again, but with an error in the body.
 	n, err = vs.newInBulkSetMsg(bytes.NewBuffer(make([]byte, 10)), 100)
@@ -146,10 +139,8 @@ func TestBulkSetRead(t *testing.T) {
 	if n != 10 {
 		t.Fatal(n)
 	}
-	select {
-	case <-vs.bulkSetState.inMsgChan:
+	if len(vs.bulkSetState.inMsgChan) > 0 {
 		t.Fatal("")
-	case <-time.After(100 * time.Millisecond):
 	}
 }
 
@@ -166,9 +157,7 @@ func TestBulkSetReadLowSendCap(t *testing.T) {
 	if n != 100 {
 		t.Fatal(n)
 	}
-	select {
-	case <-vs.bulkSetState.inMsgChan:
-	case <-time.After(100 * time.Millisecond):
+	if len(vs.bulkSetState.inMsgChan) < 1 {
 		t.Fatal("")
 	}
 }

@@ -49,11 +49,10 @@ func TestBulkSetAckRead(t *testing.T) {
 	if n != 100 {
 		t.Fatal(n)
 	}
-	select {
-	case <-vs.bulkSetAckState.inMsgChan:
-	case <-time.After(100 * time.Millisecond):
+	if len(vs.bulkSetAckState.inMsgChan) < 1 {
 		t.Fatal("")
 	}
+	<-vs.bulkSetAckState.inMsgChan
 	// Once again, but with an error in the body.
 	n, err = vs.newInBulkSetAckMsg(bytes.NewBuffer(make([]byte, 10)), 100)
 	if err != io.EOF {
@@ -62,10 +61,8 @@ func TestBulkSetAckRead(t *testing.T) {
 	if n != 10 {
 		t.Fatal(n)
 	}
-	select {
-	case <-vs.bulkSetAckState.inMsgChan:
+	if len(vs.bulkSetAckState.inMsgChan) > 0 {
 		t.Fatal("")
-	case <-time.After(100 * time.Millisecond):
 	}
 }
 
@@ -82,9 +79,7 @@ func TestBulkSetAckReadLowSendCap(t *testing.T) {
 	if n != 100 {
 		t.Fatal(n)
 	}
-	select {
-	case <-vs.bulkSetAckState.inMsgChan:
-	case <-time.After(100 * time.Millisecond):
+	if len(vs.bulkSetAckState.inMsgChan) < 1 {
 		t.Fatal("")
 	}
 }

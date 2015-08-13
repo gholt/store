@@ -160,7 +160,7 @@ func (vs *DefaultValueStore) inBulkSet() {
 				bsam = vs.newOutBulkSetAckMsg()
 			}
 		}
-		for len(body) > 0 {
+		for len(body) > _BULK_SET_MSG_ENTRY_HEADER_LENGTH {
 			keyA := binary.BigEndian.Uint64(body)
 			keyB := binary.BigEndian.Uint64(body[8:])
 			timestampbits := binary.BigEndian.Uint64(body[16:])
