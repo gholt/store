@@ -55,6 +55,12 @@ func TestBulkSetInTimeout(t *testing.T) {
 		MsgRing:             &msgRingPlaceholder{},
 		InBulkSetMsgTimeout: 1,
 	})
+	// Make sure the timeout got set correctly, then lower it for a speedier
+	// test.
+	if vs.bulkSetState.inMsgTimeout != time.Second {
+		t.Fatal(vs.bulkSetState.inMsgTimeout)
+	}
+	vs.bulkSetState.inMsgTimeout = time.Millisecond
 	// This means that the subsystem can never get a free bulkSetMsg since we
 	// never feed this replacement channel.
 	vs.bulkSetState.inFreeMsgChan = make(chan *bulkSetMsg, 1)
