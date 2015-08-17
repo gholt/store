@@ -190,7 +190,13 @@ func (vs *DefaultValueStore) inBulkSet() {
 // block until a bulkSetMsg is available to return.
 func (vs *DefaultValueStore) newOutBulkSetMsg() *bulkSetMsg {
 	bsm := <-vs.bulkSetState.outFreeMsgChan
-	binary.BigEndian.PutUint64(bsm.header, 0)
+	if vs.msgRing != nil {
+		if r := vs.msgRing.Ring(); r != nil {
+			if n := r.LocalNode(); n != nil {
+				binary.BigEndian.PutUint64(bsm.header, n.ID())
+			}
+		}
+	}
 	bsm.body = bsm.body[:0]
 	return bsm
 }

@@ -91,13 +91,83 @@ func (vs *DefaultValueStore) EnableOutPullReplication() {
 	<-c
 }
 
+var toss []byte = make([]byte, 65536)
+
+// newInPullReplicationMsg reads pull-replication messages from the MsgRing and
+// puts them on the inMsgChan for the inPullReplication workers to work on.
+func (vs *DefaultValueStore) newInPullReplicationMsg(r io.Reader, l uint64) (uint64, error) {
+	var prm *pullReplicationMsg
+	select {
+	case prm = <-vs.pullReplicationState.inFreeMsgChan:
+		// If there isn't a free pullReplicationMsg after some time, give up
+		// and just read and discard the incoming pull-replication message.
+	case <-time.After(vs.pullReplicationState.inMsgTimeout):
+		left := l
+		var sn int
+		var err error
+		for left > 0 {
+			t := toss
+			if left < uint64(len(t)) {
+				t = t[:left]
+			}
+			sn, err = r.Read(t)
+			left -= uint64(sn)
+			if err != nil {
+				vs.pullReplicationState.inFreeMsgChan <- prm
+				return l - left, err
+			}
+		}
+		vs.pullReplicationState.inFreeMsgChan <- prm
+		return l, nil
+	}
+	// TODO: We need to cap this so memory isn't abused in case someone
+	// accidentally sets a crazy sized bloom filter on another node. Since a
+	// partial pull-replication message is pretty much useless as it would drop
+	// a chunk of the bloom filter bitspace, we should drop oversized messages
+	// but report the issue.
+	bl := l - _PULL_REPLICATION_MSG_HEADER_BYTES - uint64(_KT_BLOOM_FILTER_HEADER_BYTES)
+	if uint64(cap(prm.body)) < bl {
+		prm.body = make([]byte, bl)
+	}
+	prm.body = prm.body[:bl]
+	var n int
+	var sn int
+	var err error
+	for n != len(prm.header) {
+		if err != nil {
+			vs.pullReplicationState.inFreeMsgChan <- prm
+			return uint64(n), err
+		}
+		sn, err = r.Read(prm.header[n:])
+		n += sn
+	}
+	n = 0
+	for n != len(prm.body) {
+		if err != nil {
+			vs.pullReplicationState.inFreeMsgChan <- prm
+			return uint64(len(prm.header)) + uint64(n), err
+		}
+		sn, err = r.Read(prm.body[n:])
+		n += sn
+	}
+	vs.pullReplicationState.inMsgChan <- prm
+	return l, nil
+}
+
+// inPullReplication actually processes incoming pull-replication messages;
+// there may be more than one of these workers.
 func (vs *DefaultValueStore) inPullReplication() {
-	// Max keys; 28 = keyA:8, keyB:8, timestampbits:8, length:4, value:0
-	k := make([]uint64, vs.bulkSetState.msgCap/28)
+	k := make([]uint64, vs.bulkSetState.msgCap/_BULK_SET_MSG_MIN_ENTRY_LENGTH)
 	v := make([]byte, vs.valueCap)
 	for {
 		prm := <-vs.pullReplicationState.inMsgChan
+		if prm == nil {
+			break
+		}
 		k = k[:0]
+		// This is what the remote system used when making its bloom filter,
+		// computed via its config.ReplicationIgnoreRecent setting. We want to
+		// use the exact same cutoff in our checks and possible response.
 		cutoff := prm.cutoff()
 		tombstoneCutoff := (uint64(brimtime.TimeToUnixMicro(time.Now())) << _TSB_UTIL_BITS) - vs.tombstoneDiscardState.age
 		ktbf := prm.ktBloomFilter()
@@ -107,9 +177,7 @@ func (vs *DefaultValueStore) inPullReplication() {
 				if timestampbits&_TSB_DELETION == 0 || timestampbits >= tombstoneCutoff {
 					if !ktbf.mayHave(keyA, keyB, timestampbits) {
 						k = append(k, keyA, keyB)
-						// bsm: keyA:8, keyB:8, timestampbits:8, length:4,
-						//      value:n
-						l -= 28 + int64(length)
+						l -= _BULK_SET_MSG_ENTRY_HEADER_LENGTH + int64(length)
 					}
 				}
 			}
@@ -118,6 +186,11 @@ func (vs *DefaultValueStore) inPullReplication() {
 		vs.pullReplicationState.inFreeMsgChan <- prm
 		if len(k) > 0 {
 			bsm := vs.newOutBulkSetMsg()
+			// Indicate that a response to this bulk-set message is not
+			// necessary. If the message fails to reach its destination, that
+			// destination will simply resend another pull replication message
+			// on its next pass.
+			binary.BigEndian.PutUint64(bsm.header, 0)
 			var t uint64
 			var err error
 			for i := 0; i < len(k); i += 2 {
@@ -293,56 +366,14 @@ func (vs *DefaultValueStore) outPullReplicationPass() {
 	wg.Wait()
 }
 
-var toss []byte = make([]byte, 65536)
-
-func (vs *DefaultValueStore) newInPullReplicationMsg(r io.Reader, l uint64) (uint64, error) {
-	var prm *pullReplicationMsg
-	select {
-	case prm = <-vs.pullReplicationState.inFreeMsgChan:
-	case <-time.After(vs.pullReplicationState.inMsgTimeout):
-		left := l
-		var sn int
-		var err error
-		for left > 0 {
-			t := toss
-			if left < uint64(len(t)) {
-				t = t[:left]
-			}
-			sn, err = r.Read(t)
-			left -= uint64(sn)
-			if err != nil {
-				return l - left, err
-			}
-		}
-		return l, nil
-	}
-	bl := l - _PULL_REPLICATION_MSG_HEADER_BYTES - uint64(_KT_BLOOM_FILTER_HEADER_BYTES)
-	if uint64(cap(prm.body)) < bl {
-		prm.body = make([]byte, bl)
-	}
-	prm.body = prm.body[:bl]
-	var n int
-	var sn int
-	var err error
-	for n != len(prm.header) {
-		if err != nil {
-			return uint64(n), err
-		}
-		sn, err = r.Read(prm.header[n:])
-		n += sn
-	}
-	n = 0
-	for n != len(prm.body) {
-		if err != nil {
-			return uint64(len(prm.header)) + uint64(n), err
-		}
-		sn, err = r.Read(prm.body[n:])
-		n += sn
-	}
-	vs.pullReplicationState.inMsgChan <- prm
-	return l, nil
-}
-
+// newOutPullReplicationMsg gives an initialized pullReplicationMsg for filling
+// out and eventually sending using the MsgRing. The MsgRing (or someone else
+// if the message doesn't end up with the MsgRing) will call
+// pullReplicationMsg.Done() eventually and the pullReplicationMsg will be
+// requeued for reuse later. There is a fixed number of outgoing
+// pullReplicationMsg instances that can exist at any given time, capping
+// memory usage. Once the limit is reached, this method will block until a
+// pullReplicationMsg is available to return.
 func (vs *DefaultValueStore) newOutPullReplicationMsg(ringVersion int64, partition uint32, cutoff uint64, rangeStart uint64, rangeStop uint64, ktbf *ktBloomFilter) *pullReplicationMsg {
 	prm := <-vs.pullReplicationState.outMsgChan
 	binary.BigEndian.PutUint64(prm.header, vs.msgRing.Ring().LocalNode().ID())

@@ -1,7 +1,6 @@
 package valuestore
 
 import (
-	"encoding/binary"
 	"math"
 	"sync"
 	"sync/atomic"
@@ -168,7 +167,6 @@ func (vs *DefaultValueStore) outPushReplicationPass() {
 		}
 		// Then we build and send the actual message.
 		bsm := vs.newOutBulkSetMsg()
-		binary.BigEndian.PutUint64(bsm.header, ring.LocalNode().ID())
 		var timestampbits uint64
 		var err error
 		for i := 0; i < len(list); i += 2 {
