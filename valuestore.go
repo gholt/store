@@ -139,6 +139,7 @@ type DefaultValueStore struct {
 	logWarning              *log.Logger
 	logInfo                 *log.Logger
 	logDebug                *log.Logger
+	randMutex               sync.Mutex
 	rand                    *rand.Rand
 	freeableVMChans         []chan *valuesMem
 	freeVMChan              chan *valuesMem

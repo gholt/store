@@ -69,7 +69,9 @@ func (vs *DefaultValueStore) TombstoneDiscardPass() {
 func (vs *DefaultValueStore) tombstoneDiscardLauncher() {
 	var enabled bool
 	interval := float64(vs.tombstoneDiscardState.interval) * float64(time.Second)
+	vs.randMutex.Lock()
 	nextRun := time.Now().Add(time.Duration(interval + interval*vs.rand.NormFloat64()*0.1))
+	vs.randMutex.Unlock()
 	for {
 		var notification *backgroundNotification
 		sleep := nextRun.Sub(time.Now())
@@ -84,7 +86,9 @@ func (vs *DefaultValueStore) tombstoneDiscardLauncher() {
 			default:
 			}
 		}
+		vs.randMutex.Lock()
 		nextRun = time.Now().Add(time.Duration(interval + interval*vs.rand.NormFloat64()*0.1))
+		vs.randMutex.Unlock()
 		if notification != nil {
 			if notification.enable {
 				enabled = true

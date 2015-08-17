@@ -67,7 +67,9 @@ func (vs *DefaultValueStore) OutPushReplicationPass() {
 func (vs *DefaultValueStore) outPushReplicationLauncher() {
 	var enabled bool
 	interval := float64(vs.pushReplicationState.outInterval) * float64(time.Second)
+	vs.randMutex.Lock()
 	nextRun := time.Now().Add(time.Duration(interval + interval*vs.rand.NormFloat64()*0.1))
+	vs.randMutex.Unlock()
 	for {
 		var notification *backgroundNotification
 		sleep := nextRun.Sub(time.Now())
@@ -82,7 +84,9 @@ func (vs *DefaultValueStore) outPushReplicationLauncher() {
 			default:
 			}
 		}
+		vs.randMutex.Lock()
 		nextRun = time.Now().Add(time.Duration(interval + interval*vs.rand.NormFloat64()*0.1))
+		vs.randMutex.Unlock()
 		if notification != nil {
 			if notification.enable {
 				enabled = true
