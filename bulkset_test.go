@@ -345,6 +345,18 @@ func TestBulkSetMsgOut(t *testing.T) {
 	bsm.Done()
 }
 
+func TestBulkSetMsgOutDefaultsToFromLocalNode(t *testing.T) {
+	b := ring.NewBuilder()
+	n := b.AddNode(true, 1, nil, nil, "", nil)
+	r := b.Ring()
+	r.SetLocalNode(n.ID())
+	vs := New(&Config{MsgRing: &msgRingPlaceholder{ring:r}})
+	bsm := vs.newOutBulkSetMsg()
+    if binary.BigEndian.Uint64(bsm.header) != n.ID() {
+        t.Fatal(bsm)
+    }
+}
+
 func TestBulkSetMsgOutWriteError(t *testing.T) {
 	vs := New(&Config{MsgRing: &msgRingPlaceholder{}})
 	bsm := vs.newOutBulkSetMsg()
