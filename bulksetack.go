@@ -12,10 +12,11 @@ const _BULK_SET_ACK_MSG_TYPE = 0x39589f4746844e3b
 const _BULK_SET_ACK_MSG_ENTRY_LENGTH = 24
 
 type bulkSetAckState struct {
-	inMsgChan      chan *bulkSetAckMsg
-	inFreeMsgChan  chan *bulkSetAckMsg
-	outFreeMsgChan chan *bulkSetAckMsg
-	inMsgTimeout   time.Duration
+	inMsgChan             chan *bulkSetAckMsg
+	inFreeMsgChan         chan *bulkSetAckMsg
+	outFreeMsgChan        chan *bulkSetAckMsg
+	inMsgTimeout          time.Duration
+	inBulkSetAckDoneChans []chan struct{}
 }
 
 type bulkSetAckMsg struct {
@@ -34,8 +35,10 @@ func (vs *DefaultValueStore) bulkSetAckInit(cfg *Config) {
 				body: make([]byte, cfg.BulkSetAckMsgCap),
 			}
 		}
+		vs.bulkSetAckState.inBulkSetAckDoneChans = make([]chan struct{}, cfg.InBulkSetAckWorkers)
 		for i := 0; i < cfg.InBulkSetAckWorkers; i++ {
-			go vs.inBulkSetAck()
+			vs.bulkSetAckState.inBulkSetAckDoneChans[i] = make(chan struct{}, 1)
+			go vs.inBulkSetAck(vs.bulkSetAckState.inBulkSetAckDoneChans[i])
 		}
 		vs.bulkSetAckState.outFreeMsgChan = make(chan *bulkSetAckMsg, cfg.OutBulkSetAckMsgs)
 		for i := 0; i < cap(vs.bulkSetAckState.outFreeMsgChan); i++ {
@@ -96,7 +99,7 @@ func (vs *DefaultValueStore) newInBulkSetAckMsg(r io.Reader, l uint64) (uint64, 
 
 // inBulkSetAck actually processes incoming bulk-set-ack messages; there may be
 // more than one of these workers.
-func (vs *DefaultValueStore) inBulkSetAck() {
+func (vs *DefaultValueStore) inBulkSetAck(doneChan chan struct{}) {
 	for {
 		bsam := <-vs.bulkSetAckState.inMsgChan
 		if bsam == nil {
@@ -118,6 +121,7 @@ func (vs *DefaultValueStore) inBulkSetAck() {
 		}
 		vs.bulkSetAckState.inFreeMsgChan <- bsam
 	}
+	doneChan <- struct{}{}
 }
 
 // newOutBulkSetAckMsg gives an initialized bulkSetAckMsg for filling out and

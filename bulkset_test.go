@@ -85,9 +85,11 @@ func TestBulkSetInTimeout(t *testing.T) {
 
 func TestBulkSetReadObviouslyTooShort(t *testing.T) {
 	vs := New(&Config{MsgRing: &msgRingPlaceholder{}})
-	vs.bulkSetState.inMsgChan <- nil
-	for len(vs.bulkSetState.inMsgChan) > 0 {
-		time.Sleep(time.Millisecond)
+	for i := 0; i < len(vs.bulkSetState.inBulkSetDoneChans); i++ {
+		vs.bulkSetState.inMsgChan <- nil
+	}
+	for _, doneChan := range vs.bulkSetState.inBulkSetDoneChans {
+		<-doneChan
 	}
 	n, err := vs.newInBulkSetMsg(bytes.NewBuffer(make([]byte, 1)), 1)
 	if err != nil {
@@ -96,24 +98,30 @@ func TestBulkSetReadObviouslyTooShort(t *testing.T) {
 	if n != 1 {
 		t.Fatal(n)
 	}
-	if len(vs.bulkSetState.inMsgChan) > 0 {
-		t.Fatal("")
+	select {
+	case bsm := <-vs.bulkSetState.inMsgChan:
+		t.Fatal(bsm)
+	default:
 	}
 	// Once again, way too short but with an error too.
 	_, err = vs.newInBulkSetMsg(bytes.NewBuffer(make([]byte, 1)), 2)
 	if err != io.EOF {
 		t.Fatal(err)
 	}
-	if len(vs.bulkSetState.inMsgChan) > 0 {
-		t.Fatal("")
+	select {
+	case bsm := <-vs.bulkSetState.inMsgChan:
+		t.Fatal(bsm)
+	default:
 	}
 }
 
 func TestBulkSetRead(t *testing.T) {
 	vs := New(&Config{MsgRing: &msgRingPlaceholder{}})
-	vs.bulkSetState.inMsgChan <- nil
-	for len(vs.bulkSetState.inMsgChan) > 0 {
-		time.Sleep(time.Millisecond)
+	for i := 0; i < len(vs.bulkSetState.inBulkSetDoneChans); i++ {
+		vs.bulkSetState.inMsgChan <- nil
+	}
+	for _, doneChan := range vs.bulkSetState.inBulkSetDoneChans {
+		<-doneChan
 	}
 	n, err := vs.newInBulkSetMsg(bytes.NewBuffer(make([]byte, 100)), 100)
 	if err != nil {
@@ -121,9 +129,6 @@ func TestBulkSetRead(t *testing.T) {
 	}
 	if n != 100 {
 		t.Fatal(n)
-	}
-	if len(vs.bulkSetState.inMsgChan) < 1 {
-		t.Fatal("")
 	}
 	<-vs.bulkSetState.inMsgChan
 	// Again, but with an error in the header.
@@ -134,8 +139,10 @@ func TestBulkSetRead(t *testing.T) {
 	if n != _BULK_SET_MSG_HEADER_LENGTH-1 {
 		t.Fatal(n)
 	}
-	if len(vs.bulkSetState.inMsgChan) > 0 {
-		t.Fatal("")
+	select {
+	case bsm := <-vs.bulkSetState.inMsgChan:
+		t.Fatal(bsm)
+	default:
 	}
 	// Once again, but with an error in the body.
 	n, err = vs.newInBulkSetMsg(bytes.NewBuffer(make([]byte, 10)), 100)
@@ -145,14 +152,21 @@ func TestBulkSetRead(t *testing.T) {
 	if n != 10 {
 		t.Fatal(n)
 	}
-	if len(vs.bulkSetState.inMsgChan) > 0 {
-		t.Fatal("")
+	select {
+	case bsm := <-vs.bulkSetState.inMsgChan:
+		t.Fatal(bsm)
+	default:
 	}
 }
 
 func TestBulkSetReadLowSendCap(t *testing.T) {
 	vs := New(&Config{MsgRing: &msgRingPlaceholder{}, BulkSetMsgCap: _BULK_SET_MSG_HEADER_LENGTH + 1})
-	vs.bulkSetState.inMsgChan <- nil
+	for i := 0; i < len(vs.bulkSetState.inBulkSetDoneChans); i++ {
+		vs.bulkSetState.inMsgChan <- nil
+	}
+	for _, doneChan := range vs.bulkSetState.inBulkSetDoneChans {
+		<-doneChan
+	}
 	for len(vs.bulkSetState.inMsgChan) > 0 {
 		time.Sleep(time.Millisecond)
 	}
@@ -163,9 +177,7 @@ func TestBulkSetReadLowSendCap(t *testing.T) {
 	if n != 100 {
 		t.Fatal(n)
 	}
-	if len(vs.bulkSetState.inMsgChan) < 1 {
-		t.Fatal("")
-	}
+	<-vs.bulkSetState.inMsgChan
 }
 
 func TestBulkSetMsgWithoutAck(t *testing.T) {

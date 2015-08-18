@@ -44,9 +44,11 @@ func TestBulkSetAckInTimeout(t *testing.T) {
 
 func TestBulkSetAckRead(t *testing.T) {
 	vs := New(&Config{MsgRing: &msgRingPlaceholder{}})
-	vs.bulkSetAckState.inMsgChan <- nil
-	for len(vs.bulkSetAckState.inMsgChan) > 0 {
-		time.Sleep(time.Millisecond)
+	for i := 0; i < len(vs.bulkSetAckState.inBulkSetAckDoneChans); i++ {
+		vs.bulkSetAckState.inMsgChan <- nil
+	}
+	for _, doneChan := range vs.bulkSetAckState.inBulkSetAckDoneChans {
+		<-doneChan
 	}
 	n, err := vs.newInBulkSetAckMsg(bytes.NewBuffer(make([]byte, 100)), 100)
 	if err != nil {
@@ -54,9 +56,6 @@ func TestBulkSetAckRead(t *testing.T) {
 	}
 	if n != 100 {
 		t.Fatal(n)
-	}
-	if len(vs.bulkSetAckState.inMsgChan) < 1 {
-		t.Fatal("")
 	}
 	<-vs.bulkSetAckState.inMsgChan
 	// Once again, but with an error in the body.
@@ -67,16 +66,20 @@ func TestBulkSetAckRead(t *testing.T) {
 	if n != 10 {
 		t.Fatal(n)
 	}
-	if len(vs.bulkSetAckState.inMsgChan) > 0 {
-		t.Fatal("")
+	select {
+	case bsam := <-vs.bulkSetAckState.inMsgChan:
+		t.Fatal(bsam)
+	default:
 	}
 }
 
 func TestBulkSetAckReadLowSendCap(t *testing.T) {
 	vs := New(&Config{MsgRing: &msgRingPlaceholder{}, BulkSetAckMsgCap: 1})
-	vs.bulkSetAckState.inMsgChan <- nil
-	for len(vs.bulkSetAckState.inMsgChan) > 0 {
-		time.Sleep(time.Millisecond)
+	for i := 0; i < len(vs.bulkSetAckState.inBulkSetAckDoneChans); i++ {
+		vs.bulkSetAckState.inMsgChan <- nil
+	}
+	for _, doneChan := range vs.bulkSetAckState.inBulkSetAckDoneChans {
+		<-doneChan
 	}
 	n, err := vs.newInBulkSetAckMsg(bytes.NewBuffer(make([]byte, 100)), 100)
 	if err != nil {
@@ -85,9 +88,7 @@ func TestBulkSetAckReadLowSendCap(t *testing.T) {
 	if n != 100 {
 		t.Fatal(n)
 	}
-	if len(vs.bulkSetAckState.inMsgChan) < 1 {
-		t.Fatal("")
-	}
+	<-vs.bulkSetAckState.inMsgChan
 }
 
 func TestBulkSetAckMsgIncoming(t *testing.T) {

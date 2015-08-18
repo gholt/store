@@ -14,11 +14,12 @@ const _BULK_SET_MSG_ENTRY_HEADER_LENGTH = 28
 const _BULK_SET_MSG_MIN_ENTRY_LENGTH = 28
 
 type bulkSetState struct {
-	msgCap         int
-	inMsgChan      chan *bulkSetMsg
-	inFreeMsgChan  chan *bulkSetMsg
-	inMsgTimeout   time.Duration
-	outFreeMsgChan chan *bulkSetMsg
+	msgCap             int
+	inMsgChan          chan *bulkSetMsg
+	inFreeMsgChan      chan *bulkSetMsg
+	inMsgTimeout       time.Duration
+	outFreeMsgChan     chan *bulkSetMsg
+	inBulkSetDoneChans []chan struct{}
 }
 
 type bulkSetMsg struct {
@@ -39,8 +40,10 @@ func (vs *DefaultValueStore) bulkSetInit(cfg *Config) {
 				body:   make([]byte, cfg.BulkSetMsgCap),
 			}
 		}
+		vs.bulkSetState.inBulkSetDoneChans = make([]chan struct{}, cfg.InBulkSetWorkers)
 		for i := 0; i < cfg.InBulkSetWorkers; i++ {
-			go vs.inBulkSet()
+			vs.bulkSetState.inBulkSetDoneChans[i] = make(chan struct{}, 1)
+			go vs.inBulkSet(vs.bulkSetState.inBulkSetDoneChans[i])
 		}
 		vs.bulkSetState.msgCap = cfg.BulkSetMsgCap
 		vs.bulkSetState.outFreeMsgChan = make(chan *bulkSetMsg, cfg.OutBulkSetMsgs)
@@ -141,7 +144,7 @@ func (vs *DefaultValueStore) newInBulkSetMsg(r io.Reader, l uint64) (uint64, err
 
 // inBulkSet actually processes incoming bulk-set messages; there may be more
 // than one of these workers.
-func (vs *DefaultValueStore) inBulkSet() {
+func (vs *DefaultValueStore) inBulkSet(doneChan chan struct{}) {
 	for {
 		bsm := <-vs.bulkSetState.inMsgChan
 		if bsm == nil {
@@ -179,6 +182,7 @@ func (vs *DefaultValueStore) inBulkSet() {
 		}
 		vs.bulkSetState.inFreeMsgChan <- bsm
 	}
+	doneChan <- struct{}{}
 }
 
 // newOutBulkSetMsg gives an initialized bulkSetMsg for filling out and
