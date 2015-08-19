@@ -19,13 +19,16 @@ type pushReplicationState struct {
 	outValBufs    [][]byte
 }
 
-func (vs *DefaultValueStore) pushReplicationInit(cfg *Config) {
+func (vs *DefaultValueStore) pushReplicationConfig(cfg *Config) {
 	vs.pushReplicationState.outWorkers = cfg.OutPushReplicationWorkers
 	vs.pushReplicationState.outInterval = cfg.OutPushReplicationInterval
 	if vs.msgRing != nil {
 		vs.pushReplicationState.outMsgChan = make(chan *pullReplicationMsg, cfg.OutPushReplicationMsgs)
 	}
 	vs.pushReplicationState.outNotifyChan = make(chan *backgroundNotification, 1)
+}
+
+func (vs *DefaultValueStore) pushReplicationLaunch() {
 	go vs.outPushReplicationLauncher()
 }
 

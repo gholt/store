@@ -26,12 +26,15 @@ type compactionState struct {
 	notifyChan   chan *backgroundNotification
 }
 
-func (vs *DefaultValueStore) compactionInit(cfg *Config) {
+func (vs *DefaultValueStore) compactionConfig(cfg *Config) {
 	vs.compactionState.interval = cfg.CompactionInterval
 	vs.compactionState.threshold = cfg.CompactionThreshold
 	vs.compactionState.ageThreshold = int64(cfg.CompactionAgeThreshold * 1000000000)
 	vs.compactionState.notifyChan = make(chan *backgroundNotification, 1)
 	vs.compactionState.workerCount = cfg.CompactionWorkers
+}
+
+func (vs *DefaultValueStore) compactionLaunch() {
 	go vs.compactionLauncher()
 }
 

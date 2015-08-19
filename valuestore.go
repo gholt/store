@@ -276,12 +276,18 @@ func New(c *Config) *DefaultValueStore {
 		go vs.memWriter(vs.pendingVWRChans[i])
 	}
 	vs.recovery()
-	vs.tombstoneDiscardInit(cfg)
-	vs.compactionInit(cfg)
-	vs.pullReplicationInit(cfg)
-	vs.pushReplicationInit(cfg)
-	vs.bulkSetInit(cfg)
-	vs.bulkSetAckInit(cfg)
+	vs.tombstoneDiscardConfig(cfg)
+	vs.compactionConfig(cfg)
+	vs.pullReplicationConfig(cfg)
+	vs.pushReplicationConfig(cfg)
+	vs.bulkSetConfig(cfg)
+	vs.bulkSetAckConfig(cfg)
+	vs.tombstoneDiscardLaunch()
+	vs.compactionLaunch()
+	vs.pullReplicationLaunch()
+	vs.pushReplicationLaunch()
+	vs.bulkSetLaunch()
+	vs.bulkSetAckLaunch()
 	return vs
 }
 

@@ -15,6 +15,7 @@ const _MSG_PULL_REPLICATION = 0x579c4bd162f045b3
 const _PULL_REPLICATION_MSG_HEADER_BYTES = 44
 
 type pullReplicationState struct {
+	inWorkers     int
 	inMsgChan     chan *pullReplicationMsg
 	inFreeMsgChan chan *pullReplicationMsg
 	outWorkers    uint64
@@ -35,7 +36,7 @@ type pullReplicationMsg struct {
 	body   []byte
 }
 
-func (vs *DefaultValueStore) pullReplicationInit(cfg *Config) {
+func (vs *DefaultValueStore) pullReplicationConfig(cfg *Config) {
 	vs.pullReplicationState.outInterval = time.Duration(cfg.OutPullReplicationInterval) * time.Second
 	vs.pullReplicationState.outNotifyChan = make(chan *backgroundNotification, 1)
 	vs.pullReplicationState.outWorkers = uint64(cfg.OutPullReplicationWorkers)
@@ -50,9 +51,7 @@ func (vs *DefaultValueStore) pullReplicationInit(cfg *Config) {
 				header: make([]byte, _KT_BLOOM_FILTER_HEADER_BYTES+_PULL_REPLICATION_MSG_HEADER_BYTES),
 			}
 		}
-		for i := 0; i < cfg.InPullReplicationWorkers; i++ {
-			go vs.inPullReplication()
-		}
+		vs.pullReplicationState.inWorkers = cfg.InPullReplicationWorkers
 		vs.pullReplicationState.outMsgChan = make(chan *pullReplicationMsg, cfg.OutPullReplicationMsgs)
 		vs.pullReplicationState.bloomN = uint64(cfg.OutPullReplicationBloomN)
 		vs.pullReplicationState.bloomP = cfg.OutPullReplicationBloomP
@@ -67,6 +66,12 @@ func (vs *DefaultValueStore) pullReplicationInit(cfg *Config) {
 		vs.pullReplicationState.inMsgTimeout = time.Duration(cfg.InPullReplicationMsgTimeout) * time.Second
 	}
 	vs.pullReplicationState.outNotifyChan = make(chan *backgroundNotification, 1)
+}
+
+func (vs *DefaultValueStore) pullReplicationLaunch() {
+	for i := 0; i < vs.pullReplicationState.inWorkers; i++ {
+		go vs.inPullReplication()
+	}
 	go vs.outPullReplicationLauncher()
 }
 
