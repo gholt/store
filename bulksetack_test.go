@@ -103,6 +103,7 @@ func TestBulkSetAckMsgIncoming(t *testing.T) {
 		InBulkSetAckMsgs:    1,
 	})
 	vs.EnableAll()
+	defer vs.DisableAll()
 	ts, err := vs.write(1, 2, 0x300, []byte("testing"))
 	if err != nil {
 		t.Fatal(err)
@@ -151,6 +152,7 @@ func TestBulkSetAckMsgIncomingNoRing(t *testing.T) {
 		InBulkSetAckMsgs:    1,
 	})
 	vs.EnableAll()
+	defer vs.DisableAll()
 	ts, err := vs.write(1, 2, 0x300, []byte("testing"))
 	if err != nil {
 		t.Fatal(err)

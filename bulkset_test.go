@@ -11,8 +11,9 @@ import (
 )
 
 type msgRingPlaceholder struct {
-	ring         ring.Ring
-	msgToNodeIDs []uint64
+	ring            ring.Ring
+	msgToNodeIDs    []uint64
+	msgToPartitions []uint32
 }
 
 func (m *msgRingPlaceholder) Ring() ring.Ring {
@@ -28,9 +29,12 @@ func (m *msgRingPlaceholder) SetMsgHandler(msgType uint64, handler ring.MsgUnmar
 
 func (m *msgRingPlaceholder) MsgToNode(nodeID uint64, msg ring.Msg) {
 	m.msgToNodeIDs = append(m.msgToNodeIDs, nodeID)
+	msg.Done()
 }
 
 func (m *msgRingPlaceholder) MsgToOtherReplicas(ringVersion int64, partition uint32, msg ring.Msg) {
+	m.msgToPartitions = append(m.msgToPartitions, partition)
+	msg.Done()
 }
 
 type testErrorWriter struct {
@@ -192,6 +196,7 @@ func TestBulkSetMsgWithoutAck(t *testing.T) {
 		InBulkSetMsgs:    1,
 	})
 	vs.EnableAll()
+	defer vs.DisableAll()
 	bsm := <-vs.bulkSetState.inFreeMsgChan
 	bsm.body = bsm.body[:0]
 	if !bsm.add(1, 2, 0x300, []byte("testing")) {
@@ -228,6 +233,7 @@ func TestBulkSetMsgWithAck(t *testing.T) {
 		InBulkSetMsgs:    1,
 	})
 	vs.EnableAll()
+	defer vs.DisableAll()
 	bsm := <-vs.bulkSetState.inFreeMsgChan
 	binary.BigEndian.PutUint64(bsm.header, 123)
 	bsm.body = bsm.body[:0]
@@ -264,6 +270,7 @@ func TestBulkSetMsgWithoutRing(t *testing.T) {
 		InBulkSetMsgs:    1,
 	})
 	vs.EnableAll()
+	defer vs.DisableAll()
 	bsm := <-vs.bulkSetState.inFreeMsgChan
 	binary.BigEndian.PutUint64(bsm.header, 123)
 	bsm.body = bsm.body[:0]
@@ -350,11 +357,11 @@ func TestBulkSetMsgOutDefaultsToFromLocalNode(t *testing.T) {
 	n := b.AddNode(true, 1, nil, nil, "", nil)
 	r := b.Ring()
 	r.SetLocalNode(n.ID())
-	vs := New(&Config{MsgRing: &msgRingPlaceholder{ring:r}})
+	vs := New(&Config{MsgRing: &msgRingPlaceholder{ring: r}})
 	bsm := vs.newOutBulkSetMsg()
-    if binary.BigEndian.Uint64(bsm.header) != n.ID() {
-        t.Fatal(bsm)
-    }
+	if binary.BigEndian.Uint64(bsm.header) != n.ID() {
+		t.Fatal(bsm)
+	}
 }
 
 func TestBulkSetMsgOutWriteError(t *testing.T) {

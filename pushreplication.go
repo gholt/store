@@ -120,6 +120,9 @@ func (vs *DefaultValueStore) outPushReplicationPass() {
 		}()
 	}
 	ring := vs.msgRing.Ring()
+	if ring == nil {
+		return
+	}
 	ringVersion := ring.Version()
 	pbc := ring.PartitionBitCount()
 	partitionShift := uint64(64 - pbc)
@@ -166,7 +169,11 @@ func (vs *DefaultValueStore) outPushReplicationPass() {
 				availableBytes -= inMsgLength
 			}
 		})
-		if len(list) <= 0 || atomic.LoadUint32(&vs.pushReplicationState.outAbort) != 0 || vs.msgRing.Ring().Version() != ringVersion {
+		if len(list) <= 0 || atomic.LoadUint32(&vs.pushReplicationState.outAbort) != 0 {
+			return
+		}
+		ring2 := vs.msgRing.Ring()
+		if ring2 == nil || ring2.Version() != ringVersion {
 			return
 		}
 		// Then we build and send the actual message.
@@ -201,7 +208,11 @@ func (vs *DefaultValueStore) outPushReplicationPass() {
 			valbuf := vs.pushReplicationState.outValBufs[worker]
 			partitionBegin := (partitionMax + 1) / (workerMax + 1) * worker
 			for partition := partitionBegin; ; {
-				if atomic.LoadUint32(&vs.pushReplicationState.outAbort) != 0 || vs.msgRing.Ring().Version() != ringVersion {
+				if atomic.LoadUint32(&vs.pushReplicationState.outAbort) != 0 {
+					break
+				}
+				ring2 := vs.msgRing.Ring()
+				if ring2 == nil || ring2.Version() != ringVersion {
 					break
 				}
 				if !ring.Responsible(uint32(partition)) {

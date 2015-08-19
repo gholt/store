@@ -18,7 +18,7 @@ type pullReplicationState struct {
 	inMsgChan     chan *pullReplicationMsg
 	inFreeMsgChan chan *pullReplicationMsg
 	outWorkers    uint64
-	outInterval   int
+	outInterval   time.Duration
 	outNotifyChan chan *backgroundNotification
 	outIteration  uint16
 	outAbort      uint32
@@ -36,7 +36,7 @@ type pullReplicationMsg struct {
 }
 
 func (vs *DefaultValueStore) pullReplicationInit(cfg *Config) {
-	vs.pullReplicationState.outInterval = cfg.OutPullReplicationInterval
+	vs.pullReplicationState.outInterval = time.Duration(cfg.OutPullReplicationInterval) * time.Second
 	vs.pullReplicationState.outNotifyChan = make(chan *backgroundNotification, 1)
 	vs.pullReplicationState.outWorkers = uint64(cfg.OutPullReplicationWorkers)
 	vs.pullReplicationState.outIteration = uint16(cfg.Rand.Uint32())
@@ -231,7 +231,7 @@ func (vs *DefaultValueStore) OutPullReplicationPass() {
 
 func (vs *DefaultValueStore) outPullReplicationLauncher() {
 	var enabled bool
-	interval := float64(vs.pullReplicationState.outInterval) * float64(time.Second)
+	interval := float64(vs.pullReplicationState.outInterval)
 	vs.randMutex.Lock()
 	nextRun := time.Now().Add(time.Duration(interval + interval*vs.rand.NormFloat64()*0.1))
 	vs.randMutex.Unlock()
@@ -285,6 +285,9 @@ func (vs *DefaultValueStore) outPullReplicationPass() {
 		}()
 	}
 	ring := vs.msgRing.Ring()
+	if ring == nil {
+		return
+	}
 	rightwardPartitionShift := 64 - ring.PartitionBitCount()
 	partitionCount := uint64(1) << ring.PartitionBitCount()
 	if vs.pullReplicationState.outIteration == math.MaxUint16 {
@@ -322,7 +325,8 @@ func (vs *DefaultValueStore) outPullReplicationPass() {
 			if atomic.LoadUint32(&vs.pullReplicationState.outAbort) != 0 {
 				break
 			}
-			if vs.msgRing.Ring().Version() != ringVersion {
+			ring2 := vs.msgRing.Ring()
+			if ring2 == nil || ring2.Version() != ringVersion {
 				break
 			}
 			reThis := re
@@ -346,7 +350,8 @@ func (vs *DefaultValueStore) outPullReplicationPass() {
 				if atomic.LoadUint32(&vs.pullReplicationState.outAbort) != 0 {
 					break
 				}
-				if ring.Version() != ringVersion {
+				ring2 := vs.msgRing.Ring()
+				if ring2 == nil || ring2.Version() != ringVersion {
 					break
 				}
 				if ring.Responsible(uint32(p)) {
@@ -357,7 +362,8 @@ func (vs *DefaultValueStore) outPullReplicationPass() {
 				if atomic.LoadUint32(&vs.pullReplicationState.outAbort) != 0 {
 					break
 				}
-				if ring.Version() != ringVersion {
+				ring2 := vs.msgRing.Ring()
+				if ring2 == nil || ring2.Version() != ringVersion {
 					break
 				}
 				if ring.Responsible(uint32(p)) {
@@ -380,7 +386,13 @@ func (vs *DefaultValueStore) outPullReplicationPass() {
 // pullReplicationMsg is available to return.
 func (vs *DefaultValueStore) newOutPullReplicationMsg(ringVersion int64, partition uint32, cutoff uint64, rangeStart uint64, rangeStop uint64, ktbf *ktBloomFilter) *pullReplicationMsg {
 	prm := <-vs.pullReplicationState.outMsgChan
-	binary.BigEndian.PutUint64(prm.header, vs.msgRing.Ring().LocalNode().ID())
+	if vs.msgRing != nil {
+		if r := vs.msgRing.Ring(); r != nil {
+			if n := r.LocalNode(); n != nil {
+				binary.BigEndian.PutUint64(prm.header, n.ID())
+			}
+		}
+	}
 	binary.BigEndian.PutUint64(prm.header[8:], uint64(ringVersion))
 	binary.BigEndian.PutUint32(prm.header[16:], partition)
 	binary.BigEndian.PutUint64(prm.header[20:], cutoff)

@@ -32,7 +32,7 @@ type valueStoreStats struct {
 	workers                    int
 	tombstoneDiscardInterval   int
 	outPullReplicationWorkers  uint64
-	outPullReplicationInterval int
+	outPullReplicationInterval time.Duration
 	outPushReplicationWorkers  int
 	outPushReplicationInterval int
 	valueCap                   uint32
@@ -126,7 +126,7 @@ func (stats *valueStoreStats) String() string {
 			[]string{"workers", fmt.Sprintf("%d", stats.workers)},
 			[]string{"tombstoneDiscardInterval", fmt.Sprintf("%d", stats.tombstoneDiscardInterval)},
 			[]string{"outPullReplicationWorkers", fmt.Sprintf("%d", stats.outPullReplicationWorkers)},
-			[]string{"outPullReplicationInterval", fmt.Sprintf("%d", stats.outPullReplicationInterval)},
+			[]string{"outPullReplicationInterval", fmt.Sprintf("%s", stats.outPullReplicationInterval)},
 			[]string{"outPushReplicationWorkers", fmt.Sprintf("%d", stats.outPushReplicationWorkers)},
 			[]string{"outPushReplicationInterval", fmt.Sprintf("%d", stats.outPushReplicationInterval)},
 			[]string{"valueCap", fmt.Sprintf("%d", stats.valueCap)},
