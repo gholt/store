@@ -177,7 +177,7 @@ func (vs *DefaultValueStore) inPullReplication() {
 		tombstoneCutoff := (uint64(brimtime.TimeToUnixMicro(time.Now())) << _TSB_UTIL_BITS) - vs.tombstoneDiscardState.age
 		ktbf := prm.ktBloomFilter()
 		l := int64(vs.bulkSetState.msgCap)
-		vs.vlm.ScanCallback(prm.rangeStart(), prm.rangeStop(), 0, _TSB_LOCAL_REMOVAL, cutoff, uint64(cap(k)/2), func(keyA uint64, keyB uint64, timestampbits uint64, length uint32) {
+		vs.vlm.ScanCallback(prm.rangeStart(), prm.rangeStop(), 0, _TSB_LOCAL_REMOVAL, cutoff, math.MaxUint64, func(keyA uint64, keyB uint64, timestampbits uint64, length uint32) {
 			if l > 0 {
 				if timestampbits&_TSB_DELETION == 0 || timestampbits >= tombstoneCutoff {
 					if !ktbf.mayHave(keyA, keyB, timestampbits) {
