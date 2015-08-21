@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"io"
+	"sync"
 	"testing"
 	"time"
 
@@ -12,6 +13,7 @@ import (
 
 type msgRingPlaceholder struct {
 	ring            ring.Ring
+	lock            sync.Mutex
 	msgToNodeIDs    []uint64
 	msgToPartitions []uint32
 }
@@ -28,12 +30,16 @@ func (m *msgRingPlaceholder) SetMsgHandler(msgType uint64, handler ring.MsgUnmar
 }
 
 func (m *msgRingPlaceholder) MsgToNode(nodeID uint64, msg ring.Msg) {
+	m.lock.Lock()
 	m.msgToNodeIDs = append(m.msgToNodeIDs, nodeID)
+	m.lock.Unlock()
 	msg.Done()
 }
 
 func (m *msgRingPlaceholder) MsgToOtherReplicas(ringVersion int64, partition uint32, msg ring.Msg) {
+	m.lock.Lock()
 	m.msgToPartitions = append(m.msgToPartitions, partition)
+	m.lock.Unlock()
 	msg.Done()
 }
 
@@ -216,8 +222,11 @@ func TestBulkSetMsgWithoutAck(t *testing.T) {
 	if string(v) != "testing" {
 		t.Fatal(string(v))
 	}
-	if len(m.msgToNodeIDs) != 0 {
-		t.Fatal(len(m.msgToNodeIDs))
+	m.lock.Lock()
+	v2 := len(m.msgToNodeIDs)
+	m.lock.Unlock()
+	if v2 != 0 {
+		t.Fatal(v2)
 	}
 }
 
@@ -254,11 +263,17 @@ func TestBulkSetMsgWithAck(t *testing.T) {
 	if string(v) != "testing" {
 		t.Fatal(string(v))
 	}
-	if len(m.msgToNodeIDs) != 1 {
-		t.Fatal(len(m.msgToNodeIDs))
+	m.lock.Lock()
+	v2 := len(m.msgToNodeIDs)
+	m.lock.Unlock()
+	if v2 != 1 {
+		t.Fatal(v2)
 	}
-	if m.msgToNodeIDs[0] != 123 {
-		t.Fatal(m.msgToNodeIDs[0])
+	m.lock.Lock()
+	v3 := m.msgToNodeIDs[0]
+	m.lock.Unlock()
+	if v3 != 123 {
+		t.Fatal(v3)
 	}
 }
 
@@ -291,8 +306,11 @@ func TestBulkSetMsgWithoutRing(t *testing.T) {
 	if string(v) != "testing" {
 		t.Fatal(string(v))
 	}
-	if len(m.msgToNodeIDs) != 0 {
-		t.Fatal(len(m.msgToNodeIDs))
+	m.lock.Lock()
+	v2 := len(m.msgToNodeIDs)
+	m.lock.Unlock()
+	if v2 != 0 {
+		t.Fatal(v2)
 	}
 }
 

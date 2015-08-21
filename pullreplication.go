@@ -194,13 +194,13 @@ func (vs *DefaultValueStore) inPullReplication() {
 			}
 			return true
 		}
-        // Based on the replica index for the local node, start the scan at
-        // different points. For example, in a three replica system the first
-        // replica would start scanning at the start, the second a third
-        // through, the last would start two thirds through. This is so that
-        // pull-replication messages, which are sent concurrently to all other
-        // replicas, will get different responses back instead of duplicate
-        // items if there is a lot of data to be sent.
+		// Based on the replica index for the local node, start the scan at
+		// different points. For example, in a three replica system the first
+		// replica would start scanning at the start, the second a third
+		// through, the last would start two thirds through. This is so that
+		// pull-replication messages, which are sent concurrently to all other
+		// replicas, will get different responses back instead of duplicate
+		// items if there is a lot of data to be sent.
 		scanStart := prm.rangeStart() + (prm.rangeStop()-prm.rangeStart())/uint64(ring.ReplicaCount())*uint64(ring.ResponsibleReplica(uint32(prm.rangeStart()>>(64-ring.PartitionBitCount()))))
 		scanStop := prm.rangeStop()
 		vs.vlm.ScanCallback(scanStart, scanStop, 0, _TSB_LOCAL_REMOVAL, cutoff, math.MaxUint64, callback)

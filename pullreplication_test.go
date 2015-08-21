@@ -1,6 +1,7 @@
 package valuestore
 
 import (
+	"sync"
 	"testing"
 
 	"github.com/gholt/ring"
@@ -8,6 +9,7 @@ import (
 
 type msgRingPullReplicationTester struct {
 	ring               ring.Ring
+	lock               sync.Mutex
 	msgToNodeIDs       []uint64
 	headerToPartitions [][]byte
 	bodyToPartitions   [][]byte
@@ -25,19 +27,23 @@ func (m *msgRingPullReplicationTester) SetMsgHandler(msgType uint64, handler rin
 }
 
 func (m *msgRingPullReplicationTester) MsgToNode(nodeID uint64, msg ring.Msg) {
+	m.lock.Lock()
 	m.msgToNodeIDs = append(m.msgToNodeIDs, nodeID)
+	m.lock.Unlock()
 	msg.Done()
 }
 
 func (m *msgRingPullReplicationTester) MsgToOtherReplicas(ringVersion int64, partition uint32, msg ring.Msg) {
 	prm, ok := msg.(*pullReplicationMsg)
 	if ok {
+		m.lock.Lock()
 		h := make([]byte, len(prm.header))
 		copy(h, prm.header)
 		m.headerToPartitions = append(m.headerToPartitions, h)
 		b := make([]byte, len(prm.body))
 		copy(b, prm.body)
 		m.bodyToPartitions = append(m.bodyToPartitions, b)
+		m.lock.Unlock()
 	}
 	msg.Done()
 }
@@ -58,10 +64,14 @@ func TestPullReplicationSimple(t *testing.T) {
 		t.Fatal(err)
 	}
 	vs.OutPullReplicationPass()
-	if len(m.headerToPartitions) == 0 {
-		t.Fatal(m.headerToPartitions)
+	m.lock.Lock()
+	v := len(m.headerToPartitions)
+	m.lock.Unlock()
+	if v == 0 {
+		t.Fatal(v)
 	}
 	mayHave := false
+	m.lock.Lock()
 	for i := 0; i < len(m.headerToPartitions); i++ {
 		prm := &pullReplicationMsg{vs: vs, header: m.headerToPartitions[i], body: m.bodyToPartitions[i]}
 		bf := prm.ktBloomFilter()
@@ -69,6 +79,7 @@ func TestPullReplicationSimple(t *testing.T) {
 			mayHave = true
 		}
 	}
+	m.lock.Unlock()
 	if !mayHave {
 		t.Fatal("")
 	}
