@@ -169,6 +169,11 @@ func (vs *DefaultValueStore) inPullReplication() {
 		if prm == nil {
 			break
 		}
+		ring := vs.msgRing.Ring()
+		if ring == nil {
+			vs.pullReplicationState.inFreeMsgChan <- prm
+			continue
+		}
 		k = k[:0]
 		// This is what the remote system used when making its bloom filter,
 		// computed via its config.ReplicationIgnoreRecent setting. We want to
@@ -177,16 +182,33 @@ func (vs *DefaultValueStore) inPullReplication() {
 		tombstoneCutoff := (uint64(brimtime.TimeToUnixMicro(time.Now())) << _TSB_UTIL_BITS) - vs.tombstoneDiscardState.age
 		ktbf := prm.ktBloomFilter()
 		l := int64(vs.bulkSetState.msgCap)
-		vs.vlm.ScanCallback(prm.rangeStart(), prm.rangeStop(), 0, _TSB_LOCAL_REMOVAL, cutoff, math.MaxUint64, func(keyA uint64, keyB uint64, timestampbits uint64, length uint32) {
-			if l > 0 {
-				if timestampbits&_TSB_DELETION == 0 || timestampbits >= tombstoneCutoff {
-					if !ktbf.mayHave(keyA, keyB, timestampbits) {
-						k = append(k, keyA, keyB)
-						l -= _BULK_SET_MSG_ENTRY_HEADER_LENGTH + int64(length)
+		callback := func(keyA uint64, keyB uint64, timestampbits uint64, length uint32) bool {
+			if timestampbits&_TSB_DELETION == 0 || timestampbits >= tombstoneCutoff {
+				if !ktbf.mayHave(keyA, keyB, timestampbits) {
+					k = append(k, keyA, keyB)
+					l -= _BULK_SET_MSG_ENTRY_HEADER_LENGTH + int64(length)
+					if l <= 0 {
+						return false
 					}
 				}
 			}
-		})
+			return true
+		}
+        // Based on the replica index for the local node, start the scan at
+        // different points. For example, in a three replica system the first
+        // replica would start scanning at the start, the second a third
+        // through, the last would start two thirds through. This is so that
+        // pull-replication messages, which are sent concurrently to all other
+        // replicas, will get different responses back instead of duplicate
+        // items if there is a lot of data to be sent.
+		scanStart := prm.rangeStart() + (prm.rangeStop()-prm.rangeStart())/uint64(ring.ReplicaCount())*uint64(ring.ResponsibleReplica(uint32(prm.rangeStart()>>(64-ring.PartitionBitCount()))))
+		scanStop := prm.rangeStop()
+		vs.vlm.ScanCallback(scanStart, scanStop, 0, _TSB_LOCAL_REMOVAL, cutoff, math.MaxUint64, callback)
+		if l > 0 {
+			scanStop = scanStart - 1
+			scanStart = prm.rangeStart()
+			vs.vlm.ScanCallback(scanStart, scanStop, 0, _TSB_LOCAL_REMOVAL, cutoff, math.MaxUint64, callback)
+		}
 		nodeID := prm.nodeID()
 		vs.pullReplicationState.inFreeMsgChan <- prm
 		if len(k) > 0 {
@@ -324,8 +346,9 @@ func (vs *DefaultValueStore) outPullReplicationPass() {
 		for {
 			rbThis := rb
 			ktbf.reset(vs.pullReplicationState.outIteration)
-			rb, more = vs.vlm.ScanCallback(rb, re, 0, _TSB_LOCAL_REMOVAL, cutoff, vs.pullReplicationState.bloomN, func(keyA uint64, keyB uint64, timestampbits uint64, length uint32) {
+			rb, more = vs.vlm.ScanCallback(rb, re, 0, _TSB_LOCAL_REMOVAL, cutoff, vs.pullReplicationState.bloomN, func(keyA uint64, keyB uint64, timestampbits uint64, length uint32) bool {
 				ktbf.add(keyA, keyB, timestampbits)
+				return true
 			})
 			if atomic.LoadUint32(&vs.pullReplicationState.outAbort) != 0 {
 				break
