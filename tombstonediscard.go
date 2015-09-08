@@ -118,7 +118,7 @@ func (vs *DefaultValueStore) tombstoneDiscardPass() {
 	if vs.logDebug != nil {
 		begin := time.Now()
 		defer func() {
-			vs.logDebug.Printf("tombstone discard pass took %s", time.Now().Sub(begin))
+			vs.logDebug("tombstone discard pass took %s\n", time.Now().Sub(begin))
 		}()
 	}
 	vs.tombstoneDiscardPassLocalRemovals()

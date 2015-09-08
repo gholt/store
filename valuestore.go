@@ -60,7 +60,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"math"
 	"math/rand"
 	"os"
@@ -134,11 +133,11 @@ var ErrDisabled error = errors.New("disabled")
 
 // DefaultValueStore instances are created with New.
 type DefaultValueStore struct {
-	logCritical             *log.Logger
-	logError                *log.Logger
-	logWarning              *log.Logger
-	logInfo                 *log.Logger
-	logDebug                *log.Logger
+	logCritical             LogFunc
+	logError                LogFunc
+	logWarning              LogFunc
+	logInfo                 LogFunc
+	logDebug                LogFunc
 	randMutex               sync.Mutex
 	rand                    *rand.Rand
 	freeableVMChans         []chan *valuesMem
@@ -796,17 +795,17 @@ func (vs *DefaultValueStore) recovery() {
 		}
 		namets := int64(0)
 		if namets, err = strconv.ParseInt(names[i][:len(names[i])-len(".valuestoc")], 10, 64); err != nil {
-			vs.logError.Printf("bad timestamp in name: %#v\n", names[i])
+			vs.logError("bad timestamp in name: %#v\n", names[i])
 			continue
 		}
 		if namets == 0 {
-			vs.logError.Printf("bad timestamp in name: %#v\n", names[i])
+			vs.logError("bad timestamp in name: %#v\n", names[i])
 			continue
 		}
 		vf := newValuesFile(vs, namets, osOpenReadSeeker)
 		fp, err := os.Open(path.Join(vs.pathtoc, names[i]))
 		if err != nil {
-			vs.logError.Printf("error opening %s: %s\n", names[i], err)
+			vs.logError("error opening %s: %s\n", names[i], err)
 			continue
 		}
 		checksumFailures := 0
@@ -817,7 +816,7 @@ func (vs *DefaultValueStore) recovery() {
 			n, err := io.ReadFull(fp, fromDiskBuf)
 			if n < 4 {
 				if err != io.EOF && err != io.ErrUnexpectedEOF {
-					vs.logError.Printf("error reading %s: %s\n", names[i], err)
+					vs.logError("error reading %s: %s\n", names[i], err)
 				}
 				break
 			}
@@ -828,11 +827,11 @@ func (vs *DefaultValueStore) recovery() {
 				j := 0
 				if first {
 					if !bytes.Equal(fromDiskBuf[:28], []byte("VALUESTORETOC v0            ")) {
-						vs.logError.Printf("bad header: %s\n", names[i])
+						vs.logError("bad header: %s\n", names[i])
 						break
 					}
 					if binary.BigEndian.Uint32(fromDiskBuf[28:]) != vs.checksumInterval {
-						vs.logError.Printf("bad header checksum interval: %s\n", names[i])
+						vs.logError("bad header checksum interval: %s\n", names[i])
 						break
 					}
 					j += 32
@@ -840,11 +839,11 @@ func (vs *DefaultValueStore) recovery() {
 				}
 				if n < int(vs.checksumInterval) {
 					if binary.BigEndian.Uint32(fromDiskBuf[n-16:]) != 0 {
-						vs.logError.Printf("bad terminator size marker: %s\n", names[i])
+						vs.logError("bad terminator size marker: %s\n", names[i])
 						break
 					}
 					if !bytes.Equal(fromDiskBuf[n-4:n], []byte("TERM")) {
-						vs.logError.Printf("bad terminator: %s\n", names[i])
+						vs.logError("bad terminator: %s\n", names[i])
 						break
 					}
 					n -= 16
@@ -901,16 +900,16 @@ func (vs *DefaultValueStore) recovery() {
 				}
 			}
 			if err != nil && err != io.EOF && err != io.ErrUnexpectedEOF {
-				vs.logError.Printf("error reading %s: %s\n", names[i], err)
+				vs.logError("error reading %s: %s\n", names[i], err)
 				break
 			}
 		}
 		fp.Close()
 		if !terminated {
-			vs.logError.Printf("early end of file: %s\n", names[i])
+			vs.logError("early end of file: %s\n", names[i])
 		}
 		if checksumFailures > 0 {
-			vs.logWarning.Printf("%d checksum failures for %s\n", checksumFailures, names[i])
+			vs.logWarning("%d checksum failures for %s\n", checksumFailures, names[i])
 		}
 	}
 	for i := 0; i < len(batches); i++ {
@@ -923,6 +922,6 @@ func (vs *DefaultValueStore) recovery() {
 	if vs.logDebug != nil {
 		dur := time.Now().Sub(start)
 		valueCount, valueLength, _ := vs.GatherStats(false)
-		vs.logInfo.Printf("%d key locations loaded in %s, %.0f/s; %d caused change; %d resulting locations referencing %d bytes.\n", fromDiskCount, dur, float64(fromDiskCount)/(float64(dur)/float64(time.Second)), causedChangeCount, valueCount, valueLength)
+		vs.logInfo("%d key locations loaded in %s, %.0f/s; %d caused change; %d resulting locations referencing %d bytes.\n", fromDiskCount, dur, float64(fromDiskCount)/(float64(dur)/float64(time.Second)), causedChangeCount, valueCount, valueLength)
 	}
 }

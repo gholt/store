@@ -121,7 +121,7 @@ func (vs *DefaultValueStore) outPushReplicationPass() {
 	if vs.logDebug != nil {
 		begin := time.Now()
 		defer func() {
-			vs.logDebug.Printf("out push replication pass took %s", time.Now().Sub(begin))
+			vs.logDebug("out push replication pass took %s\n", time.Now().Sub(begin))
 		}()
 	}
 	ring := vs.msgRing.Ring()

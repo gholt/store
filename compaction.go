@@ -124,7 +124,7 @@ func (vs *DefaultValueStore) compactionPass() {
 	if vs.logDebug != nil {
 		begin := time.Now()
 		defer func() {
-			vs.logDebug.Printf("compaction pass took %s", time.Now().Sub(begin))
+			vs.logDebug("compaction pass took %s\n", time.Now().Sub(begin))
 		}()
 	}
 	fp, err := os.Open(vs.pathtoc)
@@ -157,7 +157,7 @@ func (vs *DefaultValueStore) compactionPass() {
 	}
 	close(compactionJobs)
 	if vs.logDebug != nil {
-		vs.logDebug.Println("compaction candidates submitted:", submitted)
+		vs.logDebug("compaction candidates submitted: %s\n", submitted)
 	}
 	for i := 1; i <= submitted; i++ {
 		<-compactionResults
@@ -176,11 +176,11 @@ func (vs *DefaultValueStore) compactionCandidate(name string) (int64, bool) {
 	_, n := path.Split(name)
 	namets, err := strconv.ParseInt(n[:len(n)-len(".valuestoc")], 10, 64)
 	if err != nil {
-		vs.logError.Printf("bad timestamp in name: %#v\n", name)
+		vs.logError("bad timestamp in name: %#v\n", name)
 		return 0, false
 	}
 	if namets == 0 {
-		vs.logError.Printf("bad timestamp in name: %#v\n", name)
+		vs.logError("bad timestamp in name: %#v\n", name)
 		return namets, false
 	}
 	if namets == int64(atomic.LoadUint64(&vs.activeTOCA)) || namets == int64(atomic.LoadUint64(&vs.activeTOCB)) {
@@ -196,33 +196,33 @@ func (vs *DefaultValueStore) compactionWorker(id int, tocfiles <-chan compaction
 	for c := range tocfiles {
 		f, err := os.Open(c.name)
 		if err != nil {
-			vs.logError.Println("Unable to open for stat:", c.name, err)
+			vs.logError("Unable to open for stat: %s %s\n", c.name, err)
 			continue
 		}
 		fstat, err := f.Stat()
 		if err != nil {
-			vs.logError.Println("Unable to stat:", c.name)
+			vs.logError("Unable to stat: %s\n", c.name)
 			continue
 		}
 		total := int(fstat.Size()) / 34
 		if total < 100 {
-			vs.logInfo.Println("Triggering compaction for", c.name, "due to size")
+			vs.logInfo("Triggering compaction for %s due to size\n", c.name)
 			result, err := vs.compactFile(c.name, c.candidateBlockID)
 			if err != nil {
-				vs.logCritical.Println(err)
+				vs.logCritical("%s\n", err)
 			}
 			if (result.rewrote + result.stale) == result.count {
 				err = os.Remove(c.name)
 				if err != nil {
-					vs.logCritical.Println("Unable to remove", c.name, err)
+					vs.logCritical("Unable to remove %s %s\n", c.name, err)
 					continue
 				}
 				err = os.Remove(c.name[:len(c.name)-len("toc")])
 				if err != nil {
-					vs.logCritical.Println("Unable to remove", c.name, "values", err)
+					vs.logCritical("Unable to remove %s values %s\n", c.name, err)
 					continue
 				}
-				vs.logInfo.Printf("Compacted %s (total %d, rewrote %d, stale %d)", c.name, result.count, result.rewrote, result.stale)
+				vs.logInfo("Compacted %s (total %d, rewrote %d, stale %d)\n", c.name, result.count, result.rewrote, result.stale)
 			}
 		} else {
 			rand.Seed(time.Now().UnixNano())
@@ -235,28 +235,28 @@ func (vs *DefaultValueStore) compactionWorker(id int, tocfiles <-chan compaction
 				continue
 			}
 			if vs.logDebug != nil {
-				vs.logDebug.Println(c.name, "sample result:", count, stale, staleTarget)
+				vs.logDebug("%s sample result: %d %d %d\n", c.name, count, stale, staleTarget)
 			}
 			if stale >= staleTarget {
 				if vs.logDebug != nil {
-					vs.logDebug.Println("Triggering compaction for", c.name, "with", count, "entries.")
+					vs.logDebug("Triggering compaction for %s with %d entries.\n", c.name, count)
 				}
 				result, err := vs.compactFile(c.name, c.candidateBlockID)
 				if err != nil {
-					vs.logCritical.Println(err)
+					vs.logCritical("%s\n", err)
 				}
 				if (result.rewrote + result.stale) == result.count {
 					err = os.Remove(c.name)
 					if err != nil {
-						vs.logCritical.Println("Unable to remove", c.name, err)
+						vs.logCritical("Unable to remove %s %s\n", c.name, err)
 						continue
 					}
 					err = os.Remove(c.name[:len(c.name)-len("toc")])
 					if err != nil {
-						vs.logCritical.Println("Unable to remove", c.name, "values", err)
+						vs.logCritical("Unable to remove %s values %s\n", c.name, err)
 						continue
 					}
-					vs.logInfo.Printf("Compacted %s: (total %d, rewrote %d, stale %d)", c.name, result.count, result.rewrote, result.stale)
+					vs.logInfo("Compacted %s: (total %d, rewrote %d, stale %d)\n", c.name, result.count, result.rewrote, result.stale)
 				}
 			}
 		}
@@ -271,7 +271,7 @@ func (vs *DefaultValueStore) sampleTOC(name string, candidateBlockID uint32, ski
 	fromDiskOverflow := make([]byte, 0, 32)
 	fp, err := os.Open(name)
 	if err != nil {
-		vs.logError.Printf("error opening %s: %s\n", name, err)
+		vs.logError("error opening %s: %s\n", name, err)
 		return 0, 0, err
 	}
 	checksumFailures := 0
@@ -283,7 +283,7 @@ func (vs *DefaultValueStore) sampleTOC(name string, candidateBlockID uint32, ski
 		n, err := io.ReadFull(fp, fromDiskBuf)
 		if n < 4 {
 			if err != io.EOF && err != io.ErrUnexpectedEOF {
-				vs.logError.Printf("error reading %s: %s\n", name, err)
+				vs.logError("error reading %s: %s\n", name, err)
 			}
 			break
 		}
@@ -294,11 +294,11 @@ func (vs *DefaultValueStore) sampleTOC(name string, candidateBlockID uint32, ski
 			j := 0
 			if first {
 				if !bytes.Equal(fromDiskBuf[:28], []byte("VALUESTORETOC v0            ")) {
-					vs.logError.Printf("bad header: %s\n", name)
+					vs.logError("bad header: %s\n", name)
 					break
 				}
 				if binary.BigEndian.Uint32(fromDiskBuf[28:]) != vs.checksumInterval {
-					vs.logError.Printf("bad header checksum interval: %s\n", name)
+					vs.logError("bad header checksum interval: %s\n", name)
 					break
 				}
 				j += 32
@@ -306,11 +306,11 @@ func (vs *DefaultValueStore) sampleTOC(name string, candidateBlockID uint32, ski
 			}
 			if n < int(vs.checksumInterval) {
 				if binary.BigEndian.Uint32(fromDiskBuf[n-16:]) != 0 {
-					vs.logError.Printf("bad terminator size marker: %s\n", name)
+					vs.logError("bad terminator size marker: %s\n", name)
 					break
 				}
 				if !bytes.Equal(fromDiskBuf[n-4:n], []byte("TERM")) {
-					vs.logError.Printf("bad terminator: %s\n", name)
+					vs.logError("bad terminator: %s\n", name)
 					break
 				}
 				n -= 16
@@ -356,16 +356,16 @@ func (vs *DefaultValueStore) sampleTOC(name string, candidateBlockID uint32, ski
 			}
 		}
 		if err != nil && err != io.EOF && err != io.ErrUnexpectedEOF {
-			vs.logError.Printf("error reading %s: %s\n", name, err)
+			vs.logError("error reading %s: %s\n", name, err)
 			break
 		}
 	}
 	fp.Close()
 	if !terminated {
-		vs.logError.Printf("early end of file: %s\n", name)
+		vs.logError("early end of file: %s\n", name)
 	}
 	if checksumFailures > 0 {
-		vs.logWarning.Printf("%d checksum failures for %s\n", checksumFailures, name)
+		vs.logWarning("%d checksum failures for %s\n", checksumFailures, name)
 	}
 	return count, stale, nil
 
@@ -384,7 +384,7 @@ func (vs *DefaultValueStore) compactFile(name string, candidateBlockID uint32) (
 	fromDiskOverflow := make([]byte, 0, 32)
 	fp, err := os.Open(name)
 	if err != nil {
-		vs.logError.Printf("error opening %s: %s\n", name, err)
+		vs.logError("error opening %s: %s\n", name, err)
 		return cr, errors.New("Error opening toc")
 	}
 	first := true
@@ -394,7 +394,7 @@ func (vs *DefaultValueStore) compactFile(name string, candidateBlockID uint32) (
 		n, err := io.ReadFull(fp, fromDiskBuf)
 		if n < 4 {
 			if err != io.EOF && err != io.ErrUnexpectedEOF {
-				vs.logError.Printf("error reading %s: %s\n", name, err)
+				vs.logError("error reading %s: %s\n", name, err)
 				return cr, errors.New("Error attempting to read toc")
 			}
 			break
@@ -406,11 +406,11 @@ func (vs *DefaultValueStore) compactFile(name string, candidateBlockID uint32) (
 			j := 0
 			if first {
 				if !bytes.Equal(fromDiskBuf[:28], []byte("VALUESTORETOC v0            ")) {
-					vs.logError.Printf("bad header: %s\n", name)
+					vs.logError("bad header: %s\n", name)
 					return cr, errors.New("Bad header")
 				}
 				if binary.BigEndian.Uint32(fromDiskBuf[28:]) != vs.checksumInterval {
-					vs.logError.Printf("bad header checksum interval: %s\n", name)
+					vs.logError("bad header checksum interval: %s\n", name)
 					return cr, errors.New("Bad header checksum interval")
 				}
 				j += 32
@@ -418,11 +418,11 @@ func (vs *DefaultValueStore) compactFile(name string, candidateBlockID uint32) (
 			}
 			if n < int(vs.checksumInterval) {
 				if binary.BigEndian.Uint32(fromDiskBuf[n-16:]) != 0 {
-					vs.logError.Printf("bad terminator size marker: %s\n", name)
+					vs.logError("bad terminator size marker: %s\n", name)
 					return cr, errors.New("Error on toc term size marker")
 				}
 				if !bytes.Equal(fromDiskBuf[n-4:n], []byte("TERM")) {
-					vs.logError.Printf("bad terminator: %s\n", name)
+					vs.logError("bad terminator: %s\n", name)
 					return cr, errors.New("Error on toc term marker")
 				}
 				n -= 16
@@ -443,12 +443,12 @@ func (vs *DefaultValueStore) compactFile(name string, candidateBlockID uint32) (
 					var value []byte
 					_, value, err := vs.read(keyA, keyB, value)
 					if err != nil {
-						vs.logCritical.Println("Error on rewrite read", err)
+						vs.logCritical("Error on rewrite read %s\n", err)
 						return cr, errors.New("Error on read for compaction rewrite.")
 					}
 					_, err = vs.write(keyA, keyB, timestampbits|_TSB_COMPACTION_REWRITE, value)
 					if err != nil {
-						vs.logCritical.Println("Error on rewrite", err)
+						vs.logCritical("Error on rewrite %s\n", err)
 						return cr, errors.New("Write error on compaction rewrite.")
 					}
 					cr.count++
@@ -467,12 +467,12 @@ func (vs *DefaultValueStore) compactFile(name string, candidateBlockID uint32) (
 					var value []byte
 					_, value, err := vs.read(keyA, keyB, value)
 					if err != nil {
-						vs.logCritical.Println("Error on rewrite read", err)
+						vs.logCritical("Error on rewrite read %s\n", err)
 						return cr, errors.New("Error on rewrite read")
 					}
 					_, err = vs.write(keyA, keyB, timestampbits|_TSB_COMPACTION_REWRITE, value)
 					if err != nil {
-						vs.logCritical.Println("Error on rewrite", err)
+						vs.logCritical("Error on rewrite %s\n", err)
 						return cr, errors.New("Error on rewrite")
 					}
 					cr.count++
@@ -485,18 +485,18 @@ func (vs *DefaultValueStore) compactFile(name string, candidateBlockID uint32) (
 			}
 		}
 		if err != nil && err != io.EOF && err != io.ErrUnexpectedEOF {
-			vs.logError.Printf("error reading %s: %s\n", name, err)
+			vs.logError("error reading %s: %s\n", name, err)
 			return cr, errors.New("EOF while reading toc during compaction")
 		}
 	}
 	fp.Close()
 	if !terminated {
-		vs.logError.Printf("early end of file: %s\n", name)
+		vs.logError("early end of file: %s\n", name)
 		return cr, nil
 
 	}
 	if cr.checksumFailures > 0 {
-		vs.logWarning.Printf("%d checksum failures for %s\n", cr.checksumFailures, name)
+		vs.logWarning("%d checksum failures for %s\n", cr.checksumFailures, name)
 		return cr, nil
 
 	}

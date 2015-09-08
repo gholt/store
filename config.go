@@ -13,26 +13,28 @@ import (
 	"github.com/gholt/valuelocmap"
 )
 
+type LogFunc func(format string, v ...interface{})
+
 // Config represents the set of values for configuring a ValueStore. Note that
 // changing the values (shallow changes) in this structure will have no effect
 // on existing ValueStores; but deep changes (such as reconfiguring an existing
 // Logger) will.
 type Config struct {
-	// LogCritical sets the log.Logger to use for critical messages. Defaults
-	// logging to os.Stderr.
-	LogCritical *log.Logger
-	// LogError sets the log.Logger to use for error messages. Defaults logging
+	// LogCritical sets the func to use for critical messages. Defaults logging
 	// to os.Stderr.
-	LogError *log.Logger
-	// LogWarning sets the log.Logger to use for warning messages. Defaults
-	// logging to os.Stderr.
-	LogWarning *log.Logger
-	// LogInfo sets the log.Logger to use for info messages. Defaults logging
-	// to os.Stdout.
-	LogInfo *log.Logger
-	// LogDebug sets the log.Logger to use for debug messages. Defaults not
-	// logging debug messages.
-	LogDebug *log.Logger
+	LogCritical LogFunc
+	// LogError sets the func to use for error messages. Defaults logging to
+	// os.Stderr.
+	LogError LogFunc
+	// LogWarning sets the func to use for warning messages. Defaults logging
+	// to os.Stderr.
+	LogWarning LogFunc
+	// LogInfo sets the func to use for info messages. Defaults logging to
+	// os.Stdout.
+	LogInfo LogFunc
+	// LogDebug sets the func to use for debug messages. Defaults not logging
+	// debug messages.
+	LogDebug LogFunc
 	// Rand sets the rand.Rand to use as a random data source. Defaults to a
 	// new randomizer based on the current time.
 	Rand *rand.Rand
@@ -208,16 +210,16 @@ func resolveConfig(c *Config) *Config {
 		*cfg = *c
 	}
 	if cfg.LogCritical == nil {
-		cfg.LogCritical = log.New(os.Stderr, "ValueStore ", log.LstdFlags)
+		cfg.LogCritical = log.New(os.Stderr, "ValueStore ", log.LstdFlags).Printf
 	}
 	if cfg.LogError == nil {
-		cfg.LogError = log.New(os.Stderr, "ValueStore ", log.LstdFlags)
+		cfg.LogError = log.New(os.Stderr, "ValueStore ", log.LstdFlags).Printf
 	}
 	if cfg.LogWarning == nil {
-		cfg.LogWarning = log.New(os.Stderr, "ValueStore ", log.LstdFlags)
+		cfg.LogWarning = log.New(os.Stderr, "ValueStore ", log.LstdFlags).Printf
 	}
 	if cfg.LogInfo == nil {
-		cfg.LogInfo = log.New(os.Stdout, "ValueStore ", log.LstdFlags)
+		cfg.LogInfo = log.New(os.Stdout, "ValueStore ", log.LstdFlags).Printf
 	}
 	// LogDebug set as nil is fine and shortcircuits any debug code.
 	if cfg.Rand == nil {
