@@ -225,25 +225,25 @@ func resolveConfig(c *Config) *Config {
 	if cfg.Rand == nil {
 		cfg.Rand = rand.New(rand.NewSource(time.Now().UnixNano()))
 	}
+	if env := os.Getenv("VALUESTORE_PATH"); env != "" {
+		cfg.Path = env
+	}
 	if cfg.Path == "" {
-		cfg.Path = os.Getenv("VALUESTORE_PATH")
-		if cfg.Path == "" {
-			cfg.Path = "."
-		}
+		cfg.Path = "."
+	}
+	if env := os.Getenv("VALUESTORE_PATH_TOC"); env != "" {
+		cfg.PathTOC = env
 	}
 	if cfg.PathTOC == "" {
-		cfg.PathTOC = os.Getenv("VALUESTORE_PATH_TOC")
-		if cfg.PathTOC == "" {
-			cfg.PathTOC = cfg.Path
+		cfg.PathTOC = cfg.Path
+	}
+	if env := os.Getenv("VALUESTORE_VALUE_CAP"); env != "" {
+		if val, err := strconv.Atoi(env); err == nil {
+			cfg.ValueCap = val
 		}
 	}
 	if cfg.ValueCap == 0 {
 		cfg.ValueCap = 4 * 1024 * 1024
-		if env := os.Getenv("VALUESTORE_VALUE_CAP"); env != "" {
-			if val, err := strconv.Atoi(env); err == nil {
-				cfg.ValueCap = val
-			}
-		}
 	}
 	if cfg.ValueCap < 0 {
 		cfg.ValueCap = 0
@@ -251,46 +251,46 @@ func resolveConfig(c *Config) *Config {
 	if cfg.ValueCap > math.MaxUint32 {
 		cfg.ValueCap = math.MaxUint32
 	}
+	if env := os.Getenv("VALUESTORE_BACKGROUND_INTERVAL"); env != "" {
+		if val, err := strconv.Atoi(env); err == nil {
+			cfg.BackgroundInterval = val
+		}
+	}
 	if cfg.BackgroundInterval == 0 {
 		cfg.BackgroundInterval = 60
-		if env := os.Getenv("VALUESTORE_BACKGROUND_INTERVAL"); env != "" {
-			if val, err := strconv.Atoi(env); err == nil {
-				cfg.BackgroundInterval = val
-			}
-		}
 	}
 	if cfg.BackgroundInterval < 1 {
 		cfg.BackgroundInterval = 1
 	}
+	if env := os.Getenv("VALUESTORE_WORKERS"); env != "" {
+		if val, err := strconv.Atoi(env); err == nil {
+			cfg.Workers = val
+		}
+	}
 	if cfg.Workers == 0 {
 		cfg.Workers = runtime.GOMAXPROCS(0)
-		if env := os.Getenv("VALUESTORE_WORKERS"); env != "" {
-			if val, err := strconv.Atoi(env); err == nil {
-				cfg.Workers = val
-			}
-		}
 	}
 	if cfg.Workers < 1 {
 		cfg.Workers = 1
 	}
+	if env := os.Getenv("VALUESTORE_CHECKSUM_INTERVAL"); env != "" {
+		if val, err := strconv.Atoi(env); err == nil {
+			cfg.ChecksumInterval = val
+		}
+	}
 	if cfg.ChecksumInterval == 0 {
 		cfg.ChecksumInterval = 64*1024 - 4
-		if env := os.Getenv("VALUESTORE_CHECKSUM_INTERVAL"); env != "" {
-			if val, err := strconv.Atoi(env); err == nil {
-				cfg.ChecksumInterval = val
-			}
-		}
 	}
 	if cfg.ChecksumInterval < 1 {
 		cfg.ChecksumInterval = 1
 	}
+	if env := os.Getenv("VALUESTORE_PAGE_SIZE"); env != "" {
+		if val, err := strconv.Atoi(env); err == nil {
+			cfg.PageSize = val
+		}
+	}
 	if cfg.PageSize == 0 {
 		cfg.PageSize = 4 * 1024 * 1024
-		if env := os.Getenv("VALUESTORE_PAGE_SIZE"); env != "" {
-			if val, err := strconv.Atoi(env); err == nil {
-				cfg.PageSize = val
-			}
-		}
 	}
 	// Ensure each page will have at least ChecksumInterval worth of data in it
 	// so that each page written will at least flush the previous page's data.
@@ -312,47 +312,47 @@ func resolveConfig(c *Config) *Config {
 	// flush the previous page's data.
 	// TODO: Make the 32 a const
 	cfg.minValueAlloc = cfg.ChecksumInterval/(cfg.PageSize/32+1) + 1
+	if env := os.Getenv("VALUESTORE_WRITE_PAGES_PER_WORKER"); env != "" {
+		if val, err := strconv.Atoi(env); err == nil {
+			cfg.WritePagesPerWorker = val
+		}
+	}
 	if cfg.WritePagesPerWorker == 0 {
 		cfg.WritePagesPerWorker = 3
-		if env := os.Getenv("VALUESTORE_WRITE_PAGES_PER_WORKER"); env != "" {
-			if val, err := strconv.Atoi(env); err == nil {
-				cfg.WritePagesPerWorker = val
-			}
-		}
 	}
 	if cfg.WritePagesPerWorker < 2 {
 		cfg.WritePagesPerWorker = 2
 	}
+	if env := os.Getenv("VALUESTORE_MSG_CAP"); env != "" {
+		if val, err := strconv.Atoi(env); err == nil {
+			cfg.MsgCap = val
+		}
+	}
 	if cfg.MsgCap == 0 {
 		cfg.MsgCap = 16 * 1024 * 1024
-		if env := os.Getenv("VALUESTORE_MSG_CAP"); env != "" {
-			if val, err := strconv.Atoi(env); err == nil {
-				cfg.MsgCap = val
-			}
-		}
 	}
 	// TODO: This minimum needs to be the max overhead.
 	if cfg.MsgCap < 1 {
 		cfg.MsgCap = 1
 	}
+	if env := os.Getenv("VALUESTORE_MSG_TIMEOUT"); env != "" {
+		if val, err := strconv.Atoi(env); err == nil {
+			cfg.MsgTimeout = val
+		}
+	}
 	if cfg.MsgTimeout == 0 {
 		cfg.MsgTimeout = 100
-		if env := os.Getenv("VALUESTORE_MSG_TIMEOUT"); env != "" {
-			if val, err := strconv.Atoi(env); err == nil {
-				cfg.MsgTimeout = val
-			}
-		}
 	}
 	if cfg.MsgTimeout < 1 {
 		cfg.MsgTimeout = 100
 	}
+	if env := os.Getenv("VALUESTORE_VALUES_FILE_CAP"); env != "" {
+		if val, err := strconv.Atoi(env); err == nil {
+			cfg.ValuesFileCap = val
+		}
+	}
 	if cfg.ValuesFileCap == 0 {
 		cfg.ValuesFileCap = math.MaxUint32
-		if env := os.Getenv("VALUESTORE_VALUES_FILE_CAP"); env != "" {
-			if val, err := strconv.Atoi(env); err == nil {
-				cfg.ValuesFileCap = val
-			}
-		}
 	}
 	// TODO: Make the 40 and 8 consts
 	if cfg.ValuesFileCap < 48+cfg.ValueCap { // header value trailer
@@ -361,354 +361,354 @@ func resolveConfig(c *Config) *Config {
 	if cfg.ValuesFileCap > math.MaxUint32 {
 		cfg.ValuesFileCap = math.MaxUint32
 	}
+	if env := os.Getenv("VALUESTORE_VALUES_FILE_READERS"); env != "" {
+		if val, err := strconv.Atoi(env); err == nil {
+			cfg.ValuesFileReaders = val
+		}
+	}
 	if cfg.ValuesFileReaders == 0 {
 		cfg.ValuesFileReaders = cfg.Workers
-		if env := os.Getenv("VALUESTORE_VALUES_FILE_READERS"); env != "" {
-			if val, err := strconv.Atoi(env); err == nil {
-				cfg.ValuesFileReaders = val
-			}
-		}
 	}
 	if cfg.ValuesFileReaders < 1 {
 		cfg.ValuesFileReaders = 1
 	}
+	if env := os.Getenv("VALUESTORE_RECOVERY_BATCH_SIZE"); env != "" {
+		if val, err := strconv.Atoi(env); err == nil {
+			cfg.RecoveryBatchSize = val
+		}
+	}
 	if cfg.RecoveryBatchSize == 0 {
 		cfg.RecoveryBatchSize = 1024 * 1024
-		if env := os.Getenv("VALUESTORE_RECOVERY_BATCH_SIZE"); env != "" {
-			if val, err := strconv.Atoi(env); err == nil {
-				cfg.RecoveryBatchSize = val
-			}
-		}
 	}
 	if cfg.RecoveryBatchSize < 1 {
 		cfg.RecoveryBatchSize = 1
 	}
+	if env := os.Getenv("VALUESTORE_TOMBSTONE_DISCARD_INTERVAL"); env != "" {
+		if val, err := strconv.Atoi(env); err == nil {
+			cfg.TombstoneDiscardInterval = val
+		}
+	}
 	if cfg.TombstoneDiscardInterval == 0 {
 		cfg.TombstoneDiscardInterval = cfg.BackgroundInterval
-		if env := os.Getenv("VALUESTORE_TOMBSTONE_DISCARD_INTERVAL"); env != "" {
-			if val, err := strconv.Atoi(env); err == nil {
-				cfg.TombstoneDiscardInterval = val
-			}
-		}
 	}
 	if cfg.TombstoneDiscardInterval < 1 {
 		cfg.TombstoneDiscardInterval = 1
 	}
+	if env := os.Getenv("VALUESTORE_TOMBSTONE_DISCARD_BATCH_SIZE"); env != "" {
+		if val, err := strconv.Atoi(env); err == nil {
+			cfg.TombstoneDiscardBatchSize = val
+		}
+	}
 	if cfg.TombstoneDiscardBatchSize == 0 {
 		cfg.TombstoneDiscardBatchSize = 1024 * 1024
-		if env := os.Getenv("VALUESTORE_TOMBSTONE_DISCARD_BATCH_SIZE"); env != "" {
-			if val, err := strconv.Atoi(env); err == nil {
-				cfg.TombstoneDiscardBatchSize = val
-			}
-		}
 	}
 	if cfg.TombstoneDiscardBatchSize < 1 {
 		cfg.TombstoneDiscardBatchSize = 1
 	}
+	if env := os.Getenv("VALUESTORE_TOMBSTONE_AGE"); env != "" {
+		if val, err := strconv.Atoi(env); err == nil {
+			cfg.TombstoneAge = val
+		}
+	}
 	if cfg.TombstoneAge == 0 {
 		cfg.TombstoneAge = 4 * 60 * 60
-		if env := os.Getenv("VALUESTORE_TOMBSTONE_AGE"); env != "" {
-			if val, err := strconv.Atoi(env); err == nil {
-				cfg.TombstoneAge = val
-			}
-		}
 	}
 	if cfg.TombstoneAge < 0 {
 		cfg.TombstoneAge = 0
 	}
+	if env := os.Getenv("VALUESTORE_REPLICATION_IGNORE_RECENT"); env != "" {
+		if val, err := strconv.Atoi(env); err == nil {
+			cfg.ReplicationIgnoreRecent = val
+		}
+	}
 	if cfg.ReplicationIgnoreRecent == 0 {
 		cfg.ReplicationIgnoreRecent = 60
-		if env := os.Getenv("VALUESTORE_REPLICATION_IGNORE_RECENT"); env != "" {
-			if val, err := strconv.Atoi(env); err == nil {
-				cfg.ReplicationIgnoreRecent = val
-			}
-		}
 	}
 	if cfg.ReplicationIgnoreRecent < 0 {
 		cfg.ReplicationIgnoreRecent = 0
 	}
+	if env := os.Getenv("VALUESTORE_OUT_PULL_REPLICATION_INTERVAL"); env != "" {
+		if val, err := strconv.Atoi(env); err == nil {
+			cfg.OutPullReplicationInterval = val
+		}
+	}
 	if cfg.OutPullReplicationInterval == 0 {
 		cfg.OutPullReplicationInterval = cfg.BackgroundInterval
-		if env := os.Getenv("VALUESTORE_OUT_PULL_REPLICATION_INTERVAL"); env != "" {
-			if val, err := strconv.Atoi(env); err == nil {
-				cfg.OutPullReplicationInterval = val
-			}
-		}
 	}
 	if cfg.OutPullReplicationInterval < 1 {
 		cfg.OutPullReplicationInterval = 1
 	}
+	if env := os.Getenv("VALUESTORE_OUT_PULL_REPLICATION_WORKERS"); env != "" {
+		if val, err := strconv.Atoi(env); err == nil {
+			cfg.OutPullReplicationWorkers = val
+		}
+	}
 	if cfg.OutPullReplicationWorkers == 0 {
 		cfg.OutPullReplicationWorkers = cfg.Workers
-		if env := os.Getenv("VALUESTORE_OUT_PULL_REPLICATION_WORKERS"); env != "" {
-			if val, err := strconv.Atoi(env); err == nil {
-				cfg.OutPullReplicationWorkers = val
-			}
-		}
 	}
 	if cfg.OutPullReplicationWorkers < 1 {
 		cfg.OutPullReplicationWorkers = 1
 	}
+	if env := os.Getenv("VALUESTORE_OUT_PULL_REPLICATION_MSGS"); env != "" {
+		if val, err := strconv.Atoi(env); err == nil {
+			cfg.OutPullReplicationMsgs = val
+		}
+	}
 	if cfg.OutPullReplicationMsgs == 0 {
 		cfg.OutPullReplicationMsgs = cfg.OutPullReplicationWorkers * 4
-		if env := os.Getenv("VALUESTORE_OUT_PULL_REPLICATION_MSGS"); env != "" {
-			if val, err := strconv.Atoi(env); err == nil {
-				cfg.OutPullReplicationMsgs = val
-			}
-		}
 	}
 	if cfg.OutPullReplicationMsgs < 1 {
 		cfg.OutPullReplicationMsgs = 1
 	}
+	if env := os.Getenv("VALUESTORE_OUT_PULL_REPLICATION_BLOOM_N"); env != "" {
+		if val, err := strconv.Atoi(env); err == nil {
+			cfg.OutPullReplicationBloomN = val
+		}
+	}
 	if cfg.OutPullReplicationBloomN == 0 {
 		cfg.OutPullReplicationBloomN = 1000000
-		if env := os.Getenv("VALUESTORE_OUT_PULL_REPLICATION_BLOOM_N"); env != "" {
-			if val, err := strconv.Atoi(env); err == nil {
-				cfg.OutPullReplicationBloomN = val
-			}
-		}
 	}
 	if cfg.OutPullReplicationBloomN < 1 {
 		cfg.OutPullReplicationBloomN = 1
 	}
+	if env := os.Getenv("VALUESTORE_OUT_PULL_REPLICATION_BLOOM_P"); env != "" {
+		if val, err := strconv.ParseFloat(env, 64); err == nil {
+			cfg.OutPullReplicationBloomP = val
+		}
+	}
 	if cfg.OutPullReplicationBloomP == 0.0 {
 		cfg.OutPullReplicationBloomP = 0.001
-		if env := os.Getenv("VALUESTORE_OUT_PULL_REPLICATION_BLOOM_P"); env != "" {
-			if val, err := strconv.ParseFloat(env, 64); err == nil {
-				cfg.OutPullReplicationBloomP = val
-			}
-		}
 	}
 	if cfg.OutPullReplicationBloomP < 0.000001 {
 		cfg.OutPullReplicationBloomP = 0.000001
 	}
+	if env := os.Getenv("VALUESTORE_OUT_PULL_REPLICATION_MSG_TIMEOUT"); env != "" {
+		if val, err := strconv.Atoi(env); err == nil {
+			cfg.OutPullReplicationMsgTimeout = val
+		}
+	}
 	if cfg.OutPullReplicationMsgTimeout == 0 {
 		cfg.OutPullReplicationMsgTimeout = cfg.MsgTimeout
-		if env := os.Getenv("VALUESTORE_OUT_PULL_REPLICATION_MSG_TIMEOUT"); env != "" {
-			if val, err := strconv.Atoi(env); err == nil {
-				cfg.OutPullReplicationMsgTimeout = val
-			}
-		}
 	}
 	if cfg.OutPullReplicationMsgTimeout < 1 {
 		cfg.OutPullReplicationMsgTimeout = 100
 	}
+	if env := os.Getenv("VALUESTORE_IN_PULL_REPLICATION_WORKERS"); env != "" {
+		if val, err := strconv.Atoi(env); err == nil {
+			cfg.InPullReplicationWorkers = val
+		}
+	}
 	if cfg.InPullReplicationWorkers == 0 {
 		cfg.InPullReplicationWorkers = cfg.Workers
-		if env := os.Getenv("VALUESTORE_IN_PULL_REPLICATION_WORKERS"); env != "" {
-			if val, err := strconv.Atoi(env); err == nil {
-				cfg.InPullReplicationWorkers = val
-			}
-		}
 	}
 	if cfg.InPullReplicationWorkers < 1 {
 		cfg.InPullReplicationWorkers = 1
 	}
+	if env := os.Getenv("VALUESTORE_IN_PULL_REPLICATION_MSGS"); env != "" {
+		if val, err := strconv.Atoi(env); err == nil {
+			cfg.InPullReplicationMsgs = val
+		}
+	}
 	if cfg.InPullReplicationMsgs == 0 {
 		cfg.InPullReplicationMsgs = cfg.InPullReplicationWorkers * 4
-		if env := os.Getenv("VALUESTORE_IN_PULL_REPLICATION_MSGS"); env != "" {
-			if val, err := strconv.Atoi(env); err == nil {
-				cfg.InPullReplicationMsgs = val
-			}
-		}
 	}
 	if cfg.InPullReplicationMsgs < 1 {
 		cfg.InPullReplicationMsgs = 1
 	}
+	if env := os.Getenv("VALUESTORE_IN_PULL_REPLICATION_RESPONSE_MSG_TIMEOUT"); env != "" {
+		if val, err := strconv.Atoi(env); err == nil {
+			cfg.InPullReplicationResponseMsgTimeout = val
+		}
+	}
 	if cfg.InPullReplicationResponseMsgTimeout == 0 {
 		cfg.InPullReplicationResponseMsgTimeout = cfg.MsgTimeout
-		if env := os.Getenv("VALUESTORE_IN_PULL_REPLICATION_RESPONSE_MSG_TIMEOUT"); env != "" {
-			if val, err := strconv.Atoi(env); err == nil {
-				cfg.InPullReplicationResponseMsgTimeout = val
-			}
-		}
 	}
 	if cfg.InPullReplicationResponseMsgTimeout < 1 {
 		cfg.InPullReplicationResponseMsgTimeout = 100
 	}
+	if env := os.Getenv("VALUESTORE_OUT_PUSH_REPLICATION_INTERVAL"); env != "" {
+		if val, err := strconv.Atoi(env); err == nil {
+			cfg.OutPushReplicationInterval = val
+		}
+	}
 	if cfg.OutPushReplicationInterval == 0 {
 		cfg.OutPushReplicationInterval = cfg.BackgroundInterval
-		if env := os.Getenv("VALUESTORE_OUT_PUSH_REPLICATION_INTERVAL"); env != "" {
-			if val, err := strconv.Atoi(env); err == nil {
-				cfg.OutPushReplicationInterval = val
-			}
-		}
 	}
 	if cfg.OutPushReplicationInterval < 1 {
 		cfg.OutPushReplicationInterval = 1
 	}
+	if env := os.Getenv("VALUESTORE_OUT_PUSH_REPLICATION_WORKERS"); env != "" {
+		if val, err := strconv.Atoi(env); err == nil {
+			cfg.OutPushReplicationWorkers = val
+		}
+	}
 	if cfg.OutPushReplicationWorkers == 0 {
 		cfg.OutPushReplicationWorkers = cfg.Workers
-		if env := os.Getenv("VALUESTORE_OUT_PUSH_REPLICATION_WORKERS"); env != "" {
-			if val, err := strconv.Atoi(env); err == nil {
-				cfg.OutPushReplicationWorkers = val
-			}
-		}
 	}
 	if cfg.OutPushReplicationWorkers < 1 {
 		cfg.OutPushReplicationWorkers = 1
 	}
+	if env := os.Getenv("VALUESTORE_OUT_PUSH_REPLICATION_MSGS"); env != "" {
+		if val, err := strconv.Atoi(env); err == nil {
+			cfg.OutPushReplicationMsgs = val
+		}
+	}
 	if cfg.OutPushReplicationMsgs == 0 {
 		cfg.OutPushReplicationMsgs = cfg.OutPushReplicationWorkers * 4
-		if env := os.Getenv("VALUESTORE_OUT_PUSH_REPLICATION_MSGS"); env != "" {
-			if val, err := strconv.Atoi(env); err == nil {
-				cfg.OutPushReplicationMsgs = val
-			}
-		}
 	}
 	if cfg.OutPushReplicationMsgs < 1 {
 		cfg.OutPushReplicationMsgs = 1
 	}
+	if env := os.Getenv("VALUESTORE_OUT_PUSH_REPLICATION_MSG_TIMEOUT"); env != "" {
+		if val, err := strconv.Atoi(env); err == nil {
+			cfg.OutPushReplicationMsgTimeout = val
+		}
+	}
 	if cfg.OutPushReplicationMsgTimeout == 0 {
 		cfg.OutPushReplicationMsgTimeout = cfg.MsgTimeout
-		if env := os.Getenv("VALUESTORE_OUT_PUSH_REPLICATION_MSG_TIMEOUT"); env != "" {
-			if val, err := strconv.Atoi(env); err == nil {
-				cfg.OutPushReplicationMsgTimeout = val
-			}
-		}
 	}
 	if cfg.OutPushReplicationMsgTimeout < 1 {
 		cfg.OutPushReplicationMsgTimeout = 100
 	}
+	if env := os.Getenv("VALUESTORE_BULK_SET_MSG_CAP"); env != "" {
+		if val, err := strconv.Atoi(env); err == nil {
+			cfg.BulkSetMsgCap = val
+		}
+	}
 	if cfg.BulkSetMsgCap == 0 {
 		cfg.BulkSetMsgCap = cfg.MsgCap
-		if env := os.Getenv("VALUESTORE_BULK_SET_MSG_CAP"); env != "" {
-			if val, err := strconv.Atoi(env); err == nil {
-				cfg.BulkSetMsgCap = val
-			}
-		}
 	}
 	if cfg.BulkSetMsgCap < 1 {
 		cfg.BulkSetMsgCap = 1
 	}
+	if env := os.Getenv("VALUESTORE_OUT_BULK_SET_MSGS"); env != "" {
+		if val, err := strconv.Atoi(env); err == nil {
+			cfg.OutBulkSetMsgs = val
+		}
+	}
 	if cfg.OutBulkSetMsgs == 0 {
 		cfg.OutBulkSetMsgs = cfg.OutPushReplicationWorkers * 4
-		if env := os.Getenv("VALUESTORE_OUT_BULK_SET_MSGS"); env != "" {
-			if val, err := strconv.Atoi(env); err == nil {
-				cfg.OutBulkSetMsgs = val
-			}
-		}
 	}
 	if cfg.OutBulkSetMsgs < 1 {
 		cfg.OutBulkSetMsgs = 1
 	}
+	if env := os.Getenv("VALUESTORE_IN_BULK_SET_WORKERS"); env != "" {
+		if val, err := strconv.Atoi(env); err == nil {
+			cfg.InBulkSetWorkers = val
+		}
+	}
 	if cfg.InBulkSetWorkers == 0 {
 		cfg.InBulkSetWorkers = cfg.Workers
-		if env := os.Getenv("VALUESTORE_IN_BULK_SET_WORKERS"); env != "" {
-			if val, err := strconv.Atoi(env); err == nil {
-				cfg.InBulkSetWorkers = val
-			}
-		}
 	}
 	if cfg.InBulkSetWorkers < 1 {
 		cfg.InBulkSetWorkers = 1
 	}
+	if env := os.Getenv("VALUESTORE_IN_BULK_SET_MSGS"); env != "" {
+		if val, err := strconv.Atoi(env); err == nil {
+			cfg.InBulkSetMsgs = val
+		}
+	}
 	if cfg.InBulkSetMsgs == 0 {
 		cfg.InBulkSetMsgs = cfg.InBulkSetWorkers * 4
-		if env := os.Getenv("VALUESTORE_IN_BULK_SET_MSGS"); env != "" {
-			if val, err := strconv.Atoi(env); err == nil {
-				cfg.InBulkSetMsgs = val
-			}
-		}
 	}
 	if cfg.InBulkSetMsgs < 1 {
 		cfg.InBulkSetMsgs = 1
 	}
+	if env := os.Getenv("VALUESTORE_IN_BULK_SET_RESPONSE_MSG_TIMEOUT"); env != "" {
+		if val, err := strconv.Atoi(env); err == nil {
+			cfg.InBulkSetResponseMsgTimeout = val
+		}
+	}
 	if cfg.InBulkSetResponseMsgTimeout == 0 {
 		cfg.InBulkSetResponseMsgTimeout = cfg.MsgTimeout
-		if env := os.Getenv("VALUESTORE_IN_BULK_SET_RESPONSE_MSG_TIMEOUT"); env != "" {
-			if val, err := strconv.Atoi(env); err == nil {
-				cfg.InBulkSetResponseMsgTimeout = val
-			}
-		}
 	}
 	if cfg.InBulkSetResponseMsgTimeout < 1 {
 		cfg.InBulkSetResponseMsgTimeout = 100
 	}
+	if env := os.Getenv("VALUESTORE_OUT_BULK_SET_ACK_MSG_CAP"); env != "" {
+		if val, err := strconv.Atoi(env); err == nil {
+			cfg.BulkSetAckMsgCap = val
+		}
+	}
 	if cfg.BulkSetAckMsgCap == 0 {
 		cfg.BulkSetAckMsgCap = cfg.MsgCap
-		if env := os.Getenv("VALUESTORE_OUT_BULK_SET_ACK_MSG_CAP"); env != "" {
-			if val, err := strconv.Atoi(env); err == nil {
-				cfg.BulkSetAckMsgCap = val
-			}
-		}
 	}
 	if cfg.BulkSetAckMsgCap < 1 {
 		cfg.BulkSetAckMsgCap = 1
 	}
+	if env := os.Getenv("VALUESTORE_IN_BULK_SET_ACK_WORKERS"); env != "" {
+		if val, err := strconv.Atoi(env); err == nil {
+			cfg.InBulkSetAckWorkers = val
+		}
+	}
 	if cfg.InBulkSetAckWorkers == 0 {
 		cfg.InBulkSetAckWorkers = cfg.Workers
-		if env := os.Getenv("VALUESTORE_IN_BULK_SET_ACK_WORKERS"); env != "" {
-			if val, err := strconv.Atoi(env); err == nil {
-				cfg.InBulkSetAckWorkers = val
-			}
-		}
 	}
 	if cfg.InBulkSetAckWorkers < 1 {
 		cfg.InBulkSetAckWorkers = 1
 	}
+	if env := os.Getenv("VALUESTORE_IN_BULK_SET_ACK_MSGS"); env != "" {
+		if val, err := strconv.Atoi(env); err == nil {
+			cfg.InBulkSetAckMsgs = val
+		}
+	}
 	if cfg.InBulkSetAckMsgs == 0 {
 		cfg.InBulkSetAckMsgs = cfg.InBulkSetAckWorkers * 4
-		if env := os.Getenv("VALUESTORE_IN_BULK_SET_ACK_MSGS"); env != "" {
-			if val, err := strconv.Atoi(env); err == nil {
-				cfg.InBulkSetAckMsgs = val
-			}
-		}
 	}
 	if cfg.InBulkSetAckMsgs < 1 {
 		cfg.InBulkSetAckMsgs = 1
 	}
+	if env := os.Getenv("VALUESTORE_OUT_BULK_SET_ACK_MSGS"); env != "" {
+		if val, err := strconv.Atoi(env); err == nil {
+			cfg.OutBulkSetAckMsgs = val
+		}
+	}
 	if cfg.OutBulkSetAckMsgs == 0 {
 		cfg.OutBulkSetAckMsgs = cfg.InBulkSetAckWorkers * 4
-		if env := os.Getenv("VALUESTORE_OUT_BULK_SET_ACK_MSGS"); env != "" {
-			if val, err := strconv.Atoi(env); err == nil {
-				cfg.OutBulkSetAckMsgs = val
-			}
-		}
 	}
 	if cfg.OutBulkSetAckMsgs < 1 {
 		cfg.OutBulkSetAckMsgs = 1
 	}
+	if env := os.Getenv("VALUESTORE_COMPACTION_INTERVAL"); env != "" {
+		if val, err := strconv.Atoi(env); err == nil {
+			cfg.CompactionInterval = val
+		}
+	}
 	if cfg.CompactionInterval == 0 {
 		cfg.CompactionInterval = cfg.BackgroundInterval
-		if env := os.Getenv("VALUESTORE_COMPACTION_INTERVAL"); env != "" {
-			if val, err := strconv.Atoi(env); err == nil {
-				cfg.CompactionInterval = val
-			}
-		}
 	}
 	if cfg.CompactionInterval < 1 {
 		cfg.CompactionInterval = 1
 	}
+	if env := os.Getenv("VALUESTORE_COMPACTION_WORKERS"); env != "" {
+		if val, err := strconv.Atoi(env); err == nil {
+			cfg.CompactionWorkers = val
+		}
+	}
 	if cfg.CompactionWorkers == 0 {
 		cfg.CompactionWorkers = cfg.Workers
-		if env := os.Getenv("VALUESTORE_COMPACTION_WORKERS"); env != "" {
-			if val, err := strconv.Atoi(env); err == nil {
-				cfg.CompactionWorkers = val
-			}
-		}
 	}
 	if cfg.CompactionWorkers < 1 {
 		cfg.CompactionWorkers = 1
 	}
+	if env := os.Getenv("VALUESTORE_COMPACTION_THRESHOLD"); env != "" {
+		if val, err := strconv.ParseFloat(env, 64); err == nil {
+			cfg.CompactionThreshold = val
+		}
+	}
 	if cfg.CompactionThreshold == 0.0 {
 		cfg.CompactionThreshold = 0.10
-		if env := os.Getenv("VALUESTORE_COMPACTION_THRESHOLD"); env != "" {
-			if val, err := strconv.ParseFloat(env, 64); err == nil {
-				cfg.CompactionThreshold = val
-			}
-		}
 	}
 	if cfg.CompactionThreshold >= 1.0 || cfg.CompactionThreshold <= 0.01 {
 		cfg.CompactionThreshold = 0.10
 	}
+	if env := os.Getenv("VALUESTORE_COMPACTION_AGE_THRESHOLD"); env != "" {
+		if val, err := strconv.Atoi(env); err == nil {
+			cfg.CompactionAgeThreshold = val
+		}
+	}
 	if cfg.CompactionAgeThreshold == 0 {
 		cfg.CompactionAgeThreshold = 300
-		if env := os.Getenv("VALUESTORE_COMPACTION_AGE_THRESHOLD"); env != "" {
-			if val, err := strconv.Atoi(env); err == nil {
-				cfg.CompactionAgeThreshold = val
-			}
-		}
 	}
 	if cfg.CompactionAgeThreshold < 1 {
 		cfg.CompactionAgeThreshold = 1

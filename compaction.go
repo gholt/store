@@ -157,7 +157,7 @@ func (vs *DefaultValueStore) compactionPass() {
 	}
 	close(compactionJobs)
 	if vs.logDebug != nil {
-		vs.logDebug("compaction candidates submitted: %s\n", submitted)
+		vs.logDebug("compaction candidates submitted: %d\n", submitted)
 	}
 	for i := 1; i <= submitted; i++ {
 		<-compactionResults
