@@ -29,18 +29,18 @@ func (m *msgRingPlaceholder) MaxMsgLength() uint64 {
 func (m *msgRingPlaceholder) SetMsgHandler(msgType uint64, handler ring.MsgUnmarshaller) {
 }
 
-func (m *msgRingPlaceholder) MsgToNode(nodeID uint64, msg ring.Msg) {
+func (m *msgRingPlaceholder) MsgToNode(msg ring.Msg, nodeID uint64, timeout time.Duration) {
 	m.lock.Lock()
 	m.msgToNodeIDs = append(m.msgToNodeIDs, nodeID)
 	m.lock.Unlock()
-	msg.Done()
+	msg.Free()
 }
 
-func (m *msgRingPlaceholder) MsgToOtherReplicas(ringVersion int64, partition uint32, msg ring.Msg) {
+func (m *msgRingPlaceholder) MsgToOtherReplicas(msg ring.Msg, partition uint32, timeout time.Duration) {
 	m.lock.Lock()
 	m.msgToPartitions = append(m.msgToPartitions, partition)
 	m.lock.Unlock()
-	msg.Done()
+	msg.Free()
 }
 
 type testErrorWriter struct {
@@ -58,39 +58,6 @@ func (w *testErrorWriter) Write(p []byte) (int, error) {
 		return n, io.EOF
 	}
 	return 0, io.EOF
-}
-
-func TestBulkSetInTimeout(t *testing.T) {
-	vs := New(&Config{
-		MsgRing:             &msgRingPlaceholder{},
-		InBulkSetMsgTimeout: 1,
-	})
-	// Make sure the timeout got set correctly, then lower it for a speedier
-	// test.
-	if vs.bulkSetState.inMsgTimeout != time.Second {
-		t.Fatal(vs.bulkSetState.inMsgTimeout)
-	}
-	vs.bulkSetState.inMsgTimeout = time.Millisecond
-	// This means that the subsystem can never get a free bulkSetMsg since we
-	// never feed this replacement channel.
-	vs.bulkSetState.inFreeMsgChan = make(chan *bulkSetMsg, 1)
-	n, err := vs.newInBulkSetMsg(bytes.NewBuffer(make([]byte, 100)), 100)
-	// Validates we got no error and read all the bytes; meaning the message
-	// was read and tossed after the timeout in getting a free bulkSetMsg.
-	if err != nil {
-		t.Fatal(err)
-	}
-	if n != 100 {
-		t.Fatal(n)
-	}
-	// Try again to make sure it can handle Reader errors.
-	n, err = vs.newInBulkSetMsg(bytes.NewBuffer(make([]byte, 10)), 100)
-	if err != io.EOF {
-		t.Fatal(err)
-	}
-	if n != 10 {
-		t.Fatal(n)
-	}
 }
 
 func TestBulkSetReadObviouslyTooShort(t *testing.T) {
@@ -334,7 +301,7 @@ func TestBulkSetMsgOut(t *testing.T) {
 	if !bytes.Equal(buf.Bytes(), []byte{0, 0, 0, 0, 0, 0, 0, 0}) {
 		t.Fatal(buf.Bytes())
 	}
-	bsm.Done()
+	bsm.Free()
 	bsm = vs.newOutBulkSetMsg()
 	binary.BigEndian.PutUint64(bsm.header, 12345)
 	bsm.add(1, 2, 0x300, nil)
@@ -367,7 +334,7 @@ func TestBulkSetMsgOut(t *testing.T) {
 	}) {
 		t.Fatal(buf.Bytes())
 	}
-	bsm.Done()
+	bsm.Free()
 }
 
 func TestBulkSetMsgOutDefaultsToFromLocalNode(t *testing.T) {
@@ -389,7 +356,7 @@ func TestBulkSetMsgOutWriteError(t *testing.T) {
 	if err == nil {
 		t.Fatal(err)
 	}
-	bsm.Done()
+	bsm.Free()
 }
 
 func TestBulkSetMsgOutHitCap(t *testing.T) {

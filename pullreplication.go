@@ -15,19 +15,20 @@ const _MSG_PULL_REPLICATION = 0x579c4bd162f045b3
 const _PULL_REPLICATION_MSG_HEADER_BYTES = 44
 
 type pullReplicationState struct {
-	inWorkers     int
-	inMsgChan     chan *pullReplicationMsg
-	inFreeMsgChan chan *pullReplicationMsg
-	outWorkers    uint64
-	outInterval   time.Duration
-	outNotifyChan chan *backgroundNotification
-	outIteration  uint16
-	outAbort      uint32
-	outMsgChan    chan *pullReplicationMsg
-	outKTBFs      []*ktBloomFilter
-	inMsgTimeout  time.Duration
-	bloomN        uint64
-	bloomP        float64
+	inWorkers            int
+	inMsgChan            chan *pullReplicationMsg
+	inFreeMsgChan        chan *pullReplicationMsg
+	inResponseMsgTimeout time.Duration
+	outWorkers           uint64
+	outInterval          time.Duration
+	outNotifyChan        chan *backgroundNotification
+	outIteration         uint16
+	outAbort             uint32
+	outMsgChan           chan *pullReplicationMsg
+	outKTBFs             []*ktBloomFilter
+	outMsgTimeout        time.Duration
+	bloomN               uint64
+	bloomP               float64
 }
 
 type pullReplicationMsg struct {
@@ -63,7 +64,8 @@ func (vs *DefaultValueStore) pullReplicationConfig(cfg *Config) {
 				body:   make([]byte, len(vs.pullReplicationState.outKTBFs[0].bits)),
 			}
 		}
-		vs.pullReplicationState.inMsgTimeout = time.Duration(cfg.InPullReplicationMsgTimeout) * time.Second
+		vs.pullReplicationState.inResponseMsgTimeout = time.Duration(cfg.InPullReplicationResponseMsgTimeout) * time.Millisecond
+		vs.pullReplicationState.outMsgTimeout = time.Duration(cfg.OutPullReplicationMsgTimeout) * time.Millisecond
 	}
 	vs.pullReplicationState.outNotifyChan = make(chan *backgroundNotification, 1)
 }
@@ -104,9 +106,9 @@ func (vs *DefaultValueStore) newInPullReplicationMsg(r io.Reader, l uint64) (uin
 	var prm *pullReplicationMsg
 	select {
 	case prm = <-vs.pullReplicationState.inFreeMsgChan:
-		// If there isn't a free pullReplicationMsg after some time, give up
-		// and just read and discard the incoming pull-replication message.
-	case <-time.After(vs.pullReplicationState.inMsgTimeout):
+	default:
+		// If there isn't a free pullReplicationMsg, just read and discard the
+		// incoming pull-replication message.
 		left := l
 		var sn int
 		var err error
@@ -118,11 +120,9 @@ func (vs *DefaultValueStore) newInPullReplicationMsg(r io.Reader, l uint64) (uin
 			sn, err = r.Read(t)
 			left -= uint64(sn)
 			if err != nil {
-				vs.pullReplicationState.inFreeMsgChan <- prm
 				return l - left, err
 			}
 		}
-		vs.pullReplicationState.inFreeMsgChan <- prm
 		return l, nil
 	}
 	// TODO: We need to cap this so memory isn't abused in case someone
@@ -236,7 +236,7 @@ func (vs *DefaultValueStore) inPullReplication() {
 				}
 			}
 			if len(bsm.body) > 0 {
-				vs.msgRing.MsgToNode(nodeID, bsm)
+				vs.msgRing.MsgToNode(bsm, nodeID, vs.pullReplicationState.inResponseMsgTimeout)
 			}
 		}
 	}
@@ -362,7 +362,7 @@ func (vs *DefaultValueStore) outPullReplicationPass() {
 				reThis = rb - 1
 			}
 			prm := vs.newOutPullReplicationMsg(ringVersion, uint32(p), cutoff, rbThis, reThis, ktbf)
-			vs.msgRing.MsgToOtherReplicas(ringVersion, uint32(p), prm)
+			vs.msgRing.MsgToOtherReplicas(prm, uint32(p), vs.pullReplicationState.outMsgTimeout)
 			if !more {
 				break
 			}
@@ -407,7 +407,7 @@ func (vs *DefaultValueStore) outPullReplicationPass() {
 // newOutPullReplicationMsg gives an initialized pullReplicationMsg for filling
 // out and eventually sending using the MsgRing. The MsgRing (or someone else
 // if the message doesn't end up with the MsgRing) will call
-// pullReplicationMsg.Done() eventually and the pullReplicationMsg will be
+// pullReplicationMsg.Free() eventually and the pullReplicationMsg will be
 // requeued for reuse later. There is a fixed number of outgoing
 // pullReplicationMsg instances that can exist at any given time, capping
 // memory usage. Once the limit is reached, this method will block until a
@@ -480,6 +480,6 @@ func (prm *pullReplicationMsg) WriteContent(w io.Writer) (uint64, error) {
 	return uint64(n), err
 }
 
-func (prm *pullReplicationMsg) Done() {
+func (prm *pullReplicationMsg) Free() {
 	prm.vs.pullReplicationState.outMsgChan <- prm
 }

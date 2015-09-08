@@ -3,7 +3,6 @@ package valuestore
 import (
 	"encoding/binary"
 	"io"
-	"time"
 )
 
 // bsam: entries:n
@@ -15,7 +14,6 @@ type bulkSetAckState struct {
 	inMsgChan             chan *bulkSetAckMsg
 	inFreeMsgChan         chan *bulkSetAckMsg
 	outFreeMsgChan        chan *bulkSetAckMsg
-	inMsgTimeout          time.Duration
 	inBulkSetAckDoneChans []chan struct{}
 }
 
@@ -46,7 +44,6 @@ func (vs *DefaultValueStore) bulkSetAckConfig(cfg *Config) {
 				body: make([]byte, cfg.BulkSetAckMsgCap),
 			}
 		}
-		vs.bulkSetAckState.inMsgTimeout = time.Duration(cfg.InBulkSetAckMsgTimeout) * time.Second
 	}
 }
 
@@ -62,9 +59,9 @@ func (vs *DefaultValueStore) newInBulkSetAckMsg(r io.Reader, l uint64) (uint64, 
 	var bsam *bulkSetAckMsg
 	select {
 	case bsam = <-vs.bulkSetAckState.inFreeMsgChan:
-		// If there isn't a free bulkSetAckMsg after some time, give up and
-		// just read and discard the incoming bulk-set-ack message.
-	case <-time.After(vs.bulkSetAckState.inMsgTimeout):
+	default:
+		// If there isn't a free bulkSetAckMsg, just read and discard the
+		// incoming bulk-set-ack message.
 		left := l
 		var sn int
 		var err error
@@ -131,7 +128,7 @@ func (vs *DefaultValueStore) inBulkSetAck(doneChan chan struct{}) {
 
 // newOutBulkSetAckMsg gives an initialized bulkSetAckMsg for filling out and
 // eventually sending using the MsgRing. The MsgRing (or someone else if the
-// message doesn't end up with the MsgRing) will call bulkSetAckMsg.Done()
+// message doesn't end up with the MsgRing) will call bulkSetAckMsg.Free()
 // eventually and the bulkSetAckMsg will be requeued for reuse later. There is
 // a fixed number of outgoing bulkSetAckMsg instances that can exist at any
 // given time, capping memory usage. Once the limit is reached, this method
@@ -155,7 +152,7 @@ func (bsam *bulkSetAckMsg) WriteContent(w io.Writer) (uint64, error) {
 	return uint64(n), err
 }
 
-func (bsam *bulkSetAckMsg) Done() {
+func (bsam *bulkSetAckMsg) Free() {
 	bsam.vs.bulkSetAckState.outFreeMsgChan <- bsam
 }
 

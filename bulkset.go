@@ -14,12 +14,12 @@ const _BULK_SET_MSG_ENTRY_HEADER_LENGTH = 28
 const _BULK_SET_MSG_MIN_ENTRY_LENGTH = 28
 
 type bulkSetState struct {
-	msgCap             int
-	inMsgChan          chan *bulkSetMsg
-	inFreeMsgChan      chan *bulkSetMsg
-	inMsgTimeout       time.Duration
-	outFreeMsgChan     chan *bulkSetMsg
-	inBulkSetDoneChans []chan struct{}
+	msgCap               int
+	inMsgChan            chan *bulkSetMsg
+	inFreeMsgChan        chan *bulkSetMsg
+	inResponseMsgTimeout time.Duration
+	outFreeMsgChan       chan *bulkSetMsg
+	inBulkSetDoneChans   []chan struct{}
 }
 
 type bulkSetMsg struct {
@@ -53,7 +53,7 @@ func (vs *DefaultValueStore) bulkSetConfig(cfg *Config) {
 				body:   make([]byte, cfg.BulkSetMsgCap),
 			}
 		}
-		vs.bulkSetState.inMsgTimeout = time.Duration(cfg.InBulkSetMsgTimeout) * time.Second
+		vs.bulkSetState.inResponseMsgTimeout = time.Duration(cfg.InBulkSetResponseMsgTimeout) * time.Millisecond
 	}
 }
 
@@ -69,9 +69,9 @@ func (vs *DefaultValueStore) newInBulkSetMsg(r io.Reader, l uint64) (uint64, err
 	var bsm *bulkSetMsg
 	select {
 	case bsm = <-vs.bulkSetState.inFreeMsgChan:
-		// If there isn't a free bulkSetMsg after some time, give up and just
-		// read and discard the incoming bulk-set message.
-	case <-time.After(vs.bulkSetState.inMsgTimeout):
+	default:
+		// If there isn't a free bulkSetMsg, just read and discard the incoming
+		// bulk-set message.
 		left := l
 		var sn int
 		var err error
@@ -183,7 +183,7 @@ func (vs *DefaultValueStore) inBulkSet(doneChan chan struct{}) {
 			body = body[_BULK_SET_MSG_ENTRY_HEADER_LENGTH+l:]
 		}
 		if bsam != nil {
-			vs.msgRing.MsgToNode(bsm.nodeID(), bsam)
+			vs.msgRing.MsgToNode(bsam, bsm.nodeID(), vs.bulkSetState.inResponseMsgTimeout)
 		}
 		vs.bulkSetState.inFreeMsgChan <- bsm
 	}
@@ -192,7 +192,7 @@ func (vs *DefaultValueStore) inBulkSet(doneChan chan struct{}) {
 
 // newOutBulkSetMsg gives an initialized bulkSetMsg for filling out and
 // eventually sending using the MsgRing. The MsgRing (or someone else if the
-// message doesn't end up with the MsgRing) will call bulkSetMsg.Done()
+// message doesn't end up with the MsgRing) will call bulkSetMsg.Free()
 // eventually and the bulkSetMsg will be requeued for reuse later. There is a
 // fixed number of outgoing bulkSetMsg instances that can exist at any given
 // time, capping memory usage. Once the limit is reached, this method will
@@ -227,7 +227,7 @@ func (bsm *bulkSetMsg) WriteContent(w io.Writer) (uint64, error) {
 	return uint64(len(bsm.header)) + uint64(n), err
 }
 
-func (bsm *bulkSetMsg) Done() {
+func (bsm *bulkSetMsg) Free() {
 	bsm.vs.bulkSetState.outFreeMsgChan <- bsm
 }
 

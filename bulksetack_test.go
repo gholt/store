@@ -4,43 +4,9 @@ import (
 	"bytes"
 	"io"
 	"testing"
-	"time"
 
 	"github.com/gholt/ring"
 )
-
-func TestBulkSetAckInTimeout(t *testing.T) {
-	vs := New(&Config{
-		MsgRing:                &msgRingPlaceholder{},
-		InBulkSetAckMsgTimeout: 1,
-	})
-	// Make sure the timeout got set correctly, then lower it for a speedier
-	// test.
-	if vs.bulkSetAckState.inMsgTimeout != time.Second {
-		t.Fatal(vs.bulkSetAckState.inMsgTimeout)
-	}
-	vs.bulkSetAckState.inMsgTimeout = time.Millisecond
-	// This means that the subsystem can never get a free bulkSetAckMsg since
-	// we never feed this replacement channel.
-	vs.bulkSetAckState.inFreeMsgChan = make(chan *bulkSetAckMsg, 1)
-	n, err := vs.newInBulkSetAckMsg(bytes.NewBuffer(make([]byte, 100)), 100)
-	// Validates we got no error and read all the bytes; meaning the message
-	// was read and tossed after the timeout in getting a free bulkSetAckMsg.
-	if err != nil {
-		t.Fatal(err)
-	}
-	if n != 100 {
-		t.Fatal(n)
-	}
-	// Try again to make sure it can handle Reader errors.
-	n, err = vs.newInBulkSetAckMsg(bytes.NewBuffer(make([]byte, 10)), 100)
-	if err != io.EOF {
-		t.Fatal(err)
-	}
-	if n != 10 {
-		t.Fatal(n)
-	}
-}
 
 func TestBulkSetAckRead(t *testing.T) {
 	vs := New(&Config{MsgRing: &msgRingPlaceholder{}})
@@ -214,7 +180,7 @@ func TestBulkSetAckMsgOut(t *testing.T) {
 	if !bytes.Equal(buf.Bytes(), []byte{}) {
 		t.Fatal(buf.Bytes())
 	}
-	bsam.Done()
+	bsam.Free()
 	bsam = vs.newOutBulkSetAckMsg()
 	bsam.add(1, 2, 0x300)
 	bsam.add(4, 5, 0x600)
@@ -242,7 +208,7 @@ func TestBulkSetAckMsgOut(t *testing.T) {
 	}) {
 		t.Fatal(buf.Bytes())
 	}
-	bsam.Done()
+	bsam.Free()
 }
 
 func TestBulkSetAckMsgOutWriteError(t *testing.T) {
@@ -253,7 +219,7 @@ func TestBulkSetAckMsgOutWriteError(t *testing.T) {
 	if err == nil {
 		t.Fatal(err)
 	}
-	bsam.Done()
+	bsam.Free()
 }
 
 func TestBulkSetAckMsgOutHitCap(t *testing.T) {

@@ -3,6 +3,7 @@ package valuestore
 import (
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/gholt/ring"
 )
@@ -26,14 +27,14 @@ func (m *msgRingPullReplicationTester) MaxMsgLength() uint64 {
 func (m *msgRingPullReplicationTester) SetMsgHandler(msgType uint64, handler ring.MsgUnmarshaller) {
 }
 
-func (m *msgRingPullReplicationTester) MsgToNode(nodeID uint64, msg ring.Msg) {
+func (m *msgRingPullReplicationTester) MsgToNode(msg ring.Msg, nodeID uint64, timeout time.Duration) {
 	m.lock.Lock()
 	m.msgToNodeIDs = append(m.msgToNodeIDs, nodeID)
 	m.lock.Unlock()
-	msg.Done()
+	msg.Free()
 }
 
-func (m *msgRingPullReplicationTester) MsgToOtherReplicas(ringVersion int64, partition uint32, msg ring.Msg) {
+func (m *msgRingPullReplicationTester) MsgToOtherReplicas(msg ring.Msg, partition uint32, timeout time.Duration) {
 	prm, ok := msg.(*pullReplicationMsg)
 	if ok {
 		m.lock.Lock()
@@ -45,7 +46,7 @@ func (m *msgRingPullReplicationTester) MsgToOtherReplicas(ringVersion int64, par
 		m.bodyToPartitions = append(m.bodyToPartitions, b)
 		m.lock.Unlock()
 	}
-	msg.Done()
+	msg.Free()
 }
 
 func TestPullReplicationSimple(t *testing.T) {

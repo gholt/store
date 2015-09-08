@@ -82,8 +82,8 @@ type Config struct {
 	// MsgCap indicates the maximum bytes for outgoing messages. Defaults to
 	// 16,777,216 bytes.
 	MsgCap int
-	// MsgTimeout indicates the maximum seconds an incoming message can be
-	// pending before just discarding it. Defaults to 300 seconds.
+	// MsgTimeout indicates the maximum milliseconds a message can be pending
+	// before just discarding it. Defaults to 100 milliseconds.
 	MsgTimeout int
 	// ValuesFileCap indicates how large a values file can be before closing it
 	// and opening a new one. Defaults to 4,294,967,295 bytes.
@@ -127,6 +127,10 @@ type Config struct {
 	// chance of a collision within the bloom filter and, in combination with
 	// the N-factor, affects memory usage. Defaults to 0.001.
 	OutPullReplicationBloomP float64
+	// OutPullReplicationMsgTimeout indicates the maximum milliseconds an
+	// outgoing pull replication message can be pending before just discarding
+	// it. Defaults to MsgTimeout.
+	OutPullReplicationMsgTimeout int
 	// InPullReplicationWorkers indicates how many incoming pull-replication
 	// messages can be processed at the same time. Defaults to Workers.
 	InPullReplicationWorkers int
@@ -134,10 +138,10 @@ type Config struct {
 	// messages can be buffered before dropping additional ones. Defaults to
 	// InPullReplicationWorkers * 4.
 	InPullReplicationMsgs int
-	// InPullReplicationMsgTimeout indicates the maximum seconds an incoming
-	// pull-replication message can be pending before just discarding it.
-	// Defaults to MsgTimeout.
-	InPullReplicationMsgTimeout int
+	// InPullReplicationResponseMsgTimeout indicates the maximum milliseconds
+	// an outgoing response message to an incoming pull replication message can
+	// be pending before just discarding it. Defaults to MsgTimeout.
+	InPullReplicationResponseMsgTimeout int
 	// OutPushReplicationInterval overrides the BackgroundInterval value just
 	// for outgoing push replication passes.
 	OutPushReplicationInterval int
@@ -148,6 +152,10 @@ type Config struct {
 	// messages can be buffered before blocking on creating more. Defaults to
 	// OutPushReplicationWorkers * 4.
 	OutPushReplicationMsgs int
+	// OutPushReplicationMsgTimeout indicates the maximum milliseconds an
+	// outgoing push replication message can be pending before just discarding
+	// it. Defaults to MsgTimeout.
+	OutPushReplicationMsgTimeout int
 	// BulkSetMsgCap indicates the maximum bytes for bulk-set messages.
 	// Defaults to MsgCap.
 	BulkSetMsgCap int
@@ -162,10 +170,10 @@ type Config struct {
 	// buffered before dropping additional ones. Defaults to InBulkSetWorkers *
 	// 4.
 	InBulkSetMsgs int
-	// InBulkSetMsgTimeout indicates the maximum seconds an incoming bulk-set
-	// message can be pending before just discarding it. Defaults to
-	// MessageTimeout.
-	InBulkSetMsgTimeout int
+	// InBulkSetResponseMsgTimeout indicates the maximum milliseconds a
+	// response message to an incoming bulk-set message can be pending before
+	// just discarding it. Defaults to MsgTimeout.
+	InBulkSetResponseMsgTimeout int
 	// BulkSetAckMsgCap indicates the maximum bytes for bulk-set-ack messages.
 	// Defaults to MsgCap.
 	BulkSetAckMsgCap int
@@ -176,10 +184,6 @@ type Config struct {
 	// be buffered before dropping additional ones. Defaults to
 	// InBulkSetAckWorkers * 4.
 	InBulkSetAckMsgs int
-	// InBulkSetAckMsgTimeout indicates the maximum seconds an incoming
-	// bulk-set-ack message can be pending before just discarding it. Defaults
-	// to MsgTimeout.
-	InBulkSetAckMsgTimeout int
 	// OutBulkSetAckMsgs indicates how many outgoing bulk-set-ack messages can
 	// be buffered before blocking on creating more. Defaults to
 	// InBulkSetWorkers * 4.
@@ -330,7 +334,7 @@ func resolveConfig(c *Config) *Config {
 		cfg.MsgCap = 1
 	}
 	if cfg.MsgTimeout == 0 {
-		cfg.MsgTimeout = 300
+		cfg.MsgTimeout = 100
 		if env := os.Getenv("VALUESTORE_MSG_TIMEOUT"); env != "" {
 			if val, err := strconv.Atoi(env); err == nil {
 				cfg.MsgTimeout = val
@@ -338,7 +342,7 @@ func resolveConfig(c *Config) *Config {
 		}
 	}
 	if cfg.MsgTimeout < 1 {
-		cfg.MsgTimeout = 1
+		cfg.MsgTimeout = 100
 	}
 	if cfg.ValuesFileCap == 0 {
 		cfg.ValuesFileCap = math.MaxUint32
@@ -476,6 +480,17 @@ func resolveConfig(c *Config) *Config {
 	if cfg.OutPullReplicationBloomP < 0.000001 {
 		cfg.OutPullReplicationBloomP = 0.000001
 	}
+	if cfg.OutPullReplicationMsgTimeout == 0 {
+		cfg.OutPullReplicationMsgTimeout = cfg.MsgTimeout
+		if env := os.Getenv("VALUESTORE_OUT_PULL_REPLICATION_MSG_TIMEOUT"); env != "" {
+			if val, err := strconv.Atoi(env); err == nil {
+				cfg.OutPullReplicationMsgTimeout = val
+			}
+		}
+	}
+	if cfg.OutPullReplicationMsgTimeout < 1 {
+		cfg.OutPullReplicationMsgTimeout = 100
+	}
 	if cfg.InPullReplicationWorkers == 0 {
 		cfg.InPullReplicationWorkers = cfg.Workers
 		if env := os.Getenv("VALUESTORE_IN_PULL_REPLICATION_WORKERS"); env != "" {
@@ -498,16 +513,16 @@ func resolveConfig(c *Config) *Config {
 	if cfg.InPullReplicationMsgs < 1 {
 		cfg.InPullReplicationMsgs = 1
 	}
-	if cfg.InPullReplicationMsgTimeout == 0 {
-		cfg.InPullReplicationMsgTimeout = cfg.MsgTimeout
-		if env := os.Getenv("VALUESTORE_IN_PULL_REPLICATION_MSG_TIMEOUT"); env != "" {
+	if cfg.InPullReplicationResponseMsgTimeout == 0 {
+		cfg.InPullReplicationResponseMsgTimeout = cfg.MsgTimeout
+		if env := os.Getenv("VALUESTORE_IN_PULL_REPLICATION_RESPONSE_MSG_TIMEOUT"); env != "" {
 			if val, err := strconv.Atoi(env); err == nil {
-				cfg.InPullReplicationMsgTimeout = val
+				cfg.InPullReplicationResponseMsgTimeout = val
 			}
 		}
 	}
-	if cfg.InPullReplicationMsgTimeout < 1 {
-		cfg.InPullReplicationMsgTimeout = 1
+	if cfg.InPullReplicationResponseMsgTimeout < 1 {
+		cfg.InPullReplicationResponseMsgTimeout = 100
 	}
 	if cfg.OutPushReplicationInterval == 0 {
 		cfg.OutPushReplicationInterval = cfg.BackgroundInterval
@@ -541,6 +556,17 @@ func resolveConfig(c *Config) *Config {
 	}
 	if cfg.OutPushReplicationMsgs < 1 {
 		cfg.OutPushReplicationMsgs = 1
+	}
+	if cfg.OutPushReplicationMsgTimeout == 0 {
+		cfg.OutPushReplicationMsgTimeout = cfg.MsgTimeout
+		if env := os.Getenv("VALUESTORE_OUT_PUSH_REPLICATION_MSG_TIMEOUT"); env != "" {
+			if val, err := strconv.Atoi(env); err == nil {
+				cfg.OutPushReplicationMsgTimeout = val
+			}
+		}
+	}
+	if cfg.OutPushReplicationMsgTimeout < 1 {
+		cfg.OutPushReplicationMsgTimeout = 100
 	}
 	if cfg.BulkSetMsgCap == 0 {
 		cfg.BulkSetMsgCap = cfg.MsgCap
@@ -586,16 +612,16 @@ func resolveConfig(c *Config) *Config {
 	if cfg.InBulkSetMsgs < 1 {
 		cfg.InBulkSetMsgs = 1
 	}
-	if cfg.InBulkSetMsgTimeout == 0 {
-		cfg.InBulkSetMsgTimeout = cfg.MsgTimeout
-		if env := os.Getenv("VALUESTORE_IN_BULK_SET_MSG_TIMEOUT"); env != "" {
+	if cfg.InBulkSetResponseMsgTimeout == 0 {
+		cfg.InBulkSetResponseMsgTimeout = cfg.MsgTimeout
+		if env := os.Getenv("VALUESTORE_IN_BULK_SET_RESPONSE_MSG_TIMEOUT"); env != "" {
 			if val, err := strconv.Atoi(env); err == nil {
-				cfg.InBulkSetMsgTimeout = val
+				cfg.InBulkSetResponseMsgTimeout = val
 			}
 		}
 	}
-	if cfg.InBulkSetMsgTimeout < 1 {
-		cfg.InBulkSetMsgTimeout = 1
+	if cfg.InBulkSetResponseMsgTimeout < 1 {
+		cfg.InBulkSetResponseMsgTimeout = 100
 	}
 	if cfg.BulkSetAckMsgCap == 0 {
 		cfg.BulkSetAckMsgCap = cfg.MsgCap
@@ -629,17 +655,6 @@ func resolveConfig(c *Config) *Config {
 	}
 	if cfg.InBulkSetAckMsgs < 1 {
 		cfg.InBulkSetAckMsgs = 1
-	}
-	if cfg.InBulkSetAckMsgTimeout == 0 {
-		cfg.InBulkSetAckMsgTimeout = cfg.MsgTimeout
-		if env := os.Getenv("VALUESTORE_IN_BULK_SET_ACK_MSG_TIMEOUT"); env != "" {
-			if val, err := strconv.Atoi(env); err == nil {
-				cfg.InBulkSetAckMsgTimeout = val
-			}
-		}
-	}
-	if cfg.InBulkSetAckMsgTimeout < 1 {
-		cfg.InBulkSetAckMsgTimeout = 1
 	}
 	if cfg.OutBulkSetAckMsgs == 0 {
 		cfg.OutBulkSetAckMsgs = cfg.InBulkSetAckWorkers * 4

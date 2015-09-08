@@ -17,6 +17,7 @@ type pushReplicationState struct {
 	outMsgChan    chan *pullReplicationMsg
 	outLists      [][]uint64
 	outValBufs    [][]byte
+	outMsgTimeout time.Duration
 }
 
 func (vs *DefaultValueStore) pushReplicationConfig(cfg *Config) {
@@ -26,6 +27,7 @@ func (vs *DefaultValueStore) pushReplicationConfig(cfg *Config) {
 		vs.pushReplicationState.outMsgChan = make(chan *pullReplicationMsg, cfg.OutPushReplicationMsgs)
 	}
 	vs.pushReplicationState.outNotifyChan = make(chan *backgroundNotification, 1)
+	vs.pushReplicationState.outMsgTimeout = time.Duration(cfg.OutPushReplicationMsgTimeout) * time.Millisecond
 }
 
 func (vs *DefaultValueStore) pushReplicationLaunch() {
@@ -205,7 +207,7 @@ func (vs *DefaultValueStore) outPushReplicationPass() {
 				}
 			}
 		}
-		vs.msgRing.MsgToOtherReplicas(ringVersion, uint32(partition), bsm)
+		vs.msgRing.MsgToOtherReplicas(bsm, uint32(partition), vs.pushReplicationState.outMsgTimeout)
 	}
 	wg := &sync.WaitGroup{}
 	wg.Add(int(workerMax + 1))
