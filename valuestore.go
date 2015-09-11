@@ -124,7 +124,7 @@ type ValueStore interface {
 	EnableWrites()
 	DisableWrites()
 	Flush()
-	GatherStats(debug bool) (uint64, uint64, fmt.Stringer)
+	Stats(debug bool) (uint64, uint64, fmt.Stringer)
 	ValueCap() uint32
 }
 
@@ -921,7 +921,7 @@ func (vs *DefaultValueStore) recovery() {
 	wg.Wait()
 	if vs.logDebug != nil {
 		dur := time.Now().Sub(start)
-		valueCount, valueLength, _ := vs.GatherStats(false)
+		valueCount, valueLength, _ := vs.Stats(false)
 		vs.logInfo("%d key locations loaded in %s, %.0f/s; %d caused change; %d resulting locations referencing %d bytes.\n", fromDiskCount, dur, float64(fromDiskCount)/(float64(dur)/float64(time.Second)), causedChangeCount, valueCount, valueLength)
 	}
 }

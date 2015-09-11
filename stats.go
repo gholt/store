@@ -49,8 +49,13 @@ type valueStoreStats struct {
 	vlmDebugInfo               fmt.Stringer
 }
 
-// GatherStats returns overall information about the state of the ValueStore.
-func (vs *DefaultValueStore) GatherStats(debug bool) (uint64, uint64, fmt.Stringer) {
+// Stats returns overall information about the state of the ValueStore. Note
+// that this is a relatively expensive call; debug = true will make it even
+// more expensive.
+//
+// The various values reported by debugInfo are left undocumented because they
+// are subject to change based on implementation.
+func (vs *DefaultValueStore) Stats(debug bool) (uint64, uint64, fmt.Stringer) {
 	stats := &valueStoreStats{}
 	if debug {
 		stats.debug = debug
@@ -94,9 +99,9 @@ func (vs *DefaultValueStore) GatherStats(debug bool) (uint64, uint64, fmt.String
 		stats.valuesFileReaders = vs.valuesFileReaders
 		stats.checksumInterval = vs.checksumInterval
 		stats.replicationIgnoreRecent = int(vs.replicationIgnoreRecent / uint64(time.Second))
-		stats.vlmCount, stats.vlmLength, stats.vlmDebugInfo = vs.vlm.GatherStats(_TSB_INACTIVE, true)
+		stats.vlmCount, stats.vlmLength, stats.vlmDebugInfo = vs.vlm.Stats(_TSB_INACTIVE, true)
 	} else {
-		stats.vlmCount, stats.vlmLength, stats.vlmDebugInfo = vs.vlm.GatherStats(_TSB_INACTIVE, false)
+		stats.vlmCount, stats.vlmLength, stats.vlmDebugInfo = vs.vlm.Stats(_TSB_INACTIVE, false)
 	}
 	return stats.vlmCount, stats.vlmLength, stats
 }
