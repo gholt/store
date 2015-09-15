@@ -8,7 +8,19 @@ import (
 	"gopkg.in/gholt/brimtext.v1"
 )
 
-type valueStoreStats struct {
+type Stats struct {
+	// Values is the number of values in the ValueStore.
+	Values uint64
+	// ValuesBytes is the number of bytes of the values in the ValueStore.
+	ValueBytes uint64
+	// Writes is the number of calls to Write.
+	Writes int64
+	// WriteErrors is the number of errors returned by Write.
+	WriteErrors int64
+	// WritesOverridden is the number of calls to Write that resulted in no
+	// change.
+	WritesOverridden int64
+
 	debug                      bool
 	freeableVMChansCap         int
 	freeableVMChansIn          int
@@ -44,8 +56,6 @@ type valueStoreStats struct {
 	valuesFileReaders          int
 	checksumInterval           uint32
 	replicationIgnoreRecent    int
-	vlmCount                   uint64
-	vlmLength                  uint64
 	vlmDebugInfo               fmt.Stringer
 }
 
@@ -53,11 +63,31 @@ type valueStoreStats struct {
 // that this is a relatively expensive call; debug = true will make it even
 // more expensive.
 //
-// The various values reported by debugInfo are left undocumented because they
-// are subject to change based on implementation.
-func (vs *DefaultValueStore) Stats(debug bool) (uint64, uint64, fmt.Stringer) {
-	stats := &valueStoreStats{}
-	if debug {
+// The public counter fields returned in the Stats will reset with each read.
+// In other words, if Stats().WriteCount gives the value 10 and no more Writes
+// occur before Stats() is called again, that second Stats().WriteCount will
+// have the value 0.
+//
+// The various values reported when debug=true are left undocumented because
+// they are subject to change based on implementation. They are only provided
+// when the Stats.String() is called.
+func (vs *DefaultValueStore) Stats(debug bool) *Stats {
+	vs.statsLock.Lock()
+	stats := &Stats{
+		Writes:           atomic.LoadInt64(&vs.writes),
+		WriteErrors:      atomic.LoadInt64(&vs.writeErrors),
+		WritesOverridden: atomic.LoadInt64(&vs.writesOverridden),
+	}
+	atomic.AddInt64(&vs.writes, -stats.Writes)
+	atomic.AddInt64(&vs.writeErrors, -stats.WriteErrors)
+	atomic.AddInt64(&vs.writesOverridden, -stats.WritesOverridden)
+	vs.statsLock.Unlock()
+	if !debug {
+		vlmStats := vs.vlm.Stats(false)
+		stats.Values = vlmStats.ActiveCount
+		stats.ValueBytes = vlmStats.ActiveBytes
+		stats.vlmDebugInfo = vlmStats
+	} else {
 		stats.debug = debug
 		for i := 0; i < len(vs.freeableVMChans); i++ {
 			stats.freeableVMChansCap += cap(vs.freeableVMChans[i])
@@ -99,58 +129,61 @@ func (vs *DefaultValueStore) Stats(debug bool) (uint64, uint64, fmt.Stringer) {
 		stats.valuesFileReaders = vs.valuesFileReaders
 		stats.checksumInterval = vs.checksumInterval
 		stats.replicationIgnoreRecent = int(vs.replicationIgnoreRecent / uint64(time.Second))
-		stats.vlmCount, stats.vlmLength, stats.vlmDebugInfo = vs.vlm.Stats(_TSB_INACTIVE, true)
-	} else {
-		stats.vlmCount, stats.vlmLength, stats.vlmDebugInfo = vs.vlm.Stats(_TSB_INACTIVE, false)
+		vlmStats := vs.vlm.Stats(true)
+		stats.Values = vlmStats.ActiveCount
+		stats.ValueBytes = vlmStats.ActiveBytes
+		stats.vlmDebugInfo = vlmStats
 	}
-	return stats.vlmCount, stats.vlmLength, stats
+	return stats
 }
 
-func (stats *valueStoreStats) String() string {
-	if stats.debug {
-		return brimtext.Align([][]string{
-			[]string{"freeableVMChansCap", fmt.Sprintf("%d", stats.freeableVMChansCap)},
-			[]string{"freeableVMChansIn", fmt.Sprintf("%d", stats.freeableVMChansIn)},
-			[]string{"freeVMChanCap", fmt.Sprintf("%d", stats.freeVMChanCap)},
-			[]string{"freeVMChanIn", fmt.Sprintf("%d", stats.freeVMChanIn)},
-			[]string{"freeVWRChans", fmt.Sprintf("%d", stats.freeVWRChans)},
-			[]string{"freeVWRChansCap", fmt.Sprintf("%d", stats.freeVWRChansCap)},
-			[]string{"freeVWRChansIn", fmt.Sprintf("%d", stats.freeVWRChansIn)},
-			[]string{"pendingVWRChans", fmt.Sprintf("%d", stats.pendingVWRChans)},
-			[]string{"pendingVWRChansCap", fmt.Sprintf("%d", stats.pendingVWRChansCap)},
-			[]string{"pendingVWRChansIn", fmt.Sprintf("%d", stats.pendingVWRChansIn)},
-			[]string{"vfVMChanCap", fmt.Sprintf("%d", stats.vfVMChanCap)},
-			[]string{"vfVMChanIn", fmt.Sprintf("%d", stats.vfVMChanIn)},
-			[]string{"freeTOCBlockChanCap", fmt.Sprintf("%d", stats.freeTOCBlockChanCap)},
-			[]string{"freeTOCBlockChanIn", fmt.Sprintf("%d", stats.freeTOCBlockChanIn)},
-			[]string{"pendingTOCBlockChanCap", fmt.Sprintf("%d", stats.pendingTOCBlockChanCap)},
-			[]string{"pendingTOCBlockChanIn", fmt.Sprintf("%d", stats.pendingTOCBlockChanIn)},
-			[]string{"maxValueLocBlockID", fmt.Sprintf("%d", stats.maxValueLocBlockID)},
-			[]string{"path", stats.path},
-			[]string{"pathtoc", stats.pathtoc},
-			[]string{"workers", fmt.Sprintf("%d", stats.workers)},
-			[]string{"tombstoneDiscardInterval", fmt.Sprintf("%d", stats.tombstoneDiscardInterval)},
-			[]string{"outPullReplicationWorkers", fmt.Sprintf("%d", stats.outPullReplicationWorkers)},
-			[]string{"outPullReplicationInterval", fmt.Sprintf("%s", stats.outPullReplicationInterval)},
-			[]string{"outPushReplicationWorkers", fmt.Sprintf("%d", stats.outPushReplicationWorkers)},
-			[]string{"outPushReplicationInterval", fmt.Sprintf("%d", stats.outPushReplicationInterval)},
-			[]string{"valueCap", fmt.Sprintf("%d", stats.valueCap)},
-			[]string{"pageSize", fmt.Sprintf("%d", stats.pageSize)},
-			[]string{"minValueAlloc", fmt.Sprintf("%d", stats.minValueAlloc)},
-			[]string{"writePagesPerWorker", fmt.Sprintf("%d", stats.writePagesPerWorker)},
-			[]string{"tombstoneAge", fmt.Sprintf("%d", stats.tombstoneAge)},
-			[]string{"valuesFileCap", fmt.Sprintf("%d", stats.valuesFileCap)},
-			[]string{"valuesFileReaders", fmt.Sprintf("%d", stats.valuesFileReaders)},
-			[]string{"checksumInterval", fmt.Sprintf("%d", stats.checksumInterval)},
-			[]string{"replicationIgnoreRecent", fmt.Sprintf("%d", stats.replicationIgnoreRecent)},
-			[]string{"vlmCount", fmt.Sprintf("%d", stats.vlmCount)},
-			[]string{"vlmLength", fmt.Sprintf("%d", stats.vlmLength)},
-			[]string{"vlmDebugInfo", stats.vlmDebugInfo.String()},
-		}, nil)
-	} else {
-		return brimtext.Align([][]string{
-			[]string{"vlmCount", fmt.Sprintf("%d", stats.vlmCount)},
-			[]string{"vlmLength", fmt.Sprintf("%d", stats.vlmLength)},
-		}, nil)
+func (stats *Stats) String() string {
+	report := [][]string{
+		{"Values", fmt.Sprintf("%d", stats.Values)},
+		{"ValueBytes", fmt.Sprintf("%d", stats.ValueBytes)},
+		{"Writes", fmt.Sprintf("%d", stats.Writes)},
+		{"WriteErrors", fmt.Sprintf("%d", stats.WriteErrors)},
+		{"WritesOverridden", fmt.Sprintf("%d", stats.WritesOverridden)},
 	}
+	if stats.debug {
+		report = append(report, [][]string{
+			nil,
+			{"freeableVMChansCap", fmt.Sprintf("%d", stats.freeableVMChansCap)},
+			{"freeableVMChansIn", fmt.Sprintf("%d", stats.freeableVMChansIn)},
+			{"freeVMChanCap", fmt.Sprintf("%d", stats.freeVMChanCap)},
+			{"freeVMChanIn", fmt.Sprintf("%d", stats.freeVMChanIn)},
+			{"freeVWRChans", fmt.Sprintf("%d", stats.freeVWRChans)},
+			{"freeVWRChansCap", fmt.Sprintf("%d", stats.freeVWRChansCap)},
+			{"freeVWRChansIn", fmt.Sprintf("%d", stats.freeVWRChansIn)},
+			{"pendingVWRChans", fmt.Sprintf("%d", stats.pendingVWRChans)},
+			{"pendingVWRChansCap", fmt.Sprintf("%d", stats.pendingVWRChansCap)},
+			{"pendingVWRChansIn", fmt.Sprintf("%d", stats.pendingVWRChansIn)},
+			{"vfVMChanCap", fmt.Sprintf("%d", stats.vfVMChanCap)},
+			{"vfVMChanIn", fmt.Sprintf("%d", stats.vfVMChanIn)},
+			{"freeTOCBlockChanCap", fmt.Sprintf("%d", stats.freeTOCBlockChanCap)},
+			{"freeTOCBlockChanIn", fmt.Sprintf("%d", stats.freeTOCBlockChanIn)},
+			{"pendingTOCBlockChanCap", fmt.Sprintf("%d", stats.pendingTOCBlockChanCap)},
+			{"pendingTOCBlockChanIn", fmt.Sprintf("%d", stats.pendingTOCBlockChanIn)},
+			{"maxValueLocBlockID", fmt.Sprintf("%d", stats.maxValueLocBlockID)},
+			{"path", stats.path},
+			{"pathtoc", stats.pathtoc},
+			{"workers", fmt.Sprintf("%d", stats.workers)},
+			{"tombstoneDiscardInterval", fmt.Sprintf("%d", stats.tombstoneDiscardInterval)},
+			{"outPullReplicationWorkers", fmt.Sprintf("%d", stats.outPullReplicationWorkers)},
+			{"outPullReplicationInterval", fmt.Sprintf("%s", stats.outPullReplicationInterval)},
+			{"outPushReplicationWorkers", fmt.Sprintf("%d", stats.outPushReplicationWorkers)},
+			{"outPushReplicationInterval", fmt.Sprintf("%d", stats.outPushReplicationInterval)},
+			{"valueCap", fmt.Sprintf("%d", stats.valueCap)},
+			{"pageSize", fmt.Sprintf("%d", stats.pageSize)},
+			{"minValueAlloc", fmt.Sprintf("%d", stats.minValueAlloc)},
+			{"writePagesPerWorker", fmt.Sprintf("%d", stats.writePagesPerWorker)},
+			{"tombstoneAge", fmt.Sprintf("%d", stats.tombstoneAge)},
+			{"valuesFileCap", fmt.Sprintf("%d", stats.valuesFileCap)},
+			{"valuesFileReaders", fmt.Sprintf("%d", stats.valuesFileReaders)},
+			{"checksumInterval", fmt.Sprintf("%d", stats.checksumInterval)},
+			{"replicationIgnoreRecent", fmt.Sprintf("%d", stats.replicationIgnoreRecent)},
+			{"vlmDebugInfo", stats.vlmDebugInfo.String()},
+		}...)
+	}
+	return brimtext.Align(report, nil)
 }

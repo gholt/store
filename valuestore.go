@@ -124,7 +124,7 @@ type ValueStore interface {
 	EnableWrites()
 	DisableWrites()
 	Flush()
-	Stats(debug bool) (uint64, uint64, fmt.Stringer)
+	Stats(debug bool) *Stats
 	ValueCap() uint32
 }
 
@@ -172,6 +172,11 @@ type DefaultValueStore struct {
 	compactionState         compactionState
 	bulkSetState            bulkSetState
 	bulkSetAckState         bulkSetAckState
+
+	statsLock        sync.Mutex
+	writes           int64 // Calls to Write
+	writeErrors      int64 // Errors returned from Write
+	writesOverridden int64 // Calls to Write that resulted in no change
 }
 
 type valueWriteReq struct {
@@ -211,6 +216,7 @@ func New(c *Config) *DefaultValueStore {
 	if vlm == nil {
 		vlm = valuelocmap.New(nil)
 	}
+	vlm.SetInactiveMask(_TSB_INACTIVE)
 	vs := &DefaultValueStore{
 		logCritical:             cfg.LogCritical,
 		logError:                cfg.LogError,
@@ -389,13 +395,22 @@ func (vs *DefaultValueStore) read(keyA uint64, keyB uint64, value []byte) (uint6
 // in place is not reported as an error. Note that with a write and a delete
 // for the exact same timestampmicro, the delete wins.
 func (vs *DefaultValueStore) Write(keyA uint64, keyB uint64, timestampmicro int64, value []byte) (int64, error) {
+	atomic.AddInt64(&vs.writes, 1)
 	if timestampmicro < TIMESTAMPMICRO_MIN {
+		atomic.AddInt64(&vs.writeErrors, 1)
 		return 0, fmt.Errorf("timestamp %d < %d", timestampmicro, TIMESTAMPMICRO_MIN)
 	}
 	if timestampmicro > TIMESTAMPMICRO_MAX {
+		atomic.AddInt64(&vs.writeErrors, 1)
 		return 0, fmt.Errorf("timestamp %d > %d", timestampmicro, TIMESTAMPMICRO_MAX)
 	}
 	timestampbits, err := vs.write(keyA, keyB, uint64(timestampmicro)<<_TSB_UTIL_BITS, value)
+	if err != nil {
+		atomic.AddInt64(&vs.writeErrors, 1)
+	}
+	if timestampmicro <= int64(timestampbits>>_TSB_UTIL_BITS) {
+		atomic.AddInt64(&vs.writesOverridden, 1)
+	}
 	return int64(timestampbits >> _TSB_UTIL_BITS), err
 }
 
@@ -921,7 +936,7 @@ func (vs *DefaultValueStore) recovery() {
 	wg.Wait()
 	if vs.logDebug != nil {
 		dur := time.Now().Sub(start)
-		valueCount, valueLength, _ := vs.Stats(false)
-		vs.logInfo("%d key locations loaded in %s, %.0f/s; %d caused change; %d resulting locations referencing %d bytes.\n", fromDiskCount, dur, float64(fromDiskCount)/(float64(dur)/float64(time.Second)), causedChangeCount, valueCount, valueLength)
+		stats := vs.Stats(false)
+		vs.logInfo("%d key locations loaded in %s, %.0f/s; %d caused change; %d resulting locations referencing %d bytes.\n", fromDiskCount, dur, float64(fromDiskCount)/(float64(dur)/float64(time.Second)), causedChangeCount, stats.Values, stats.ValueBytes)
 	}
 }
