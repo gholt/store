@@ -173,10 +173,17 @@ type DefaultValueStore struct {
 	bulkSetState            bulkSetState
 	bulkSetAckState         bulkSetAckState
 
-	statsLock        sync.Mutex
-	writes           int64 // Calls to Write
-	writeErrors      int64 // Errors returned from Write
-	writesOverridden int64 // Calls to Write that resulted in no change
+	statsLock         sync.Mutex
+	lookups           int32 // Calls to Lookup
+	lookupErrors      int32 // Errors returned from Lookup
+	reads             int32 // Calls to Read
+	readErrors        int32 // Errors returned from Read
+	writes            int32 // Calls to Write
+	writeErrors       int32 // Errors returned from Write
+	writesOverridden  int32 // Calls to Write that resulted in no change
+	deletes           int32 // Calls to Delete
+	deleteErrors      int32 // Errors returned from Delete
+	deletesOverridden int32 // Calls to Delete that resulted in no change
 }
 
 type valueWriteReq struct {
@@ -358,7 +365,11 @@ func (vs *DefaultValueStore) Flush() {
 // was not known at all whereas err == ErrNotFound with timestampmicro != 0
 // indicates keyA, keyB was known and had a deletion marker (aka tombstone).
 func (vs *DefaultValueStore) Lookup(keyA uint64, keyB uint64) (int64, uint32, error) {
+	atomic.AddInt32(&vs.lookups, 1)
 	timestampbits, _, length, err := vs.lookup(keyA, keyB)
+	if err != nil {
+		atomic.AddInt32(&vs.lookupErrors, 1)
+	}
 	return int64(timestampbits >> _TSB_UTIL_BITS), length, err
 }
 
@@ -378,7 +389,11 @@ func (vs *DefaultValueStore) lookup(keyA, keyB uint64) (uint64, uint32, uint32, 
 // was not known at all whereas err == ErrNotFound with timestampmicro != 0
 // indicates keyA, keyB was known and had a deletion marker (aka tombstone).
 func (vs *DefaultValueStore) Read(keyA uint64, keyB uint64, value []byte) (int64, []byte, error) {
+	atomic.AddInt32(&vs.reads, 1)
 	timestampbits, value, err := vs.read(keyA, keyB, value)
+	if err != nil {
+		atomic.AddInt32(&vs.readErrors, 1)
+	}
 	return int64(timestampbits >> _TSB_UTIL_BITS), value, err
 }
 
@@ -395,21 +410,21 @@ func (vs *DefaultValueStore) read(keyA uint64, keyB uint64, value []byte) (uint6
 // in place is not reported as an error. Note that with a write and a delete
 // for the exact same timestampmicro, the delete wins.
 func (vs *DefaultValueStore) Write(keyA uint64, keyB uint64, timestampmicro int64, value []byte) (int64, error) {
-	atomic.AddInt64(&vs.writes, 1)
+	atomic.AddInt32(&vs.writes, 1)
 	if timestampmicro < TIMESTAMPMICRO_MIN {
-		atomic.AddInt64(&vs.writeErrors, 1)
+		atomic.AddInt32(&vs.writeErrors, 1)
 		return 0, fmt.Errorf("timestamp %d < %d", timestampmicro, TIMESTAMPMICRO_MIN)
 	}
 	if timestampmicro > TIMESTAMPMICRO_MAX {
-		atomic.AddInt64(&vs.writeErrors, 1)
+		atomic.AddInt32(&vs.writeErrors, 1)
 		return 0, fmt.Errorf("timestamp %d > %d", timestampmicro, TIMESTAMPMICRO_MAX)
 	}
 	timestampbits, err := vs.write(keyA, keyB, uint64(timestampmicro)<<_TSB_UTIL_BITS, value)
 	if err != nil {
-		atomic.AddInt64(&vs.writeErrors, 1)
+		atomic.AddInt32(&vs.writeErrors, 1)
 	}
 	if timestampmicro <= int64(timestampbits>>_TSB_UTIL_BITS) {
-		atomic.AddInt64(&vs.writesOverridden, 1)
+		atomic.AddInt32(&vs.writesOverridden, 1)
 	}
 	return int64(timestampbits >> _TSB_UTIL_BITS), err
 }
@@ -434,13 +449,22 @@ func (vs *DefaultValueStore) write(keyA uint64, keyB uint64, timestampbits uint6
 // in place is not reported as an error. Note that with a write and a delete
 // for the exact same timestampmicro, the delete wins.
 func (vs *DefaultValueStore) Delete(keyA uint64, keyB uint64, timestampmicro int64) (int64, error) {
+	atomic.AddInt32(&vs.deletes, 1)
 	if timestampmicro < TIMESTAMPMICRO_MIN {
+		atomic.AddInt32(&vs.deleteErrors, 1)
 		return 0, fmt.Errorf("timestamp %d < %d", timestampmicro, TIMESTAMPMICRO_MIN)
 	}
 	if timestampmicro > TIMESTAMPMICRO_MAX {
+		atomic.AddInt32(&vs.deleteErrors, 1)
 		return 0, fmt.Errorf("timestamp %d > %d", timestampmicro, TIMESTAMPMICRO_MAX)
 	}
 	ptimestampbits, err := vs.write(keyA, keyB, (uint64(timestampmicro)<<_TSB_UTIL_BITS)|_TSB_DELETION, nil)
+	if err != nil {
+		atomic.AddInt32(&vs.deleteErrors, 1)
+	}
+	if timestampmicro <= int64(ptimestampbits>>_TSB_UTIL_BITS) {
+		atomic.AddInt32(&vs.deletesOverridden, 1)
+	}
 	return int64(ptimestampbits >> _TSB_UTIL_BITS), err
 }
 

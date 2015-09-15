@@ -13,13 +13,28 @@ type Stats struct {
 	Values uint64
 	// ValuesBytes is the number of bytes of the values in the ValueStore.
 	ValueBytes uint64
+	// Lookups is the number of calls to Lookup.
+	Lookups int32
+	// LookupErrors is the number of errors returned by Lookup.
+	LookupErrors int32
+	// Reads is the number of calls to Read.
+	Reads int32
+	// ReadErrors is the number of errors returned by Read.
+	ReadErrors int32
 	// Writes is the number of calls to Write.
-	Writes int64
+	Writes int32
 	// WriteErrors is the number of errors returned by Write.
-	WriteErrors int64
+	WriteErrors int32
 	// WritesOverridden is the number of calls to Write that resulted in no
 	// change.
-	WritesOverridden int64
+	WritesOverridden int32
+	// Deletes is the number of calls to Delete.
+	Deletes int32
+	// DeleteErrors is the number of errors returned by Delete.
+	DeleteErrors int32
+	// DeletesOverridden is the number of calls to Delete that resulted in no
+	// change.
+	DeletesOverridden int32
 
 	debug                      bool
 	freeableVMChansCap         int
@@ -74,13 +89,27 @@ type Stats struct {
 func (vs *DefaultValueStore) Stats(debug bool) *Stats {
 	vs.statsLock.Lock()
 	stats := &Stats{
-		Writes:           atomic.LoadInt64(&vs.writes),
-		WriteErrors:      atomic.LoadInt64(&vs.writeErrors),
-		WritesOverridden: atomic.LoadInt64(&vs.writesOverridden),
+		Lookups:           atomic.LoadInt32(&vs.lookups),
+		LookupErrors:      atomic.LoadInt32(&vs.lookupErrors),
+		Reads:             atomic.LoadInt32(&vs.reads),
+		ReadErrors:        atomic.LoadInt32(&vs.readErrors),
+		Writes:            atomic.LoadInt32(&vs.writes),
+		WriteErrors:       atomic.LoadInt32(&vs.writeErrors),
+		WritesOverridden:  atomic.LoadInt32(&vs.writesOverridden),
+		Deletes:           atomic.LoadInt32(&vs.deletes),
+		DeleteErrors:      atomic.LoadInt32(&vs.deleteErrors),
+		DeletesOverridden: atomic.LoadInt32(&vs.deletesOverridden),
 	}
-	atomic.AddInt64(&vs.writes, -stats.Writes)
-	atomic.AddInt64(&vs.writeErrors, -stats.WriteErrors)
-	atomic.AddInt64(&vs.writesOverridden, -stats.WritesOverridden)
+	atomic.AddInt32(&vs.lookups, -stats.Lookups)
+	atomic.AddInt32(&vs.lookupErrors, -stats.LookupErrors)
+	atomic.AddInt32(&vs.reads, -stats.Reads)
+	atomic.AddInt32(&vs.readErrors, -stats.ReadErrors)
+	atomic.AddInt32(&vs.writes, -stats.Writes)
+	atomic.AddInt32(&vs.writeErrors, -stats.WriteErrors)
+	atomic.AddInt32(&vs.writesOverridden, -stats.WritesOverridden)
+	atomic.AddInt32(&vs.writes, -stats.Deletes)
+	atomic.AddInt32(&vs.writeErrors, -stats.DeleteErrors)
+	atomic.AddInt32(&vs.writesOverridden, -stats.DeletesOverridden)
 	vs.statsLock.Unlock()
 	if !debug {
 		vlmStats := vs.vlm.Stats(false)
@@ -141,9 +170,16 @@ func (stats *Stats) String() string {
 	report := [][]string{
 		{"Values", fmt.Sprintf("%d", stats.Values)},
 		{"ValueBytes", fmt.Sprintf("%d", stats.ValueBytes)},
+		{"Lookups", fmt.Sprintf("%d", stats.Lookups)},
+		{"LookupErrors", fmt.Sprintf("%d", stats.LookupErrors)},
+		{"Reads", fmt.Sprintf("%d", stats.Reads)},
+		{"ReadErrors", fmt.Sprintf("%d", stats.ReadErrors)},
 		{"Writes", fmt.Sprintf("%d", stats.Writes)},
 		{"WriteErrors", fmt.Sprintf("%d", stats.WriteErrors)},
 		{"WritesOverridden", fmt.Sprintf("%d", stats.WritesOverridden)},
+		{"Deletes", fmt.Sprintf("%d", stats.Deletes)},
+		{"DeleteErrors", fmt.Sprintf("%d", stats.DeleteErrors)},
+		{"DeletesOverridden", fmt.Sprintf("%d", stats.DeletesOverridden)},
 	}
 	if stats.debug {
 		report = append(report, [][]string{
