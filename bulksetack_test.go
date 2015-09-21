@@ -58,7 +58,7 @@ func TestBulkSetAckReadLowSendCap(t *testing.T) {
 }
 
 func TestBulkSetAckMsgIncoming(t *testing.T) {
-	b := ring.NewBuilder()
+	b := ring.NewBuilder(64)
 	n := b.AddNode(true, 1, nil, nil, "", nil)
 	r := b.Ring()
 	r.SetLocalNode(n.ID() + 1) // so we're not responsible for anything

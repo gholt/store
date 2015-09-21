@@ -50,7 +50,7 @@ func (m *msgRingPullReplicationTester) MsgToOtherReplicas(msg ring.Msg, partitio
 }
 
 func TestPullReplicationSimple(t *testing.T) {
-	b := ring.NewBuilder()
+	b := ring.NewBuilder(64)
 	b.SetReplicaCount(2)
 	n := b.AddNode(true, 1, nil, nil, "", nil)
 	b.AddNode(true, 1, nil, nil, "", nil)

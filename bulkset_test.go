@@ -158,7 +158,7 @@ func TestBulkSetReadLowSendCap(t *testing.T) {
 }
 
 func TestBulkSetMsgWithoutAck(t *testing.T) {
-	b := ring.NewBuilder()
+	b := ring.NewBuilder(64)
 	n := b.AddNode(true, 1, nil, nil, "", nil)
 	r := b.Ring()
 	r.SetLocalNode(n.ID())
@@ -198,7 +198,7 @@ func TestBulkSetMsgWithoutAck(t *testing.T) {
 }
 
 func TestBulkSetMsgWithAck(t *testing.T) {
-	b := ring.NewBuilder()
+	b := ring.NewBuilder(64)
 	n := b.AddNode(true, 1, nil, nil, "", nil)
 	r := b.Ring()
 	r.SetLocalNode(n.ID())
@@ -338,7 +338,7 @@ func TestBulkSetMsgOut(t *testing.T) {
 }
 
 func TestBulkSetMsgOutDefaultsToFromLocalNode(t *testing.T) {
-	b := ring.NewBuilder()
+	b := ring.NewBuilder(64)
 	n := b.AddNode(true, 1, nil, nil, "", nil)
 	r := b.Ring()
 	r.SetLocalNode(n.ID())
