@@ -52,15 +52,21 @@ func (m *msgRingPullReplicationTester) MsgToOtherReplicas(msg ring.Msg, partitio
 func TestPullReplicationSimple(t *testing.T) {
 	b := ring.NewBuilder(64)
 	b.SetReplicaCount(2)
-	n := b.AddNode(true, 1, nil, nil, "", nil)
-	b.AddNode(true, 1, nil, nil, "", nil)
+	n, err := b.AddNode(true, 1, nil, nil, "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = b.AddNode(true, 1, nil, nil, "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
 	r := b.Ring()
 	r.SetLocalNode(n.ID())
 	m := &msgRingPullReplicationTester{ring: r}
 	vs := New(&Config{MsgRing: m})
 	vs.EnableAll()
 	defer vs.DisableAll()
-	_, err := vs.write(1, 2, 0x300, []byte("testing"))
+	_, err = vs.write(1, 2, 0x300, []byte("testing"))
 	if err != nil {
 		t.Fatal(err)
 	}

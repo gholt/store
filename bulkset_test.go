@@ -159,7 +159,10 @@ func TestBulkSetReadLowSendCap(t *testing.T) {
 
 func TestBulkSetMsgWithoutAck(t *testing.T) {
 	b := ring.NewBuilder(64)
-	n := b.AddNode(true, 1, nil, nil, "", nil)
+	n, err := b.AddNode(true, 1, nil, nil, "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
 	r := b.Ring()
 	r.SetLocalNode(n.ID())
 	m := &msgRingPlaceholder{ring: r}
@@ -199,7 +202,10 @@ func TestBulkSetMsgWithoutAck(t *testing.T) {
 
 func TestBulkSetMsgWithAck(t *testing.T) {
 	b := ring.NewBuilder(64)
-	n := b.AddNode(true, 1, nil, nil, "", nil)
+	n, err := b.AddNode(true, 1, nil, nil, "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
 	r := b.Ring()
 	r.SetLocalNode(n.ID())
 	m := &msgRingPlaceholder{ring: r}
@@ -339,7 +345,10 @@ func TestBulkSetMsgOut(t *testing.T) {
 
 func TestBulkSetMsgOutDefaultsToFromLocalNode(t *testing.T) {
 	b := ring.NewBuilder(64)
-	n := b.AddNode(true, 1, nil, nil, "", nil)
+	n, err := b.AddNode(true, 1, nil, nil, "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
 	r := b.Ring()
 	r.SetLocalNode(n.ID())
 	vs := New(&Config{MsgRing: &msgRingPlaceholder{ring: r}})
