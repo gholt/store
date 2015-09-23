@@ -35,6 +35,25 @@ type Stats struct {
 	// DeletesOverridden is the number of calls to Delete that resulted in no
 	// change.
 	DeletesOverridden int32
+	// InBulkSets is the number of incoming bulk-set messages.
+	InBulkSets int32
+	// InBulkSetDrops is the number of incoming bulk-set messages dropped due
+	// to the local system being overworked at the time.
+	InBulkSetDrops int32
+	// InBulkSetInvalids is the number of incoming bulk-set messages that
+	// couldn't be parsed.
+	InBulkSetInvalids int32
+	// InBulkSetWrites is the number of writes due to incoming bulk-set
+	// messages.
+	InBulkSetWrites int32
+	// InBulkSetWriteErrors is the number of errors returned from writes due to
+	// incoming bulk-set messages.
+	InBulkSetWriteErrors int32
+	// InBulkSetWritesOverridden is the number of writes from incoming bulk-set
+	// messages that result in no change.
+	InBulkSetWritesOverridden int32
+	// OutBulkSetAcks is the number of outgoing bulk-set-ack messages.
+	OutBulkSetAcks int32
 
 	debug                      bool
 	freeableVMChansCap         int
@@ -86,19 +105,26 @@ type Stats struct {
 // The various values reported when debug=true are left undocumented because
 // they are subject to change based on implementation. They are only provided
 // when the Stats.String() is called.
-func (vs *DefaultValueStore) Stats(debug bool) *Stats {
+func (vs *DefaultValueStore) Stats(debug bool) fmt.Stringer {
 	vs.statsLock.Lock()
 	stats := &Stats{
-		Lookups:           atomic.LoadInt32(&vs.lookups),
-		LookupErrors:      atomic.LoadInt32(&vs.lookupErrors),
-		Reads:             atomic.LoadInt32(&vs.reads),
-		ReadErrors:        atomic.LoadInt32(&vs.readErrors),
-		Writes:            atomic.LoadInt32(&vs.writes),
-		WriteErrors:       atomic.LoadInt32(&vs.writeErrors),
-		WritesOverridden:  atomic.LoadInt32(&vs.writesOverridden),
-		Deletes:           atomic.LoadInt32(&vs.deletes),
-		DeleteErrors:      atomic.LoadInt32(&vs.deleteErrors),
-		DeletesOverridden: atomic.LoadInt32(&vs.deletesOverridden),
+		Lookups:                   atomic.LoadInt32(&vs.lookups),
+		LookupErrors:              atomic.LoadInt32(&vs.lookupErrors),
+		Reads:                     atomic.LoadInt32(&vs.reads),
+		ReadErrors:                atomic.LoadInt32(&vs.readErrors),
+		Writes:                    atomic.LoadInt32(&vs.writes),
+		WriteErrors:               atomic.LoadInt32(&vs.writeErrors),
+		WritesOverridden:          atomic.LoadInt32(&vs.writesOverridden),
+		Deletes:                   atomic.LoadInt32(&vs.deletes),
+		DeleteErrors:              atomic.LoadInt32(&vs.deleteErrors),
+		DeletesOverridden:         atomic.LoadInt32(&vs.deletesOverridden),
+		InBulkSets:                atomic.LoadInt32(&vs.inBulkSets),
+		InBulkSetDrops:            atomic.LoadInt32(&vs.inBulkSetDrops),
+		InBulkSetInvalids:         atomic.LoadInt32(&vs.inBulkSetInvalids),
+		InBulkSetWrites:           atomic.LoadInt32(&vs.inBulkSetWrites),
+		InBulkSetWriteErrors:      atomic.LoadInt32(&vs.inBulkSetWriteErrors),
+		InBulkSetWritesOverridden: atomic.LoadInt32(&vs.inBulkSetWritesOverridden),
+		OutBulkSetAcks:            atomic.LoadInt32(&vs.outBulkSetAcks),
 	}
 	atomic.AddInt32(&vs.lookups, -stats.Lookups)
 	atomic.AddInt32(&vs.lookupErrors, -stats.LookupErrors)
@@ -110,6 +136,13 @@ func (vs *DefaultValueStore) Stats(debug bool) *Stats {
 	atomic.AddInt32(&vs.writes, -stats.Deletes)
 	atomic.AddInt32(&vs.writeErrors, -stats.DeleteErrors)
 	atomic.AddInt32(&vs.writesOverridden, -stats.DeletesOverridden)
+	atomic.AddInt32(&vs.inBulkSets, -stats.InBulkSets)
+	atomic.AddInt32(&vs.inBulkSetDrops, -stats.InBulkSetDrops)
+	atomic.AddInt32(&vs.inBulkSetInvalids, -stats.InBulkSetInvalids)
+	atomic.AddInt32(&vs.inBulkSetWrites, -stats.InBulkSetWrites)
+	atomic.AddInt32(&vs.inBulkSetWriteErrors, -stats.InBulkSetWriteErrors)
+	atomic.AddInt32(&vs.inBulkSetWritesOverridden, -stats.InBulkSetWritesOverridden)
+	atomic.AddInt32(&vs.outBulkSetAcks, -stats.OutBulkSetAcks)
 	vs.statsLock.Unlock()
 	if !debug {
 		vlmStats := vs.vlm.Stats(false)
@@ -180,6 +213,13 @@ func (stats *Stats) String() string {
 		{"Deletes", fmt.Sprintf("%d", stats.Deletes)},
 		{"DeleteErrors", fmt.Sprintf("%d", stats.DeleteErrors)},
 		{"DeletesOverridden", fmt.Sprintf("%d", stats.DeletesOverridden)},
+		{"InBulkSets", fmt.Sprintf("%d", stats.InBulkSets)},
+		{"InBulkSetDrops", fmt.Sprintf("%d", stats.InBulkSetDrops)},
+		{"InBulkSetInvalids", fmt.Sprintf("%d", stats.InBulkSetInvalids)},
+		{"InBulkSetWrites", fmt.Sprintf("%d", stats.InBulkSetWrites)},
+		{"InBulkSetWriteErrors", fmt.Sprintf("%d", stats.InBulkSetWriteErrors)},
+		{"InBulkSetWritesOverridden", fmt.Sprintf("%d", stats.InBulkSetWritesOverridden)},
+		{"OutBulkSetAcks", fmt.Sprintf("%d", stats.OutBulkSetAcks)},
 	}
 	if stats.debug {
 		report = append(report, [][]string{

@@ -124,7 +124,7 @@ type ValueStore interface {
 	EnableWrites()
 	DisableWrites()
 	Flush()
-	Stats(debug bool) *Stats
+	Stats(debug bool) fmt.Stringer
 	ValueCap() uint32
 }
 
@@ -173,17 +173,24 @@ type DefaultValueStore struct {
 	bulkSetState            bulkSetState
 	bulkSetAckState         bulkSetAckState
 
-	statsLock         sync.Mutex
-	lookups           int32 // Calls to Lookup
-	lookupErrors      int32 // Errors returned from Lookup
-	reads             int32 // Calls to Read
-	readErrors        int32 // Errors returned from Read
-	writes            int32 // Calls to Write
-	writeErrors       int32 // Errors returned from Write
-	writesOverridden  int32 // Calls to Write that resulted in no change
-	deletes           int32 // Calls to Delete
-	deleteErrors      int32 // Errors returned from Delete
-	deletesOverridden int32 // Calls to Delete that resulted in no change
+	statsLock                 sync.Mutex
+	lookups                   int32
+	lookupErrors              int32
+	reads                     int32
+	readErrors                int32
+	writes                    int32
+	writeErrors               int32
+	writesOverridden          int32
+	deletes                   int32
+	deleteErrors              int32
+	deletesOverridden         int32
+	inBulkSets                int32
+	inBulkSetDrops            int32
+	inBulkSetInvalids         int32
+	inBulkSetWrites           int32
+	inBulkSetWriteErrors      int32
+	inBulkSetWritesOverridden int32
+	outBulkSetAcks            int32
 }
 
 type valueWriteReq struct {
@@ -960,7 +967,7 @@ func (vs *DefaultValueStore) recovery() {
 	wg.Wait()
 	if vs.logDebug != nil {
 		dur := time.Now().Sub(start)
-		stats := vs.Stats(false)
+		stats := vs.Stats(false).(*Stats)
 		vs.logInfo("%d key locations loaded in %s, %.0f/s; %d caused change; %d resulting locations referencing %d bytes.\n", fromDiskCount, dur, float64(fromDiskCount)/(float64(dur)/float64(time.Second)), causedChangeCount, stats.Values, stats.ValueBytes)
 	}
 }

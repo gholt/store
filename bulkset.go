@@ -3,6 +3,7 @@ package valuestore
 import (
 	"encoding/binary"
 	"io"
+	"sync/atomic"
 	"time"
 )
 
@@ -83,9 +84,11 @@ func (vs *DefaultValueStore) newInBulkSetMsg(r io.Reader, l uint64) (uint64, err
 			sn, err = r.Read(t)
 			left -= uint64(sn)
 			if err != nil {
+				atomic.AddInt32(&vs.inBulkSetInvalids, 1)
 				return l - left, err
 			}
 		}
+		atomic.AddInt32(&vs.inBulkSetDrops, 1)
 		return l, nil
 	}
 	// If the message is obviously too short, just throw it away.
@@ -102,9 +105,11 @@ func (vs *DefaultValueStore) newInBulkSetMsg(r io.Reader, l uint64) (uint64, err
 			sn, err = r.Read(t)
 			left -= uint64(sn)
 			if err != nil {
+				atomic.AddInt32(&vs.inBulkSetInvalids, 1)
 				return l - left, err
 			}
 		}
+		atomic.AddInt32(&vs.inBulkSetInvalids, 1)
 		return l, nil
 	}
 	var n int
@@ -115,6 +120,7 @@ func (vs *DefaultValueStore) newInBulkSetMsg(r io.Reader, l uint64) (uint64, err
 		n += sn
 		if err != nil {
 			vs.bulkSetState.inFreeMsgChan <- bsm
+			atomic.AddInt32(&vs.inBulkSetInvalids, 1)
 			return uint64(n), err
 		}
 	}
@@ -140,10 +146,12 @@ func (vs *DefaultValueStore) newInBulkSetMsg(r io.Reader, l uint64) (uint64, err
 		n += sn
 		if err != nil {
 			vs.bulkSetState.inFreeMsgChan <- bsm
+			atomic.AddInt32(&vs.inBulkSetInvalids, 1)
 			return uint64(len(bsm.header)) + uint64(n), err
 		}
 	}
 	vs.bulkSetState.inMsgChan <- bsm
+	atomic.AddInt32(&vs.inBulkSets, 1)
 	return uint64(len(bsm.header)) + l, nil
 }
 
@@ -160,6 +168,7 @@ func (vs *DefaultValueStore) inBulkSet(doneChan chan struct{}) {
 		ring := vs.msgRing.Ring()
 		var rightwardPartitionShift uint64
 		var bsam *bulkSetAckMsg
+		var rtimestampbits uint64
 		if ring != nil {
 			rightwardPartitionShift = 64 - uint64(ring.PartitionBitCount())
 			// Only ack if there is someone to ack to, which should always be
@@ -173,8 +182,14 @@ func (vs *DefaultValueStore) inBulkSet(doneChan chan struct{}) {
 			keyB := binary.BigEndian.Uint64(body[8:])
 			timestampbits := binary.BigEndian.Uint64(body[16:])
 			l := binary.BigEndian.Uint32(body[24:])
+			atomic.AddInt32(&vs.inBulkSetWrites, 1)
 			// Attempt to store everything received...
-			_, err = vs.write(keyA, keyB, timestampbits, body[_BULK_SET_MSG_ENTRY_HEADER_LENGTH:_BULK_SET_MSG_ENTRY_HEADER_LENGTH+l])
+			rtimestampbits, err = vs.write(keyA, keyB, timestampbits, body[_BULK_SET_MSG_ENTRY_HEADER_LENGTH:_BULK_SET_MSG_ENTRY_HEADER_LENGTH+l])
+			if err != nil {
+				atomic.AddInt32(&vs.inBulkSetWriteErrors, 1)
+			} else if rtimestampbits != timestampbits {
+				atomic.AddInt32(&vs.inBulkSetWritesOverridden, 1)
+			}
 			// But only ack on success, there is someone to ack to, and the
 			// local node is responsible for the data.
 			if err == nil && bsam != nil && ring != nil && ring.Responsible(uint32(keyA>>rightwardPartitionShift)) {
@@ -183,6 +198,7 @@ func (vs *DefaultValueStore) inBulkSet(doneChan chan struct{}) {
 			body = body[_BULK_SET_MSG_ENTRY_HEADER_LENGTH+l:]
 		}
 		if bsam != nil {
+			atomic.AddInt32(&vs.outBulkSetAcks, 1)
 			vs.msgRing.MsgToNode(bsam, bsm.nodeID(), vs.bulkSetState.inResponseMsgTimeout)
 		}
 		vs.bulkSetState.inFreeMsgChan <- bsm
