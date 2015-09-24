@@ -35,6 +35,11 @@ type Stats struct {
 	// DeletesOverridden is the number of calls to Delete that resulted in no
 	// change.
 	DeletesOverridden int32
+	// OutBulkSets is the number of outgoing bulk-set messages.
+	OutBulkSets int32
+	// OutBulkSetValues is the number of values outgoing bulk-set messages have
+	// contained.
+	OutBulkSetValues int32
 	// InBulkSets is the number of incoming bulk-set messages.
 	InBulkSets int32
 	// InBulkSetDrops is the number of incoming bulk-set messages dropped due
@@ -71,6 +76,16 @@ type Stats struct {
 	// InBulkSetAckWritesOverridden is the number of writes from incoming
 	// bulk-set-ack messages that result in no change.
 	InBulkSetAckWritesOverridden int32
+	// OutPullReplications is the number of outgoing pull-replication messages.
+	OutPullReplications int32
+	// InPullReplications is the number of incoming pull-replication messages.
+	InPullReplications int32
+	// InPullReplicationDrops is the number of incoming pull-replication
+	// messages droppped due to the local system being overworked at the time.
+	InPullReplicationDrops int32
+	// InPullReplicationInvalids is the number of incoming pull-replication
+	// messages that couldn't be parsed.
+	InPullReplicationInvalids int32
 
 	debug                      bool
 	freeableVMChansCap         int
@@ -135,6 +150,8 @@ func (vs *DefaultValueStore) Stats(debug bool) fmt.Stringer {
 		Deletes:                      atomic.LoadInt32(&vs.deletes),
 		DeleteErrors:                 atomic.LoadInt32(&vs.deleteErrors),
 		DeletesOverridden:            atomic.LoadInt32(&vs.deletesOverridden),
+		OutBulkSets:                  atomic.LoadInt32(&vs.outBulkSets),
+		OutBulkSetValues:             atomic.LoadInt32(&vs.outBulkSetValues),
 		InBulkSets:                   atomic.LoadInt32(&vs.inBulkSets),
 		InBulkSetDrops:               atomic.LoadInt32(&vs.inBulkSetDrops),
 		InBulkSetInvalids:            atomic.LoadInt32(&vs.inBulkSetInvalids),
@@ -148,6 +165,10 @@ func (vs *DefaultValueStore) Stats(debug bool) fmt.Stringer {
 		InBulkSetAckWrites:           atomic.LoadInt32(&vs.inBulkSetAckWrites),
 		InBulkSetAckWriteErrors:      atomic.LoadInt32(&vs.inBulkSetAckWriteErrors),
 		InBulkSetAckWritesOverridden: atomic.LoadInt32(&vs.inBulkSetAckWritesOverridden),
+		OutPullReplications:          atomic.LoadInt32(&vs.outPullReplications),
+		InPullReplications:           atomic.LoadInt32(&vs.inPullReplications),
+		InPullReplicationDrops:       atomic.LoadInt32(&vs.inPullReplicationDrops),
+		InPullReplicationInvalids:    atomic.LoadInt32(&vs.inPullReplicationInvalids),
 	}
 	atomic.AddInt32(&vs.lookups, -stats.Lookups)
 	atomic.AddInt32(&vs.lookupErrors, -stats.LookupErrors)
@@ -159,6 +180,8 @@ func (vs *DefaultValueStore) Stats(debug bool) fmt.Stringer {
 	atomic.AddInt32(&vs.writes, -stats.Deletes)
 	atomic.AddInt32(&vs.writeErrors, -stats.DeleteErrors)
 	atomic.AddInt32(&vs.writesOverridden, -stats.DeletesOverridden)
+	atomic.AddInt32(&vs.outBulkSets, -stats.OutBulkSets)
+	atomic.AddInt32(&vs.outBulkSetValues, -stats.OutBulkSetValues)
 	atomic.AddInt32(&vs.inBulkSets, -stats.InBulkSets)
 	atomic.AddInt32(&vs.inBulkSetDrops, -stats.InBulkSetDrops)
 	atomic.AddInt32(&vs.inBulkSetInvalids, -stats.InBulkSetInvalids)
@@ -172,6 +195,10 @@ func (vs *DefaultValueStore) Stats(debug bool) fmt.Stringer {
 	atomic.AddInt32(&vs.inBulkSetAckWrites, -stats.InBulkSetAckWrites)
 	atomic.AddInt32(&vs.inBulkSetAckWriteErrors, -stats.InBulkSetAckWriteErrors)
 	atomic.AddInt32(&vs.inBulkSetAckWritesOverridden, -stats.InBulkSetAckWritesOverridden)
+	atomic.AddInt32(&vs.outPullReplications, -stats.OutPullReplications)
+	atomic.AddInt32(&vs.inPullReplications, -stats.InPullReplications)
+	atomic.AddInt32(&vs.inPullReplicationDrops, -stats.InPullReplicationDrops)
+	atomic.AddInt32(&vs.inPullReplicationInvalids, -stats.InPullReplicationInvalids)
 	vs.statsLock.Unlock()
 	if !debug {
 		vlmStats := vs.vlm.Stats(false)
@@ -242,6 +269,8 @@ func (stats *Stats) String() string {
 		{"Deletes", fmt.Sprintf("%d", stats.Deletes)},
 		{"DeleteErrors", fmt.Sprintf("%d", stats.DeleteErrors)},
 		{"DeletesOverridden", fmt.Sprintf("%d", stats.DeletesOverridden)},
+		{"OutBulkSets", fmt.Sprintf("%d", stats.OutBulkSets)},
+		{"OutBulkSetValues", fmt.Sprintf("%d", stats.OutBulkSetValues)},
 		{"InBulkSets", fmt.Sprintf("%d", stats.InBulkSets)},
 		{"InBulkSetDrops", fmt.Sprintf("%d", stats.InBulkSetDrops)},
 		{"InBulkSetInvalids", fmt.Sprintf("%d", stats.InBulkSetInvalids)},
@@ -255,6 +284,10 @@ func (stats *Stats) String() string {
 		{"InBulkSetAckWrites", fmt.Sprintf("%d", stats.InBulkSetAckWrites)},
 		{"InBulkSetAckWriteErrors", fmt.Sprintf("%d", stats.InBulkSetAckWriteErrors)},
 		{"InBulkSetAckWritesOverridden", fmt.Sprintf("%d", stats.InBulkSetAckWritesOverridden)},
+		{"OutPullReplications", fmt.Sprintf("%d", stats.OutPullReplications)},
+		{"InPullReplications", fmt.Sprintf("%d", stats.InPullReplications)},
+		{"InPullReplicationDrops", fmt.Sprintf("%d", stats.InPullReplicationDrops)},
+		{"InPullReplicationInvalids", fmt.Sprintf("%d", stats.InPullReplicationInvalids)},
 	}
 	if stats.debug {
 		report = append(report, [][]string{

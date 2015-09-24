@@ -184,6 +184,8 @@ type DefaultValueStore struct {
 	deletes                      int32
 	deleteErrors                 int32
 	deletesOverridden            int32
+	outBulkSets                  int32
+	outBulkSetValues             int32
 	inBulkSets                   int32
 	inBulkSetDrops               int32
 	inBulkSetInvalids            int32
@@ -197,6 +199,10 @@ type DefaultValueStore struct {
 	inBulkSetAckWrites           int32
 	inBulkSetAckWriteErrors      int32
 	inBulkSetAckWritesOverridden int32
+	outPullReplications          int32
+	inPullReplications           int32
+	inPullReplicationDrops       int32
+	inPullReplicationInvalids    int32
 }
 
 type valueWriteReq struct {

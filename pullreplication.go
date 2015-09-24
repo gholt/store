@@ -120,9 +120,11 @@ func (vs *DefaultValueStore) newInPullReplicationMsg(r io.Reader, l uint64) (uin
 			sn, err = r.Read(t)
 			left -= uint64(sn)
 			if err != nil {
+				atomic.AddInt32(&vs.inPullReplicationInvalids, 1)
 				return l - left, err
 			}
 		}
+		atomic.AddInt32(&vs.inPullReplicationDrops, 1)
 		return l, nil
 	}
 	// TODO: We need to cap this so memory isn't abused in case someone
@@ -141,6 +143,7 @@ func (vs *DefaultValueStore) newInPullReplicationMsg(r io.Reader, l uint64) (uin
 	for n != len(prm.header) {
 		if err != nil {
 			vs.pullReplicationState.inFreeMsgChan <- prm
+			atomic.AddInt32(&vs.inPullReplicationInvalids, 1)
 			return uint64(n), err
 		}
 		sn, err = r.Read(prm.header[n:])
@@ -150,12 +153,14 @@ func (vs *DefaultValueStore) newInPullReplicationMsg(r io.Reader, l uint64) (uin
 	for n != len(prm.body) {
 		if err != nil {
 			vs.pullReplicationState.inFreeMsgChan <- prm
+			atomic.AddInt32(&vs.inPullReplicationInvalids, 1)
 			return uint64(len(prm.header)) + uint64(n), err
 		}
 		sn, err = r.Read(prm.body[n:])
 		n += sn
 	}
 	vs.pullReplicationState.inMsgChan <- prm
+	atomic.AddInt32(&vs.inPullReplications, 1)
 	return l, nil
 }
 
@@ -233,9 +238,11 @@ func (vs *DefaultValueStore) inPullReplication() {
 					if !bsm.add(k[i], k[i+1], t, v) {
 						break
 					}
+					atomic.AddInt32(&vs.outBulkSetValues, 1)
 				}
 			}
 			if len(bsm.body) > 0 {
+				atomic.AddInt32(&vs.outBulkSets, 1)
 				vs.msgRing.MsgToNode(bsm, nodeID, vs.pullReplicationState.inResponseMsgTimeout)
 			}
 		}
@@ -362,6 +369,7 @@ func (vs *DefaultValueStore) outPullReplicationPass() {
 				reThis = rb - 1
 			}
 			prm := vs.newOutPullReplicationMsg(ringVersion, uint32(p), cutoff, rbThis, reThis, ktbf)
+			atomic.AddInt32(&vs.outPullReplications, 1)
 			vs.msgRing.MsgToOtherReplicas(prm, uint32(p), vs.pullReplicationState.outMsgTimeout)
 			if !more {
 				break
