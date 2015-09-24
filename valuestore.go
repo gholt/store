@@ -186,6 +186,8 @@ type DefaultValueStore struct {
 	deletesOverridden            int32
 	outBulkSets                  int32
 	outBulkSetValues             int32
+	outBulkSetPushes             int32
+	outBulkSetPushValues         int32
 	inBulkSets                   int32
 	inBulkSetDrops               int32
 	inBulkSetInvalids            int32

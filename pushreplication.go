@@ -205,8 +205,10 @@ func (vs *DefaultValueStore) outPushReplicationPass() {
 				if !bsm.add(list[i], list[i+1], timestampbits, valbuf) {
 					break
 				}
+				atomic.AddInt32(&vs.outBulkSetPushValues, 1)
 			}
 		}
+		atomic.AddInt32(&vs.outBulkSetPushes, 1)
 		vs.msgRing.MsgToOtherReplicas(bsm, uint32(partition), vs.pushReplicationState.outMsgTimeout)
 	}
 	wg := &sync.WaitGroup{}

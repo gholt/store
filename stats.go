@@ -35,11 +35,19 @@ type Stats struct {
 	// DeletesOverridden is the number of calls to Delete that resulted in no
 	// change.
 	DeletesOverridden int32
-	// OutBulkSets is the number of outgoing bulk-set messages.
+	// OutBulkSets is the number of outgoing bulk-set messages in response to
+	// incoming pull replication messages.
 	OutBulkSets int32
-	// OutBulkSetValues is the number of values outgoing bulk-set messages have
-	// contained.
+	// OutBulkSetValues is the number of values in outgoing bulk-set messages;
+	// these bulk-set messages are those in response to incoming
+	// pull-replication messages.
 	OutBulkSetValues int32
+	// OutBulkSetPushes is the number of outgoing bulk-set messages due to push
+	// replication.
+	OutBulkSetPushes int32
+	// OutBulkSetPushValues is the number of values in outgoing bulk-set
+	// messages; these bulk-set messages are those due to push replication.
+	OutBulkSetPushValues int32
 	// InBulkSets is the number of incoming bulk-set messages.
 	InBulkSets int32
 	// InBulkSetDrops is the number of incoming bulk-set messages dropped due
@@ -152,6 +160,8 @@ func (vs *DefaultValueStore) Stats(debug bool) fmt.Stringer {
 		DeletesOverridden:            atomic.LoadInt32(&vs.deletesOverridden),
 		OutBulkSets:                  atomic.LoadInt32(&vs.outBulkSets),
 		OutBulkSetValues:             atomic.LoadInt32(&vs.outBulkSetValues),
+		OutBulkSetPushes:             atomic.LoadInt32(&vs.outBulkSetPushes),
+		OutBulkSetPushValues:         atomic.LoadInt32(&vs.outBulkSetPushValues),
 		InBulkSets:                   atomic.LoadInt32(&vs.inBulkSets),
 		InBulkSetDrops:               atomic.LoadInt32(&vs.inBulkSetDrops),
 		InBulkSetInvalids:            atomic.LoadInt32(&vs.inBulkSetInvalids),
@@ -182,6 +192,8 @@ func (vs *DefaultValueStore) Stats(debug bool) fmt.Stringer {
 	atomic.AddInt32(&vs.writesOverridden, -stats.DeletesOverridden)
 	atomic.AddInt32(&vs.outBulkSets, -stats.OutBulkSets)
 	atomic.AddInt32(&vs.outBulkSetValues, -stats.OutBulkSetValues)
+	atomic.AddInt32(&vs.outBulkSetPushes, -stats.OutBulkSetPushes)
+	atomic.AddInt32(&vs.outBulkSetPushValues, -stats.OutBulkSetPushValues)
 	atomic.AddInt32(&vs.inBulkSets, -stats.InBulkSets)
 	atomic.AddInt32(&vs.inBulkSetDrops, -stats.InBulkSetDrops)
 	atomic.AddInt32(&vs.inBulkSetInvalids, -stats.InBulkSetInvalids)
@@ -271,6 +283,8 @@ func (stats *Stats) String() string {
 		{"DeletesOverridden", fmt.Sprintf("%d", stats.DeletesOverridden)},
 		{"OutBulkSets", fmt.Sprintf("%d", stats.OutBulkSets)},
 		{"OutBulkSetValues", fmt.Sprintf("%d", stats.OutBulkSetValues)},
+		{"OutBulkSetPushes", fmt.Sprintf("%d", stats.OutBulkSetPushes)},
+		{"OutBulkSetPushValues", fmt.Sprintf("%d", stats.OutBulkSetPushValues)},
 		{"InBulkSets", fmt.Sprintf("%d", stats.InBulkSets)},
 		{"InBulkSetDrops", fmt.Sprintf("%d", stats.InBulkSetDrops)},
 		{"InBulkSetInvalids", fmt.Sprintf("%d", stats.InBulkSetInvalids)},
