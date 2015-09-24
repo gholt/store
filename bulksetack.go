@@ -3,6 +3,7 @@ package valuestore
 import (
 	"encoding/binary"
 	"io"
+	"sync/atomic"
 )
 
 // bsam: entries:n
@@ -73,9 +74,11 @@ func (vs *DefaultValueStore) newInBulkSetAckMsg(r io.Reader, l uint64) (uint64, 
 			sn, err = r.Read(t)
 			left -= uint64(sn)
 			if err != nil {
+				atomic.AddInt32(&vs.inBulkSetAckInvalids, 1)
 				return l - left, err
 			}
 		}
+		atomic.AddInt32(&vs.inBulkSetAckDrops, 1)
 		return l, nil
 	}
 	var n int
@@ -92,10 +95,12 @@ func (vs *DefaultValueStore) newInBulkSetAckMsg(r io.Reader, l uint64) (uint64, 
 		n += sn
 		if err != nil {
 			vs.bulkSetAckState.inFreeMsgChan <- bsam
+			atomic.AddInt32(&vs.inBulkSetAckInvalids, 1)
 			return uint64(n), err
 		}
 	}
 	vs.bulkSetAckState.inMsgChan <- bsam
+	atomic.AddInt32(&vs.inBulkSetAcks, 1)
 	return l, nil
 }
 
@@ -118,7 +123,14 @@ func (vs *DefaultValueStore) inBulkSetAck(doneChan chan struct{}) {
 		for o := 0; o < l; o += _BULK_SET_ACK_MSG_ENTRY_LENGTH {
 			keyA := binary.BigEndian.Uint64(b[o:])
 			if ring != nil && !ring.Responsible(uint32(keyA>>rightwardPartitionShift)) {
-				vs.write(keyA, binary.BigEndian.Uint64(b[o+8:]), binary.BigEndian.Uint64(b[o+16:])|_TSB_LOCAL_REMOVAL, nil)
+				atomic.AddInt32(&vs.inBulkSetAckWrites, 1)
+				timestampbits := binary.BigEndian.Uint64(b[o+16:]) | _TSB_LOCAL_REMOVAL
+				rtimestampbits, err := vs.write(keyA, binary.BigEndian.Uint64(b[o+8:]), timestampbits, nil)
+				if err != nil {
+					atomic.AddInt32(&vs.inBulkSetAckWriteErrors, 1)
+				} else if rtimestampbits != timestampbits {
+					atomic.AddInt32(&vs.inBulkSetAckWritesOverridden, 1)
+				}
 			}
 		}
 		vs.bulkSetAckState.inFreeMsgChan <- bsam

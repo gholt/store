@@ -173,24 +173,30 @@ type DefaultValueStore struct {
 	bulkSetState            bulkSetState
 	bulkSetAckState         bulkSetAckState
 
-	statsLock                 sync.Mutex
-	lookups                   int32
-	lookupErrors              int32
-	reads                     int32
-	readErrors                int32
-	writes                    int32
-	writeErrors               int32
-	writesOverridden          int32
-	deletes                   int32
-	deleteErrors              int32
-	deletesOverridden         int32
-	inBulkSets                int32
-	inBulkSetDrops            int32
-	inBulkSetInvalids         int32
-	inBulkSetWrites           int32
-	inBulkSetWriteErrors      int32
-	inBulkSetWritesOverridden int32
-	outBulkSetAcks            int32
+	statsLock                    sync.Mutex
+	lookups                      int32
+	lookupErrors                 int32
+	reads                        int32
+	readErrors                   int32
+	writes                       int32
+	writeErrors                  int32
+	writesOverridden             int32
+	deletes                      int32
+	deleteErrors                 int32
+	deletesOverridden            int32
+	inBulkSets                   int32
+	inBulkSetDrops               int32
+	inBulkSetInvalids            int32
+	inBulkSetWrites              int32
+	inBulkSetWriteErrors         int32
+	inBulkSetWritesOverridden    int32
+	outBulkSetAcks               int32
+	inBulkSetAcks                int32
+	inBulkSetAckDrops            int32
+	inBulkSetAckInvalids         int32
+	inBulkSetAckWrites           int32
+	inBulkSetAckWriteErrors      int32
+	inBulkSetAckWritesOverridden int32
 }
 
 type valueWriteReq struct {
