@@ -206,7 +206,7 @@ func (vs *DefaultValueStore) compactionWorker(id int, tocfiles <-chan compaction
 		}
 		total := int(fstat.Size()) / 34
 		if total < 100 {
-			vs.logInfo("Triggering compaction for %s due to size\n", c.name)
+			atomic.AddInt32(&vs.smallFileCompactions, 1)
 			result, err := vs.compactFile(c.name, c.candidateBlockID)
 			if err != nil {
 				vs.logCritical("%s\n", err)
@@ -222,7 +222,9 @@ func (vs *DefaultValueStore) compactionWorker(id int, tocfiles <-chan compaction
 					vs.logCritical("Unable to remove %s values %s\n", c.name, err)
 					continue
 				}
-				vs.logInfo("Compacted %s (total %d, rewrote %d, stale %d)\n", c.name, result.count, result.rewrote, result.stale)
+				if vs.logDebug != nil {
+					vs.logDebug("Compacted %s (total %d, rewrote %d, stale %d)\n", c.name, result.count, result.rewrote, result.stale)
+				}
 			}
 		} else {
 			rand.Seed(time.Now().UnixNano())
@@ -238,6 +240,7 @@ func (vs *DefaultValueStore) compactionWorker(id int, tocfiles <-chan compaction
 				vs.logDebug("%s sample result: %d %d %d\n", c.name, count, stale, staleTarget)
 			}
 			if stale >= staleTarget {
+				atomic.AddInt32(&vs.compactions, 1)
 				if vs.logDebug != nil {
 					vs.logDebug("Triggering compaction for %s with %d entries.\n", c.name, count)
 				}
@@ -256,7 +259,9 @@ func (vs *DefaultValueStore) compactionWorker(id int, tocfiles <-chan compaction
 						vs.logCritical("Unable to remove %s values %s\n", c.name, err)
 						continue
 					}
-					vs.logInfo("Compacted %s: (total %d, rewrote %d, stale %d)\n", c.name, result.count, result.rewrote, result.stale)
+					if vs.logDebug != nil {
+						vs.logDebug("Compacted %s: (total %d, rewrote %d, stale %d)\n", c.name, result.count, result.rewrote, result.stale)
+					}
 				}
 			}
 		}

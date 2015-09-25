@@ -97,6 +97,15 @@ type Stats struct {
 	// ExpiredDeletions is the number of recent deletes that have become old
 	// enough to be completely discarded.
 	ExpiredDeletions int32
+	// Compactions is the number of disk file sets compacted due to their
+	// contents exceeding a staleness threshold. For example, this happens when
+	// enough of the values have been overwritten or deleted in more recent
+	// operations.
+	Compactions int32
+	// SmallFileCompactions is the number of disk file sets compacted due to
+	// the entire file size being too small. For example, this may happen when
+	// the valuestore is shutdown and restarted.
+	SmallFileCompactions int32
 
 	debug                      bool
 	freeableVMChansCap         int
@@ -183,6 +192,8 @@ func (vs *DefaultValueStore) Stats(debug bool) fmt.Stringer {
 		InPullReplicationDrops:       atomic.LoadInt32(&vs.inPullReplicationDrops),
 		InPullReplicationInvalids:    atomic.LoadInt32(&vs.inPullReplicationInvalids),
 		ExpiredDeletions:             atomic.LoadInt32(&vs.expiredDeletions),
+		Compactions:                  atomic.LoadInt32(&vs.compactions),
+		SmallFileCompactions:         atomic.LoadInt32(&vs.smallFileCompactions),
 	}
 	atomic.AddInt32(&vs.lookups, -stats.Lookups)
 	atomic.AddInt32(&vs.lookupErrors, -stats.LookupErrors)
@@ -216,6 +227,8 @@ func (vs *DefaultValueStore) Stats(debug bool) fmt.Stringer {
 	atomic.AddInt32(&vs.inPullReplicationDrops, -stats.InPullReplicationDrops)
 	atomic.AddInt32(&vs.inPullReplicationInvalids, -stats.InPullReplicationInvalids)
 	atomic.AddInt32(&vs.expiredDeletions, -stats.ExpiredDeletions)
+	atomic.AddInt32(&vs.compactions, -stats.Compactions)
+	atomic.AddInt32(&vs.smallFileCompactions, -stats.SmallFileCompactions)
 	vs.statsLock.Unlock()
 	if !debug {
 		vlmStats := vs.vlm.Stats(false)
@@ -308,6 +321,8 @@ func (stats *Stats) String() string {
 		{"InPullReplicationDrops", fmt.Sprintf("%d", stats.InPullReplicationDrops)},
 		{"InPullReplicationInvalids", fmt.Sprintf("%d", stats.InPullReplicationInvalids)},
 		{"ExpiredDeletions", fmt.Sprintf("%d", stats.ExpiredDeletions)},
+		{"Compactions", fmt.Sprintf("%d", stats.Compactions)},
+		{"SmallFileCompactions", fmt.Sprintf("%d", stats.SmallFileCompactions)},
 	}
 	if stats.debug {
 		report = append(report, [][]string{

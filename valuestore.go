@@ -206,6 +206,8 @@ type DefaultValueStore struct {
 	inPullReplicationDrops       int32
 	inPullReplicationInvalids    int32
 	expiredDeletions             int32
+	compactions                  int32
+	smallFileCompactions         int32
 }
 
 type valueWriteReq struct {
