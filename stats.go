@@ -94,6 +94,9 @@ type Stats struct {
 	// InPullReplicationInvalids is the number of incoming pull-replication
 	// messages that couldn't be parsed.
 	InPullReplicationInvalids int32
+	// ExpiredDeletions is the number of recent deletes that have become old
+	// enough to be completely discarded.
+	ExpiredDeletions int32
 
 	debug                      bool
 	freeableVMChansCap         int
@@ -179,6 +182,7 @@ func (vs *DefaultValueStore) Stats(debug bool) fmt.Stringer {
 		InPullReplications:           atomic.LoadInt32(&vs.inPullReplications),
 		InPullReplicationDrops:       atomic.LoadInt32(&vs.inPullReplicationDrops),
 		InPullReplicationInvalids:    atomic.LoadInt32(&vs.inPullReplicationInvalids),
+		ExpiredDeletions:             atomic.LoadInt32(&vs.expiredDeletions),
 	}
 	atomic.AddInt32(&vs.lookups, -stats.Lookups)
 	atomic.AddInt32(&vs.lookupErrors, -stats.LookupErrors)
@@ -211,6 +215,7 @@ func (vs *DefaultValueStore) Stats(debug bool) fmt.Stringer {
 	atomic.AddInt32(&vs.inPullReplications, -stats.InPullReplications)
 	atomic.AddInt32(&vs.inPullReplicationDrops, -stats.InPullReplicationDrops)
 	atomic.AddInt32(&vs.inPullReplicationInvalids, -stats.InPullReplicationInvalids)
+	atomic.AddInt32(&vs.expiredDeletions, -stats.ExpiredDeletions)
 	vs.statsLock.Unlock()
 	if !debug {
 		vlmStats := vs.vlm.Stats(false)
@@ -302,6 +307,7 @@ func (stats *Stats) String() string {
 		{"InPullReplications", fmt.Sprintf("%d", stats.InPullReplications)},
 		{"InPullReplicationDrops", fmt.Sprintf("%d", stats.InPullReplicationDrops)},
 		{"InPullReplicationInvalids", fmt.Sprintf("%d", stats.InPullReplicationInvalids)},
+		{"ExpiredDeletions", fmt.Sprintf("%d", stats.ExpiredDeletions)},
 	}
 	if stats.debug {
 		report = append(report, [][]string{
