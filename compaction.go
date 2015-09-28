@@ -3,7 +3,7 @@ package valuestore
 import (
 	"bytes"
 	"encoding/binary"
-	"errors"
+	"fmt"
 	"io"
 	"math/rand"
 	"os"
@@ -386,8 +386,7 @@ func (vs *DefaultValueStore) compactFile(name string, candidateBlockID uint32) (
 	fromDiskOverflow := make([]byte, 0, 32)
 	fp, err := os.Open(name)
 	if err != nil {
-		vs.logError("error opening %s: %s\n", name, err)
-		return cr, errors.New("Error opening toc")
+		return cr, fmt.Errorf("error opening %s: %s", name, err)
 	}
 	first := true
 	terminated := false
@@ -396,8 +395,8 @@ func (vs *DefaultValueStore) compactFile(name string, candidateBlockID uint32) (
 		n, err := io.ReadFull(fp, fromDiskBuf)
 		if n < 4 {
 			if err != io.EOF && err != io.ErrUnexpectedEOF {
-				vs.logError("error reading %s: %s\n", name, err)
-				return cr, errors.New("Error attempting to read toc")
+				fp.Close()
+				return cr, fmt.Errorf("error reading %s: %s", name, err)
 			}
 			break
 		}
@@ -408,24 +407,24 @@ func (vs *DefaultValueStore) compactFile(name string, candidateBlockID uint32) (
 			j := 0
 			if first {
 				if !bytes.Equal(fromDiskBuf[:28], []byte("VALUESTORETOC v0            ")) {
-					vs.logError("bad header: %s\n", name)
-					return cr, errors.New("Bad header")
+					fp.Close()
+					return cr, fmt.Errorf("bad header %s: %s", name, err)
 				}
 				if binary.BigEndian.Uint32(fromDiskBuf[28:]) != vs.checksumInterval {
-					vs.logError("bad header checksum interval: %s\n", name)
-					return cr, errors.New("Bad header checksum interval")
+					fp.Close()
+					return cr, fmt.Errorf("bad header checksum interval %s: %s", name, err)
 				}
 				j += 32
 				first = false
 			}
 			if n < int(vs.checksumInterval) {
 				if binary.BigEndian.Uint32(fromDiskBuf[n-16:]) != 0 {
-					vs.logError("bad terminator size marker: %s\n", name)
-					return cr, errors.New("Error on toc term size marker")
+					fp.Close()
+					return cr, fmt.Errorf("bad terminator size %s: %s", name, err)
 				}
 				if !bytes.Equal(fromDiskBuf[n-4:n], []byte("TERM")) {
-					vs.logError("bad terminator: %s\n", name)
-					return cr, errors.New("Error on toc term marker")
+					fp.Close()
+					return cr, fmt.Errorf("bad terminator marker %s: %s", name, err)
 				}
 				n -= 16
 				terminated = true
@@ -445,13 +444,13 @@ func (vs *DefaultValueStore) compactFile(name string, candidateBlockID uint32) (
 					var value []byte
 					_, value, err := vs.read(keyA, keyB, value)
 					if err != nil {
-						vs.logCritical("Error on rewrite read %s\n", err)
-						return cr, errors.New("Error on read for compaction rewrite.")
+						fp.Close()
+						return cr, fmt.Errorf("error on read for compaction rewrite: %s", err)
 					}
 					_, err = vs.write(keyA, keyB, timestampbits|_TSB_COMPACTION_REWRITE, value)
 					if err != nil {
-						vs.logCritical("Error on rewrite %s\n", err)
-						return cr, errors.New("Write error on compaction rewrite.")
+						fp.Close()
+						return cr, fmt.Errorf("error on write for compaction rewrite: %s", err)
 					}
 					cr.count++
 					cr.rewrote++
@@ -469,13 +468,13 @@ func (vs *DefaultValueStore) compactFile(name string, candidateBlockID uint32) (
 					var value []byte
 					_, value, err := vs.read(keyA, keyB, value)
 					if err != nil {
-						vs.logCritical("Error on rewrite read %s\n", err)
-						return cr, errors.New("Error on rewrite read")
+						fp.Close()
+						return cr, fmt.Errorf("error on read for compaction rewrite: %s", err)
 					}
 					_, err = vs.write(keyA, keyB, timestampbits|_TSB_COMPACTION_REWRITE, value)
 					if err != nil {
-						vs.logCritical("Error on rewrite %s\n", err)
-						return cr, errors.New("Error on rewrite")
+						fp.Close()
+						return cr, fmt.Errorf("error on write for compaction rewrite: %s", err)
 					}
 					cr.count++
 					cr.rewrote++
@@ -487,8 +486,8 @@ func (vs *DefaultValueStore) compactFile(name string, candidateBlockID uint32) (
 			}
 		}
 		if err != nil && err != io.EOF && err != io.ErrUnexpectedEOF {
-			vs.logError("error reading %s: %s\n", name, err)
-			return cr, errors.New("EOF while reading toc during compaction")
+			fp.Close()
+			return cr, fmt.Errorf("EOF while reading toc: %s", err)
 		}
 	}
 	fp.Close()
