@@ -129,12 +129,14 @@ func (vs *DefaultValueStore) compactionPass() {
 	}
 	fp, err := os.Open(vs.pathtoc)
 	if err != nil {
-		panic(err)
+		vs.logError("%s\n", err)
+		return
 	}
 	names, err := fp.Readdirnames(-1)
 	fp.Close()
 	if err != nil {
-		panic(err)
+		vs.logError("%s\n", err)
+		return
 	}
 	sort.Strings(names)
 
