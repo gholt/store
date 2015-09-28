@@ -194,14 +194,9 @@ func (vs *DefaultValueStore) compactionCandidate(name string) (int64, bool) {
 
 func (vs *DefaultValueStore) compactionWorker(id int, tocfiles <-chan compactionJob, result chan<- string) {
 	for c := range tocfiles {
-		f, err := os.Open(c.name)
+		fstat, err := os.Stat(c.name)
 		if err != nil {
-			vs.logError("Unable to open for stat: %s %s\n", c.name, err)
-			continue
-		}
-		fstat, err := f.Stat()
-		if err != nil {
-			vs.logError("Unable to stat: %s\n", c.name)
+			vs.logError("Unable to stat %s because: %v\n", c.name, err)
 			continue
 		}
 		total := int(fstat.Size()) / 34
