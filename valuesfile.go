@@ -210,6 +210,18 @@ func (vf *valuesFile) close() {
 	vf.writeChan = nil
 	vf.doneChan = nil
 	vf.buf = nil
+	for i, fp := range vf.readerFPs {
+		// This will let any ongoing reads complete.
+		vf.readerLocks[i].Lock()
+		fp.Close()
+		// This will release any pending reads, which will get errors
+		// immediately. Essentially, there is a race between compaction
+		// accomplishing its goal of rewriting all entries of a file to a new
+		// file, and readers of those entries beginning to use the new entry
+		// locations. It's a small window and the resulting errors should be
+		// fairly few and easily recoverable on a re-read.
+		vf.readerLocks[i].Unlock()
+	}
 }
 
 func (vf *valuesFile) checksummer() {

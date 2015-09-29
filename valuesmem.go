@@ -34,3 +34,6 @@ func (vm *valuesMem) read(keyA uint64, keyB uint64, timestampbits uint64, offset
 	vm.discardLock.RUnlock()
 	return timestampbits, value, nil
 }
+
+func (vm *valuesMem) close() {
+}

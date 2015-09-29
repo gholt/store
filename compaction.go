@@ -210,6 +210,7 @@ func (vs *DefaultValueStore) compactionWorker(jobChan chan *compactionJob, wg *s
 					vs.logCritical("Unable to remove %s values %s\n", c.name, err)
 					continue
 				}
+				vs.closeValueLocBlock(c.candidateBlockID)
 				if vs.logDebug != nil {
 					vs.logDebug("Compacted %s (total %d, rewrote %d, stale %d)\n", c.name, result.count, result.rewrote, result.stale)
 				}
@@ -248,6 +249,7 @@ func (vs *DefaultValueStore) compactionWorker(jobChan chan *compactionJob, wg *s
 						vs.logCritical("Unable to remove %s values %s\n", c.name, err)
 						continue
 					}
+					vs.closeValueLocBlock(c.candidateBlockID)
 					if vs.logDebug != nil {
 						vs.logDebug("Compacted %s: (total %d, rewrote %d, stale %d)\n", c.name, result.count, result.rewrote, result.stale)
 					}

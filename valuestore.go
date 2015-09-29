@@ -226,6 +226,7 @@ var flushValuesMem *valuesMem = &valuesMem{}
 type valueLocBlock interface {
 	timestampnano() int64
 	read(keyA uint64, keyB uint64, timestampbits uint64, offset uint32, length uint32, value []byte) (uint64, []byte, error)
+	close()
 }
 
 type backgroundNotification struct {
@@ -516,6 +517,10 @@ func (vs *DefaultValueStore) valueLocBlockIDFromTimestampnano(tsn int64) uint32 
 		}
 	}
 	return 0
+}
+
+func (vs *DefaultValueStore) closeValueLocBlock(valueLocBlockID uint32) {
+	vs.valueLocBlocks[valueLocBlockID].close()
 }
 
 func (vs *DefaultValueStore) memClearer(freeableVMChan chan *valuesMem) {
