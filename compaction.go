@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -139,30 +140,20 @@ func (vs *DefaultValueStore) compactionPass() {
 		return
 	}
 	sort.Strings(names)
-
-	compactionJobs := make(chan compactionJob, len(names))
-	compactionResults := make(chan string, len(names))
-
+	jobChan := make(chan *compactionJob, len(names))
+	wg := &sync.WaitGroup{}
 	for i := 0; i < vs.compactionState.workerCount; i++ {
-		go vs.compactionWorker(compactionJobs, compactionResults)
+		wg.Add(1)
+		go vs.compactionWorker(jobChan, wg)
 	}
-
-	submitted := 0
-	for i := 0; i < len(names); i++ {
-		namets, valid := vs.compactionCandidate(path.Join(vs.pathtoc, names[i]))
+	for _, name := range names {
+		namets, valid := vs.compactionCandidate(path.Join(vs.pathtoc, name))
 		if valid {
-			compactionJobs <- compactionJob{path.Join(vs.pathtoc, names[i]), vs.valueLocBlockIDFromTimestampnano(namets)}
-			submitted++
+			jobChan <- &compactionJob{path.Join(vs.pathtoc, name), vs.valueLocBlockIDFromTimestampnano(namets)}
 		}
 	}
-	close(compactionJobs)
-	if vs.logDebug != nil {
-		vs.logDebug("compaction candidates submitted: %d\n", submitted)
-	}
-	for i := 0; i < submitted; i++ {
-		<-compactionResults
-	}
-	close(compactionResults)
+	close(jobChan)
+	wg.Wait()
 }
 
 // compactionCandidate verifies that the given toc is a valid candidate for
@@ -192,13 +183,8 @@ func (vs *DefaultValueStore) compactionCandidate(name string) (int64, bool) {
 	return namets, true
 }
 
-func (vs *DefaultValueStore) compactionWorker(tocfiles <-chan compactionJob, result chan<- string) {
-	previousName := ""
-	for c := range tocfiles {
-		if previousName != "" {
-			result <- previousName
-		}
-		previousName = c.name
+func (vs *DefaultValueStore) compactionWorker(jobChan chan *compactionJob, wg *sync.WaitGroup) {
+	for c := range jobChan {
 		fstat, err := os.Stat(c.name)
 		if err != nil {
 			vs.logError("Unable to stat %s because: %v\n", c.name, err)
@@ -269,9 +255,7 @@ func (vs *DefaultValueStore) compactionWorker(tocfiles <-chan compactionJob, res
 			}
 		}
 	}
-	if previousName != "" {
-		result <- previousName
-	}
+	wg.Done()
 }
 
 func (vs *DefaultValueStore) sampleTOC(name string, candidateBlockID uint32, skipOffset, skipCount int) (int, int, error) {
