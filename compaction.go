@@ -143,10 +143,8 @@ func (vs *DefaultValueStore) compactionPass() {
 	compactionJobs := make(chan compactionJob, len(names))
 	compactionResults := make(chan string, len(names))
 
-	//Spin up new workers on each pass rather than at startup so that
-	//the number of workers can change between passes.
-	for i := 1; i <= vs.compactionState.workerCount; i++ {
-		go vs.compactionWorker(i, compactionJobs, compactionResults)
+	for i := 0; i < vs.compactionState.workerCount; i++ {
+		go vs.compactionWorker(compactionJobs, compactionResults)
 	}
 
 	submitted := 0
@@ -161,7 +159,7 @@ func (vs *DefaultValueStore) compactionPass() {
 	if vs.logDebug != nil {
 		vs.logDebug("compaction candidates submitted: %d\n", submitted)
 	}
-	for i := 1; i <= submitted; i++ {
+	for i := 0; i < submitted; i++ {
 		<-compactionResults
 	}
 	close(compactionResults)
@@ -194,7 +192,7 @@ func (vs *DefaultValueStore) compactionCandidate(name string) (int64, bool) {
 	return namets, true
 }
 
-func (vs *DefaultValueStore) compactionWorker(id int, tocfiles <-chan compactionJob, result chan<- string) {
+func (vs *DefaultValueStore) compactionWorker(tocfiles <-chan compactionJob, result chan<- string) {
 	previousName := ""
 	for c := range tocfiles {
 		if previousName != "" {
