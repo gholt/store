@@ -195,18 +195,25 @@ func (vs *DefaultValueStore) compactionCandidate(name string) (int64, bool) {
 }
 
 func (vs *DefaultValueStore) compactionWorker(id int, tocfiles <-chan compactionJob, result chan<- string) {
+	previousName := ""
 	for c := range tocfiles {
+		if previousName != "" {
+			result <- previousName
+		}
+		previousName = c.name
 		fstat, err := os.Stat(c.name)
 		if err != nil {
 			vs.logError("Unable to stat %s because: %v\n", c.name, err)
 			continue
 		}
 		total := int(fstat.Size()) / 34
+		// TODO: This 100 should be in the Config.
 		if total < 100 {
 			atomic.AddInt32(&vs.smallFileCompactions, 1)
 			result, err := vs.compactFile(c.name, c.candidateBlockID)
 			if err != nil {
 				vs.logCritical("%s\n", err)
+				continue
 			}
 			if (result.rewrote + result.stale) == result.count {
 				err = os.Remove(c.name)
@@ -244,6 +251,7 @@ func (vs *DefaultValueStore) compactionWorker(id int, tocfiles <-chan compaction
 				result, err := vs.compactFile(c.name, c.candidateBlockID)
 				if err != nil {
 					vs.logCritical("%s\n", err)
+					continue
 				}
 				if (result.rewrote + result.stale) == result.count {
 					err = os.Remove(c.name)
@@ -262,7 +270,9 @@ func (vs *DefaultValueStore) compactionWorker(id int, tocfiles <-chan compaction
 				}
 			}
 		}
-		result <- c.name
+	}
+	if previousName != "" {
+		result <- previousName
 	}
 }
 
