@@ -58,6 +58,10 @@ OptMsgRing. The responsible parties will respond to these requests with
 acknowledgements of the data they received, allowing the requester to
 discard the out of place data.
 
+Note that if the disk gets filled past a configurable threshold, any external
+writes other than deletes will result in error. Internal writes such as
+compaction and removing successfully push-replicated data will continue.
+
 [API Documentation](http://godoc.org/github.com/gholt/valuestore)
 
 This is the latest development area for the package.  

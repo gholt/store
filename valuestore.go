@@ -172,6 +172,9 @@ type DefaultValueStore struct {
 	compactionState         compactionState
 	bulkSetState            bulkSetState
 	bulkSetAckState         bulkSetAckState
+	disableEnableWritesLock sync.Mutex
+	userDisabled            bool
+	diskWatcherState        diskWatcherState
 
 	statsLock                    sync.Mutex
 	lookups                      int32
@@ -216,6 +219,7 @@ type valueWriteReq struct {
 	timestampbits uint64
 	value         []byte
 	errChan       chan error
+	internal      bool
 }
 
 var enableValueWriteReq *valueWriteReq = &valueWriteReq{}
@@ -319,12 +323,14 @@ func New(c *Config) *DefaultValueStore {
 	vs.pushReplicationConfig(cfg)
 	vs.bulkSetConfig(cfg)
 	vs.bulkSetAckConfig(cfg)
+	vs.diskWatcherConfig(cfg)
 	vs.tombstoneDiscardLaunch()
 	vs.compactionLaunch()
 	vs.pullReplicationLaunch()
 	vs.pushReplicationLaunch()
 	vs.bulkSetLaunch()
 	vs.bulkSetAckLaunch()
+	vs.diskWatcherLaunch()
 	return vs
 }
 
@@ -363,16 +369,34 @@ func (vs *DefaultValueStore) EnableAll() {
 // DisableWrites will cause any incoming Write or Delete requests to respond
 // with ErrDisabled until EnableWrites is called.
 func (vs *DefaultValueStore) DisableWrites() {
+	vs.disableWrites(true)
+}
+
+func (vs *DefaultValueStore) disableWrites(userCall bool) {
+	vs.disableEnableWritesLock.Lock()
+	if userCall {
+		vs.userDisabled = true
+	}
 	for _, c := range vs.pendingVWRChans {
 		c <- disableValueWriteReq
 	}
+	vs.disableEnableWritesLock.Unlock()
 }
 
 // EnableWrites will resume accepting incoming Write and Delete requests.
 func (vs *DefaultValueStore) EnableWrites() {
-	for _, c := range vs.pendingVWRChans {
-		c <- enableValueWriteReq
+	vs.enableWrites(true)
+}
+
+func (vs *DefaultValueStore) enableWrites(userCall bool) {
+	vs.disableEnableWritesLock.Lock()
+	if userCall || !vs.userDisabled {
+		vs.userDisabled = false
+		for _, c := range vs.pendingVWRChans {
+			c <- enableValueWriteReq
+		}
 	}
+	vs.disableEnableWritesLock.Unlock()
 }
 
 // Flush will ensure buffered data (at the time of the call) is written to
@@ -444,7 +468,7 @@ func (vs *DefaultValueStore) Write(keyA uint64, keyB uint64, timestampmicro int6
 		atomic.AddInt32(&vs.writeErrors, 1)
 		return 0, fmt.Errorf("timestamp %d > %d", timestampmicro, TIMESTAMPMICRO_MAX)
 	}
-	timestampbits, err := vs.write(keyA, keyB, uint64(timestampmicro)<<_TSB_UTIL_BITS, value)
+	timestampbits, err := vs.write(keyA, keyB, uint64(timestampmicro)<<_TSB_UTIL_BITS, value, false)
 	if err != nil {
 		atomic.AddInt32(&vs.writeErrors, 1)
 	}
@@ -454,13 +478,14 @@ func (vs *DefaultValueStore) Write(keyA uint64, keyB uint64, timestampmicro int6
 	return int64(timestampbits >> _TSB_UTIL_BITS), err
 }
 
-func (vs *DefaultValueStore) write(keyA uint64, keyB uint64, timestampbits uint64, value []byte) (uint64, error) {
+func (vs *DefaultValueStore) write(keyA uint64, keyB uint64, timestampbits uint64, value []byte, internal bool) (uint64, error) {
 	i := int(keyA>>1) % len(vs.freeVWRChans)
 	vwr := <-vs.freeVWRChans[i]
 	vwr.keyA = keyA
 	vwr.keyB = keyB
 	vwr.timestampbits = timestampbits
 	vwr.value = value
+	vwr.internal = internal
 	vs.pendingVWRChans[i] <- vwr
 	err := <-vwr.errChan
 	ptimestampbits := vwr.timestampbits
@@ -483,7 +508,7 @@ func (vs *DefaultValueStore) Delete(keyA uint64, keyB uint64, timestampmicro int
 		atomic.AddInt32(&vs.deleteErrors, 1)
 		return 0, fmt.Errorf("timestamp %d > %d", timestampmicro, TIMESTAMPMICRO_MAX)
 	}
-	ptimestampbits, err := vs.write(keyA, keyB, (uint64(timestampmicro)<<_TSB_UTIL_BITS)|_TSB_DELETION, nil)
+	ptimestampbits, err := vs.write(keyA, keyB, (uint64(timestampmicro)<<_TSB_UTIL_BITS)|_TSB_DELETION, nil, true)
 	if err != nil {
 		atomic.AddInt32(&vs.deleteErrors, 1)
 	}
@@ -609,7 +634,7 @@ func (vs *DefaultValueStore) memWriter(pendingVWRChan chan *valueWriteReq) {
 			vs.vfVMChan <- flushValuesMem
 			continue
 		}
-		if !enabled {
+		if !enabled && !vwr.internal {
 			vwr.errChan <- ErrDisabled
 			continue
 		}

@@ -66,7 +66,7 @@ func TestPullReplicationSimple(t *testing.T) {
 	vs := New(&Config{MsgRing: m})
 	vs.EnableAll()
 	defer vs.DisableAll()
-	_, err = vs.write(1, 2, 0x300, []byte("testing"))
+	_, err = vs.write(1, 2, 0x300, []byte("testing"), false)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -229,7 +229,7 @@ func (vs *DefaultValueStore) tombstoneDiscardPassExpiredDeletions() {
 				e := &localRemovals[i]
 				// These writes go through the entire system, so they're
 				// persisted and therefore restored on restarts.
-				vs.write(e.keyA, e.keyB, e.timestampbits|_TSB_LOCAL_REMOVAL, nil)
+				vs.write(e.keyA, e.keyB, e.timestampbits|_TSB_LOCAL_REMOVAL, nil, true)
 			}
 		}
 	}

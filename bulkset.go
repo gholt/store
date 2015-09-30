@@ -184,7 +184,10 @@ func (vs *DefaultValueStore) inBulkSet(doneChan chan struct{}) {
 			l := binary.BigEndian.Uint32(body[24:])
 			atomic.AddInt32(&vs.inBulkSetWrites, 1)
 			// Attempt to store everything received...
-			rtimestampbits, err = vs.write(keyA, keyB, timestampbits, body[_BULK_SET_MSG_ENTRY_HEADER_LENGTH:_BULK_SET_MSG_ENTRY_HEADER_LENGTH+l])
+			// Note that deletions are acted upon as internal requests (work
+			// even if writes are disabled due to disk fullness) and new data
+			// writes are not.
+			rtimestampbits, err = vs.write(keyA, keyB, timestampbits, body[_BULK_SET_MSG_ENTRY_HEADER_LENGTH:_BULK_SET_MSG_ENTRY_HEADER_LENGTH+l], timestampbits&_TSB_DELETION != 0)
 			if err != nil {
 				atomic.AddInt32(&vs.inBulkSetWriteErrors, 1)
 			} else if rtimestampbits != timestampbits {

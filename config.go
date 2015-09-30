@@ -202,6 +202,28 @@ type Config struct {
 	// CompactionAgeThreshold indicates how old a given file must be before it
 	// is considered for compaction. Defaults to 300 seconds.
 	CompactionAgeThreshold int
+	// FreeDisableThreshold controls when to automatically disable writes; the
+	// number is in bytes, 0 will turn off this check. If the number of free
+	// bytes on either the Path or TOCPath device falls below this threshold,
+	// writes will be automatically disabled.
+	FreeDisableThreshold uint64
+	// FreeReenableThreshold controls when to automatically re-enable writes;
+	// the number is in bytes, 0 will turn off this check. If writes are
+	// automatically disabled and the number of free bytes on each of the Path
+	// or TOCPath devices rises above this threshold, writes will be
+	// automatically re-enabled.
+	FreeReenableThreshold uint64
+	// UsageDisableThreshold controls when to automatically disable writes; the
+	// number is a percentage (1 == 100%), 0 will turn off this check. If the
+	// percentage used on either the Path or TOCPath device grows above this
+	// threshold, writes will be automatically disabled.
+	UsageDisableThreshold float32
+	// UsageReenableThreshold controls when to automatically re-enable writes;
+	// the number is a percentage (1 == 100%), 0 will turn off this check. If
+	// writes are automatically disabled and the percentage used on each of the
+	// Path or TOCPath devices falls below this threshold, writes will be
+	// automatically re-enabled.
+	UsageReenableThreshold float32
 }
 
 func resolveConfig(c *Config) *Config {
