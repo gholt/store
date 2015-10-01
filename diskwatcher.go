@@ -11,6 +11,12 @@ type diskWatcherState struct {
 	freeReenableThreshold  uint64
 	usageDisableThreshold  float32
 	usageReenableThreshold float32
+	free                   uint64
+	used                   uint64
+	size                   uint64
+	freetoc                uint64
+	usedtoc                uint64
+	sizetoc                uint64
 }
 
 func (vs *DefaultValueStore) diskWatcherConfig(cfg *Config) {
@@ -28,48 +34,30 @@ func (vs *DefaultValueStore) diskWatcher() {
 	disabled := false
 	for {
 		time.Sleep(time.Minute)
+		u := du.NewDiskUsage(vs.path)
+		utoc := u
+		if vs.pathtoc != vs.path {
+			utoc = du.NewDiskUsage(vs.pathtoc)
+		}
+		vs.diskWatcherState.free = u.Free()
+		vs.diskWatcherState.used = u.Used()
+		vs.diskWatcherState.size = u.Size()
+		usage := u.Usage()
+		vs.diskWatcherState.freetoc = utoc.Free()
+		vs.diskWatcherState.usedtoc = utoc.Used()
+		vs.diskWatcherState.sizetoc = utoc.Size()
+		usagetoc := utoc.Usage()
 		if disabled {
-			if vs.diskWatcherReenableCheck(vs.path) || vs.diskWatcherReenableCheck(vs.path) {
+			if (vs.diskWatcherState.freeReenableThreshold == 0 || (vs.diskWatcherState.free >= vs.diskWatcherState.freeReenableThreshold && vs.diskWatcherState.freetoc >= vs.diskWatcherState.freeReenableThreshold)) && (vs.diskWatcherState.usageReenableThreshold == 0 || (usage <= vs.diskWatcherState.usageReenableThreshold && usagetoc <= vs.diskWatcherState.usageReenableThreshold)) {
+				vs.logCritical("passed the threshold for automatic re-enabling\n")
 				vs.enableWrites(false) // false indicates non-user call
 				disabled = false
 			}
 		} else {
-			if vs.diskWatcherDisableCheck(vs.path) || vs.diskWatcherDisableCheck(vs.path) {
+			if (vs.diskWatcherState.freeDisableThreshold != 0 && (vs.diskWatcherState.free <= vs.diskWatcherState.freeDisableThreshold || vs.diskWatcherState.freetoc <= vs.diskWatcherState.freeDisableThreshold)) || (vs.diskWatcherState.usageDisableThreshold != 0 && (usage >= vs.diskWatcherState.usageDisableThreshold || usagetoc >= vs.diskWatcherState.usageDisableThreshold)) {
 				vs.disableWrites(false) // false indicates non-user call
 				disabled = true
 			}
 		}
 	}
-}
-
-func (vs *DefaultValueStore) diskWatcherDisableCheck(path string) bool {
-	if vs.diskWatcherState.freeDisableThreshold == 0 && vs.diskWatcherState.usageDisableThreshold == 0 {
-		return false
-	}
-	du := du.NewDiskUsage(path)
-	if vs.diskWatcherState.freeDisableThreshold != 0 && du.Free() <= vs.diskWatcherState.freeDisableThreshold {
-		vs.logCritical("%s has passed the free threshold %d for automatic disabling; %d left free\n", path, vs.diskWatcherState.freeDisableThreshold, du.Free())
-		return true
-	}
-	if vs.diskWatcherState.usageDisableThreshold != 0 && du.Usage() >= vs.diskWatcherState.usageDisableThreshold {
-		vs.logCritical("%s has passed the usage threshold %.02f%% for automatic disabling; %.02f%% current usage\n", path, 100*vs.diskWatcherState.usageDisableThreshold, 100*du.Free())
-		return true
-	}
-	return false
-}
-
-func (vs *DefaultValueStore) diskWatcherReenableCheck(path string) bool {
-	if vs.diskWatcherState.freeReenableThreshold == 0 && vs.diskWatcherState.usageReenableThreshold == 0 {
-		return false
-	}
-	du := du.NewDiskUsage(path)
-	if vs.diskWatcherState.freeReenableThreshold != 0 && du.Free() >= vs.diskWatcherState.freeReenableThreshold {
-		vs.logCritical("%s has passed the free threshold %d for automatic re-enabling; %d left free\n", path, vs.diskWatcherState.freeReenableThreshold, du.Free())
-		return true
-	}
-	if vs.diskWatcherState.usageReenableThreshold != 0 && du.Usage() <= vs.diskWatcherState.usageReenableThreshold {
-		vs.logCritical("%s has passed the usage threshold %.02f%% for automatic re-enabling; %.02f%% current usage\n", path, 100*vs.diskWatcherState.usageReenableThreshold, 100*du.Free())
-		return true
-	}
-	return false
 }

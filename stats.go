@@ -106,6 +106,24 @@ type Stats struct {
 	// the entire file size being too small. For example, this may happen when
 	// the valuestore is shutdown and restarted.
 	SmallFileCompactions int32
+	// Free is the number of bytes free on the device containing the
+	// Config.Path for the DefaultValueStore.
+	Free uint64
+	// Used is the number of bytes used on the device containing the
+	// Config.Path for the DefaultValueStore.
+	Used uint64
+	// Size is the size in bytes of the device containing the Config.Path for
+	// the DefaultValueStore.
+	Size uint64
+	// FreeTOC is the number of bytes free on the device containing the
+	// Config.PathTOC for the DefaultValueStore.
+	FreeTOC uint64
+	// UsedTOC is the number of bytes used on the device containing the
+	// Config.PathTOC for the DefaultValueStore.
+	UsedTOC uint64
+	// SizeTOC is the size in bytes of the device containing the Config.PathTOC
+	// for the DefaultValueStore.
+	SizeTOC uint64
 
 	debug                      bool
 	freeableVMChansCap         int
@@ -157,6 +175,11 @@ type Stats struct {
 // The various values reported when debug=true are left undocumented because
 // they are subject to change based on implementation. They are only provided
 // when the Stats.String() is called.
+//
+// Note that this function returns a fmt.Stringer because other implementations
+// of ValueStore shouldn't be tied to this implementation's Stats struct. But,
+// if it's known that DefaultValueStore is in use, a quick cast can be done to
+// gain access to individual fields.
 func (vs *DefaultValueStore) Stats(debug bool) fmt.Stringer {
 	vs.statsLock.Lock()
 	stats := &Stats{
@@ -194,6 +217,12 @@ func (vs *DefaultValueStore) Stats(debug bool) fmt.Stringer {
 		ExpiredDeletions:             atomic.LoadInt32(&vs.expiredDeletions),
 		Compactions:                  atomic.LoadInt32(&vs.compactions),
 		SmallFileCompactions:         atomic.LoadInt32(&vs.smallFileCompactions),
+		Free:                         atomic.LoadUint64(&vs.diskWatcherState.free),
+		Used:                         atomic.LoadUint64(&vs.diskWatcherState.used),
+		Size:                         atomic.LoadUint64(&vs.diskWatcherState.size),
+		FreeTOC:                      atomic.LoadUint64(&vs.diskWatcherState.freetoc),
+		UsedTOC:                      atomic.LoadUint64(&vs.diskWatcherState.usedtoc),
+		SizeTOC:                      atomic.LoadUint64(&vs.diskWatcherState.sizetoc),
 	}
 	atomic.AddInt32(&vs.lookups, -stats.Lookups)
 	atomic.AddInt32(&vs.lookupErrors, -stats.LookupErrors)
@@ -323,6 +352,12 @@ func (stats *Stats) String() string {
 		{"ExpiredDeletions", fmt.Sprintf("%d", stats.ExpiredDeletions)},
 		{"Compactions", fmt.Sprintf("%d", stats.Compactions)},
 		{"SmallFileCompactions", fmt.Sprintf("%d", stats.SmallFileCompactions)},
+		{"Free", fmt.Sprintf("%d", stats.Free)},
+		{"Used", fmt.Sprintf("%d", stats.Used)},
+		{"Size", fmt.Sprintf("%d", stats.Size)},
+		{"FreeTOC", fmt.Sprintf("%d", stats.FreeTOC)},
+		{"UsedTOC", fmt.Sprintf("%d", stats.UsedTOC)},
+		{"SizeTOC", fmt.Sprintf("%d", stats.SizeTOC)},
 	}
 	if stats.debug {
 		report = append(report, [][]string{
