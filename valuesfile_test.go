@@ -57,12 +57,18 @@ func (f *memFile) Close() error {
 }
 
 func TestValuesFileReading(t *testing.T) {
-	vs := New(nil)
+	vs, err := New(nil)
+	if err != nil {
+		t.Fatal("")
+	}
 	buf := &memBuf{buf: []byte("0123456789abcdef")}
 	openReadSeeker := func(name string) (io.ReadSeeker, error) {
 		return &memFile{buf: buf}, nil
 	}
-	vf := newValuesFile(vs, 12345, openReadSeeker)
+	vf, err := newValuesFile(vs, 12345, openReadSeeker)
+	if err != nil {
+		t.Fatal("")
+	}
 	if vf == nil {
 		t.Fatal("")
 	}
@@ -138,7 +144,10 @@ func TestValuesFileReading(t *testing.T) {
 }
 
 func TestValuesFileWritingEmpty(t *testing.T) {
-	vs := New(nil)
+	vs, err := New(nil)
+	if err != nil {
+		t.Fatal("")
+	}
 	buf := &memBuf{}
 	createWriteCloser := func(name string) (io.WriteCloser, error) {
 		return &memFile{buf: buf}, nil
@@ -146,7 +155,10 @@ func TestValuesFileWritingEmpty(t *testing.T) {
 	openReadSeeker := func(name string) (io.ReadSeeker, error) {
 		return &memFile{buf: buf}, nil
 	}
-	vf := createValuesFile(vs, createWriteCloser, openReadSeeker)
+	vf, err := createValuesFile(vs, createWriteCloser, openReadSeeker)
+	if err != nil {
+		t.Fatal("")
+	}
 	if vf == nil {
 		t.Fatal("")
 	}
@@ -176,7 +188,10 @@ func TestValuesFileWritingEmpty(t *testing.T) {
 }
 
 func TestValuesFileWritingEmpty2(t *testing.T) {
-	vs := New(nil)
+	vs, err := New(nil)
+	if err != nil {
+		t.Fatal("")
+	}
 	vs.freeableVMChans = make([]chan *valuesMem, 1)
 	vs.freeableVMChans[0] = make(chan *valuesMem, 1)
 	buf := &memBuf{}
@@ -186,7 +201,10 @@ func TestValuesFileWritingEmpty2(t *testing.T) {
 	openReadSeeker := func(name string) (io.ReadSeeker, error) {
 		return &memFile{buf: buf}, nil
 	}
-	vf := createValuesFile(vs, createWriteCloser, openReadSeeker)
+	vf, err := createValuesFile(vs, createWriteCloser, openReadSeeker)
+	if err != nil {
+		t.Fatal("")
+	}
 	if vf == nil {
 		t.Fatal("")
 	}
@@ -222,7 +240,10 @@ func TestValuesFileWritingEmpty2(t *testing.T) {
 }
 
 func TestValuesFileWriting(t *testing.T) {
-	vs := New(nil)
+	vs, err := New(nil)
+	if err != nil {
+		t.Fatal("")
+	}
 	buf := &memBuf{}
 	createWriteCloser := func(name string) (io.WriteCloser, error) {
 		return &memFile{buf: buf}, nil
@@ -230,7 +251,10 @@ func TestValuesFileWriting(t *testing.T) {
 	openReadSeeker := func(name string) (io.ReadSeeker, error) {
 		return &memFile{buf: buf}, nil
 	}
-	vf := createValuesFile(vs, createWriteCloser, openReadSeeker)
+	vf, err := createValuesFile(vs, createWriteCloser, openReadSeeker)
+	if err != nil {
+		t.Fatal("")
+	}
 	if vf == nil {
 		t.Fatal("")
 	}
@@ -267,7 +291,10 @@ func TestValuesFileWriting(t *testing.T) {
 }
 
 func TestValuesFileWritingMore(t *testing.T) {
-	vs := New(nil)
+	vs, err := New(nil)
+	if err != nil {
+		t.Fatal("")
+	}
 	buf := &memBuf{}
 	createWriteCloser := func(name string) (io.WriteCloser, error) {
 		return &memFile{buf: buf}, nil
@@ -275,7 +302,10 @@ func TestValuesFileWritingMore(t *testing.T) {
 	openReadSeeker := func(name string) (io.ReadSeeker, error) {
 		return &memFile{buf: buf}, nil
 	}
-	vf := createValuesFile(vs, createWriteCloser, openReadSeeker)
+	vf, err := createValuesFile(vs, createWriteCloser, openReadSeeker)
+	if err != nil {
+		t.Fatal("")
+	}
 	if vf == nil {
 		t.Fatal("")
 	}
@@ -309,7 +339,10 @@ func TestValuesFileWritingMore(t *testing.T) {
 }
 
 func TestValuesFileWritingMultiple(t *testing.T) {
-	vs := New(nil)
+	vs, err := New(nil)
+	if err != nil {
+		t.Fatal("")
+	}
 	vs.freeableVMChans = make([]chan *valuesMem, 1)
 	vs.freeableVMChans[0] = make(chan *valuesMem, 2)
 	buf := &memBuf{}
@@ -319,7 +352,10 @@ func TestValuesFileWritingMultiple(t *testing.T) {
 	openReadSeeker := func(name string) (io.ReadSeeker, error) {
 		return &memFile{buf: buf}, nil
 	}
-	vf := createValuesFile(vs, createWriteCloser, openReadSeeker)
+	vf, err := createValuesFile(vs, createWriteCloser, openReadSeeker)
+	if err != nil {
+		t.Fatal("")
+	}
 	if vf == nil {
 		t.Fatal("")
 	}

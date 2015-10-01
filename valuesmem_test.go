@@ -6,7 +6,10 @@ import (
 )
 
 func TestValuesMemRead(t *testing.T) {
-	vs := New(nil)
+	vs, err := New(nil)
+	if err != nil {
+		t.Fatal("")
+	}
 	vm1 := &valuesMem{id: 1, vs: vs, values: []byte("0123456789abcdef")}
 	vm2 := &valuesMem{id: 2, vs: vs, values: []byte("fedcba9876543210")}
 	vs.valueLocBlocks = []valueLocBlock{nil, vm1, vm2}

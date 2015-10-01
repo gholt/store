@@ -14,11 +14,9 @@ import (
 	"gopkg.in/gholt/brimutil.v1"
 )
 
-// TODO: No more panicking since we might not be the only reason this go
-// process is running.
-
 type valuesFile struct {
 	vs                  *DefaultValueStore
+	name                string
 	id                  uint32
 	bts                 int64
 	writerFP            io.WriteCloser
@@ -49,30 +47,35 @@ func osCreateWriteCloser(name string) (io.WriteCloser, error) {
 	return os.Create(name)
 }
 
-func newValuesFile(vs *DefaultValueStore, bts int64, openReadSeeker func(name string) (io.ReadSeeker, error)) *valuesFile {
+func newValuesFile(vs *DefaultValueStore, bts int64, openReadSeeker func(name string) (io.ReadSeeker, error)) (*valuesFile, error) {
 	vf := &valuesFile{vs: vs, bts: bts}
-	name := path.Join(vs.path, fmt.Sprintf("%019d.values", vf.bts))
+	vf.name = path.Join(vs.path, fmt.Sprintf("%019d.values", vf.bts))
 	vf.readerFPs = make([]brimutil.ChecksummedReader, vs.valuesFileReaders)
 	vf.readerLocks = make([]sync.Mutex, len(vf.readerFPs))
 	vf.readerLens = make([][]byte, len(vf.readerFPs))
 	for i := 0; i < len(vf.readerFPs); i++ {
-		fp, err := openReadSeeker(name)
+		fp, err := openReadSeeker(vf.name)
 		if err != nil {
-			panic(err)
+			return nil, err
 		}
 		vf.readerFPs[i] = brimutil.NewChecksummedReader(fp, int(vs.checksumInterval), murmur3.New32)
 		vf.readerLens[i] = make([]byte, 4)
 	}
-	vf.id = vs.addValueLocBlock(vf)
-	return vf
+	var err error
+	vf.id, err = vs.addValueLocBlock(vf)
+	if err != nil {
+		vf.close()
+		return nil, err
+	}
+	return vf, nil
 }
 
-func createValuesFile(vs *DefaultValueStore, createWriteCloser func(name string) (io.WriteCloser, error), openReadSeeker func(name string) (io.ReadSeeker, error)) *valuesFile {
+func createValuesFile(vs *DefaultValueStore, createWriteCloser func(name string) (io.WriteCloser, error), openReadSeeker func(name string) (io.ReadSeeker, error)) (*valuesFile, error) {
 	vf := &valuesFile{vs: vs, bts: time.Now().UnixNano()}
-	name := path.Join(vs.path, fmt.Sprintf("%019d.values", vf.bts))
-	fp, err := createWriteCloser(name)
+	vf.name = path.Join(vs.path, fmt.Sprintf("%019d.values", vf.bts))
+	fp, err := createWriteCloser(vf.name)
 	if err != nil {
-		panic(err)
+		return nil, err
 	}
 	vf.writerFP = fp
 	vf.freeChan = make(chan *valuesFileWriteBuf, vs.workers)
@@ -95,15 +98,22 @@ func createValuesFile(vs *DefaultValueStore, createWriteCloser func(name string)
 	vf.readerLocks = make([]sync.Mutex, len(vf.readerFPs))
 	vf.readerLens = make([][]byte, len(vf.readerFPs))
 	for i := 0; i < len(vf.readerFPs); i++ {
-		fp, err := openReadSeeker(name)
+		fp, err := openReadSeeker(vf.name)
 		if err != nil {
-			panic(err)
+			vf.writerFP.Close()
+			for j := 0; j < i; j++ {
+				vf.readerFPs[j].Close()
+			}
+			return nil, err
 		}
 		vf.readerFPs[i] = brimutil.NewChecksummedReader(fp, int(vs.checksumInterval), murmur3.New32)
 		vf.readerLens[i] = make([]byte, 4)
 	}
-	vf.id = vs.addValueLocBlock(vf)
-	return vf
+	vf.id, err = vs.addValueLocBlock(vf)
+	if err != nil {
+		return nil, err
+	}
+	return vf, nil
 }
 
 func (vf *valuesFile) timestampnano() int64 {
@@ -173,7 +183,8 @@ func (vf *valuesFile) write(vm *valuesMem) {
 	}
 }
 
-func (vf *valuesFile) close() {
+func (vf *valuesFile) close() error {
+	var reterr error
 	close(vf.checksumChan)
 	for i := 0; i < cap(vf.checksumChan); i++ {
 		<-vf.doneChan
@@ -189,13 +200,18 @@ func (vf *valuesFile) close() {
 		vf.buf.offset += uint32(n)
 		binary.BigEndian.PutUint32(vf.buf.buf[vf.buf.offset:], murmur3.Sum32(vf.buf.buf[:vf.buf.offset]))
 		if _, err := vf.writerFP.Write(vf.buf.buf[:vf.buf.offset+4]); err != nil {
-			panic(err)
+			if reterr == nil {
+				reterr = err
+			}
+			break
 		}
 		vf.buf.offset = 0
 		left -= n
 	}
 	if err := vf.writerFP.Close(); err != nil {
-		panic(err)
+		if reterr == nil {
+			reterr = err
+		}
 	}
 	for _, vm := range vf.buf.vms {
 		vf.vs.freeableVMChans[vf.freeableVMChanIndex] <- vm
@@ -222,6 +238,7 @@ func (vf *valuesFile) close() {
 		// fairly few and easily recoverable on a re-read.
 		vf.readerLocks[i].Unlock()
 	}
+	return reterr
 }
 
 func (vf *valuesFile) checksummer() {
@@ -255,7 +272,8 @@ func (vf *valuesFile) writer() {
 			continue
 		}
 		if _, err := vf.writerFP.Write(buf.buf); err != nil {
-			panic(err)
+			vf.vs.logCritical("%s %s\n", vf.name, err)
+			break
 		}
 		if len(buf.vms) > 0 {
 			for _, vm := range buf.vms {

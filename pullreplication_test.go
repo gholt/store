@@ -63,7 +63,10 @@ func TestPullReplicationSimple(t *testing.T) {
 	r := b.Ring()
 	r.SetLocalNode(n.ID())
 	m := &msgRingPullReplicationTester{ring: r}
-	vs := New(&Config{MsgRing: m})
+	vs, err := New(&Config{MsgRing: m})
+	if err != nil {
+		t.Fatal("")
+	}
 	vs.EnableAll()
 	defer vs.DisableAll()
 	_, err = vs.write(1, 2, 0x300, []byte("testing"), false)

@@ -61,7 +61,10 @@ func (w *testErrorWriter) Write(p []byte) (int, error) {
 }
 
 func TestBulkSetReadObviouslyTooShort(t *testing.T) {
-	vs := New(&Config{MsgRing: &msgRingPlaceholder{}})
+	vs, err := New(&Config{MsgRing: &msgRingPlaceholder{}})
+	if err != nil {
+		t.Fatal("")
+	}
 	for i := 0; i < len(vs.bulkSetState.inBulkSetDoneChans); i++ {
 		vs.bulkSetState.inMsgChan <- nil
 	}
@@ -93,7 +96,10 @@ func TestBulkSetReadObviouslyTooShort(t *testing.T) {
 }
 
 func TestBulkSetRead(t *testing.T) {
-	vs := New(&Config{MsgRing: &msgRingPlaceholder{}})
+	vs, err := New(&Config{MsgRing: &msgRingPlaceholder{}})
+	if err != nil {
+		t.Fatal("")
+	}
 	for i := 0; i < len(vs.bulkSetState.inBulkSetDoneChans); i++ {
 		vs.bulkSetState.inMsgChan <- nil
 	}
@@ -137,7 +143,10 @@ func TestBulkSetRead(t *testing.T) {
 }
 
 func TestBulkSetReadLowSendCap(t *testing.T) {
-	vs := New(&Config{MsgRing: &msgRingPlaceholder{}, BulkSetMsgCap: _BULK_SET_MSG_HEADER_LENGTH + 1})
+	vs, err := New(&Config{MsgRing: &msgRingPlaceholder{}, BulkSetMsgCap: _BULK_SET_MSG_HEADER_LENGTH + 1})
+	if err != nil {
+		t.Fatal("")
+	}
 	for i := 0; i < len(vs.bulkSetState.inBulkSetDoneChans); i++ {
 		vs.bulkSetState.inMsgChan <- nil
 	}
@@ -166,11 +175,14 @@ func TestBulkSetMsgWithoutAck(t *testing.T) {
 	r := b.Ring()
 	r.SetLocalNode(n.ID())
 	m := &msgRingPlaceholder{ring: r}
-	vs := New(&Config{
+	vs, err := New(&Config{
 		MsgRing:          m,
 		InBulkSetWorkers: 1,
 		InBulkSetMsgs:    1,
 	})
+	if err != nil {
+		t.Fatal("")
+	}
 	vs.EnableAll()
 	defer vs.DisableAll()
 	bsm := <-vs.bulkSetState.inFreeMsgChan
@@ -209,11 +221,14 @@ func TestBulkSetMsgWithAck(t *testing.T) {
 	r := b.Ring()
 	r.SetLocalNode(n.ID())
 	m := &msgRingPlaceholder{ring: r}
-	vs := New(&Config{
+	vs, err := New(&Config{
 		MsgRing:          m,
 		InBulkSetWorkers: 1,
 		InBulkSetMsgs:    1,
 	})
+	if err != nil {
+		t.Fatal("")
+	}
 	vs.EnableAll()
 	defer vs.DisableAll()
 	bsm := <-vs.bulkSetState.inFreeMsgChan
@@ -252,11 +267,14 @@ func TestBulkSetMsgWithAck(t *testing.T) {
 
 func TestBulkSetMsgWithoutRing(t *testing.T) {
 	m := &msgRingPlaceholder{}
-	vs := New(&Config{
+	vs, err := New(&Config{
 		MsgRing:          m,
 		InBulkSetWorkers: 1,
 		InBulkSetMsgs:    1,
 	})
+	if err != nil {
+		t.Fatal("")
+	}
 	vs.EnableAll()
 	defer vs.DisableAll()
 	bsm := <-vs.bulkSetState.inFreeMsgChan
@@ -288,7 +306,10 @@ func TestBulkSetMsgWithoutRing(t *testing.T) {
 }
 
 func TestBulkSetMsgOut(t *testing.T) {
-	vs := New(&Config{MsgRing: &msgRingPlaceholder{}})
+	vs, err := New(&Config{MsgRing: &msgRingPlaceholder{}})
+	if err != nil {
+		t.Fatal("")
+	}
 	bsm := vs.newOutBulkSetMsg()
 	if bsm.MsgType() != _BULK_SET_MSG_TYPE {
 		t.Fatal(bsm.MsgType())
@@ -351,7 +372,10 @@ func TestBulkSetMsgOutDefaultsToFromLocalNode(t *testing.T) {
 	}
 	r := b.Ring()
 	r.SetLocalNode(n.ID())
-	vs := New(&Config{MsgRing: &msgRingPlaceholder{ring: r}})
+	vs, err := New(&Config{MsgRing: &msgRingPlaceholder{ring: r}})
+	if err != nil {
+		t.Fatal("")
+	}
 	bsm := vs.newOutBulkSetMsg()
 	if binary.BigEndian.Uint64(bsm.header) != n.ID() {
 		t.Fatal(bsm)
@@ -359,9 +383,12 @@ func TestBulkSetMsgOutDefaultsToFromLocalNode(t *testing.T) {
 }
 
 func TestBulkSetMsgOutWriteError(t *testing.T) {
-	vs := New(&Config{MsgRing: &msgRingPlaceholder{}})
+	vs, err := New(&Config{MsgRing: &msgRingPlaceholder{}})
+	if err != nil {
+		t.Fatal("")
+	}
 	bsm := vs.newOutBulkSetMsg()
-	_, err := bsm.WriteContent(&testErrorWriter{})
+	_, err = bsm.WriteContent(&testErrorWriter{})
 	if err == nil {
 		t.Fatal(err)
 	}
@@ -369,7 +396,10 @@ func TestBulkSetMsgOutWriteError(t *testing.T) {
 }
 
 func TestBulkSetMsgOutHitCap(t *testing.T) {
-	vs := New(&Config{MsgRing: &msgRingPlaceholder{}, BulkSetMsgCap: _BULK_SET_MSG_HEADER_LENGTH + _BULK_SET_MSG_ENTRY_HEADER_LENGTH + 3})
+	vs, err := New(&Config{MsgRing: &msgRingPlaceholder{}, BulkSetMsgCap: _BULK_SET_MSG_HEADER_LENGTH + _BULK_SET_MSG_ENTRY_HEADER_LENGTH + 3})
+	if err != nil {
+		t.Fatal("")
+	}
 	bsm := vs.newOutBulkSetMsg()
 	if !bsm.add(1, 2, 0x300, []byte("1")) {
 		t.Fatal("")

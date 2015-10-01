@@ -230,7 +230,7 @@ var flushValuesMem *valuesMem = &valuesMem{}
 type valueLocBlock interface {
 	timestampnano() int64
 	read(keyA uint64, keyB uint64, timestampbits uint64, offset uint32, length uint32, value []byte) (uint64, []byte, error)
-	close()
+	close() error
 }
 
 type backgroundNotification struct {
@@ -246,7 +246,7 @@ type backgroundNotification struct {
 // be in use and therefore DisableAll() and Flush() should be called prior to
 // the process exiting to ensure all processing is done and the buffers are
 // flushed.
-func New(c *Config) *DefaultValueStore {
+func New(c *Config) (*DefaultValueStore, error) {
 	cfg := resolveConfig(c)
 	vlm := cfg.ValueLocMap
 	if vlm == nil {
@@ -293,7 +293,11 @@ func New(c *Config) *DefaultValueStore {
 			toc:    make([]byte, 0, vs.pageSize),
 			values: make([]byte, 0, vs.pageSize),
 		}
-		vm.id = vs.addValueLocBlock(vm)
+		var err error
+		vm.id, err = vs.addValueLocBlock(vm)
+		if err != nil {
+			return nil, err
+		}
 		vs.freeVMChan <- vm
 	}
 	for i := 0; i < len(vs.freeVWRChans); i++ {
@@ -316,7 +320,10 @@ func New(c *Config) *DefaultValueStore {
 	for i := 0; i < len(vs.pendingVWRChans); i++ {
 		go vs.memWriter(vs.pendingVWRChans[i])
 	}
-	vs.recovery()
+	err := vs.recovery()
+	if err != nil {
+		return nil, err
+	}
 	vs.tombstoneDiscardConfig(cfg)
 	vs.compactionConfig(cfg)
 	vs.pullReplicationConfig(cfg)
@@ -331,7 +338,7 @@ func New(c *Config) *DefaultValueStore {
 	vs.bulkSetLaunch()
 	vs.bulkSetAckLaunch()
 	vs.diskWatcherLaunch()
-	return vs
+	return vs, nil
 }
 
 // ValueCap returns the maximum length of a value the ValueStore can
@@ -522,13 +529,13 @@ func (vs *DefaultValueStore) valueLocBlock(valueLocBlockID uint32) valueLocBlock
 	return vs.valueLocBlocks[valueLocBlockID]
 }
 
-func (vs *DefaultValueStore) addValueLocBlock(block valueLocBlock) uint32 {
+func (vs *DefaultValueStore) addValueLocBlock(block valueLocBlock) (uint32, error) {
 	id := atomic.AddUint64(&vs.valueLocBlockIDer, 1)
 	if id >= math.MaxUint32 {
-		panic("too many valueLocBlocks")
+		return 0, errors.New("too many valueLocBlocks")
 	}
 	vs.valueLocBlocks[id] = block
-	return uint32(id)
+	return uint32(id), nil
 }
 
 func (vs *DefaultValueStore) valueLocBlockIDFromTimestampnano(tsn int64) uint32 {
@@ -544,8 +551,8 @@ func (vs *DefaultValueStore) valueLocBlockIDFromTimestampnano(tsn int64) uint32 
 	return 0
 }
 
-func (vs *DefaultValueStore) closeValueLocBlock(valueLocBlockID uint32) {
-	vs.valueLocBlocks[valueLocBlockID].close()
+func (vs *DefaultValueStore) closeValueLocBlock(valueLocBlockID uint32) error {
+	return vs.valueLocBlocks[valueLocBlockID].close()
 }
 
 func (vs *DefaultValueStore) memClearer(freeableVMChan chan *valuesMem) {
@@ -698,7 +705,10 @@ func (vs *DefaultValueStore) vfWriter() {
 				continue
 			}
 			if vf != nil {
-				vf.close()
+				err := vf.close()
+				if err != nil {
+					vs.logCritical("error closing %s: %s\n", vf.name, err)
+				}
 				vf = nil
 			}
 			for i := 0; i < len(vs.freeableVMChans); i++ {
@@ -708,11 +718,19 @@ func (vs *DefaultValueStore) vfWriter() {
 			continue
 		}
 		if vf != nil && (tocLen+uint64(len(vm.toc)) >= uint64(vs.valuesFileCap) || valueLen+uint64(len(vm.values)) > uint64(vs.valuesFileCap)) {
-			vf.close()
+			err := vf.close()
+			if err != nil {
+				vs.logCritical("error closing %s: %s\n", vf.name, err)
+			}
 			vf = nil
 		}
 		if vf == nil {
-			vf = createValuesFile(vs, osCreateWriteCloser, osOpenReadSeeker)
+			var err error
+			vf, err = createValuesFile(vs, osCreateWriteCloser, osOpenReadSeeker)
+			if err != nil {
+				vs.logCritical("vfWriter: %s\n", err)
+				break
+			}
 			tocLen = 32
 			valueLen = 32
 		}
@@ -731,10 +749,12 @@ func (vs *DefaultValueStore) tocWriter() {
 	var offsetA uint64
 	var writerB io.WriteCloser
 	var offsetB uint64
+	var err error
 	head := []byte("VALUESTORETOC v0                ")
 	binary.BigEndian.PutUint32(head[28:], uint32(vs.checksumInterval))
 	term := make([]byte, 16)
 	copy(term[12:], "TERM")
+OuterLoop:
 	for {
 		t := <-vs.pendingTOCBlockChan
 		if t == nil {
@@ -744,11 +764,11 @@ func (vs *DefaultValueStore) tocWriter() {
 			}
 			if writerB != nil {
 				binary.BigEndian.PutUint64(term[4:], offsetB)
-				if _, err := writerB.Write(term); err != nil {
-					panic(err)
+				if _, err = writerB.Write(term); err != nil {
+					break OuterLoop
 				}
-				if err := writerB.Close(); err != nil {
-					panic(err)
+				if err = writerB.Close(); err != nil {
+					break OuterLoop
 				}
 				writerB = nil
 				atomic.StoreUint64(&vs.activeTOCB, 0)
@@ -756,11 +776,11 @@ func (vs *DefaultValueStore) tocWriter() {
 			}
 			if writerA != nil {
 				binary.BigEndian.PutUint64(term[4:], offsetA)
-				if _, err := writerA.Write(term); err != nil {
-					panic(err)
+				if _, err = writerA.Write(term); err != nil {
+					break OuterLoop
 				}
-				if err := writerA.Close(); err != nil {
-					panic(err)
+				if err = writerA.Close(); err != nil {
+					break OuterLoop
 				}
 				writerA = nil
 				atomic.StoreUint64(&vs.activeTOCA, 0)
@@ -774,13 +794,13 @@ func (vs *DefaultValueStore) tocWriter() {
 			bts := binary.BigEndian.Uint64(t)
 			switch bts {
 			case atomic.LoadUint64(&vs.activeTOCA):
-				if _, err := writerA.Write(t[8:]); err != nil {
-					panic(err)
+				if _, err = writerA.Write(t[8:]); err != nil {
+					break OuterLoop
 				}
 				offsetA += uint64(len(t) - 8)
 			case atomic.LoadUint64(&vs.activeTOCB):
-				if _, err := writerB.Write(t[8:]); err != nil {
-					panic(err)
+				if _, err = writerB.Write(t[8:]); err != nil {
+					break OuterLoop
 				}
 				offsetB += uint64(len(t) - 8)
 			default:
@@ -790,36 +810,46 @@ func (vs *DefaultValueStore) tocWriter() {
 				// timestampnano and can close that toc file.
 				if writerB != nil {
 					binary.BigEndian.PutUint64(term[4:], offsetB)
-					if _, err := writerB.Write(term); err != nil {
-						panic(err)
+					if _, err = writerB.Write(term); err != nil {
+						break OuterLoop
 					}
-					if err := writerB.Close(); err != nil {
-						panic(err)
+					if err = writerB.Close(); err != nil {
+						break OuterLoop
 					}
 				}
 				atomic.StoreUint64(&vs.activeTOCB, atomic.LoadUint64(&vs.activeTOCA))
 				writerB = writerA
 				offsetB = offsetA
 				atomic.StoreUint64(&vs.activeTOCA, bts)
-				fp, err := os.Create(path.Join(vs.pathtoc, fmt.Sprintf("%d.valuestoc", bts)))
+				var fp *os.File
+				fp, err = os.Create(path.Join(vs.pathtoc, fmt.Sprintf("%d.valuestoc", bts)))
 				if err != nil {
-					panic(err)
+					break OuterLoop
 				}
 				writerA = brimutil.NewMultiCoreChecksummedWriter(fp, int(vs.checksumInterval), murmur3.New32, vs.workers)
-				if _, err := writerA.Write(head); err != nil {
-					panic(err)
+				if _, err = writerA.Write(head); err != nil {
+					break OuterLoop
 				}
-				if _, err := writerA.Write(t[8:]); err != nil {
-					panic(err)
+				if _, err = writerA.Write(t[8:]); err != nil {
+					break OuterLoop
 				}
 				offsetA = 32 + uint64(len(t)-8)
 			}
 		}
 		vs.freeTOCBlockChan <- t[:0]
 	}
+	if err != nil {
+		vs.logCritical("tocWriter: %s\n", err)
+	}
+	if writerA != nil {
+		writerA.Close()
+	}
+	if writerB != nil {
+		writerB.Close()
+	}
 }
 
-func (vs *DefaultValueStore) recovery() {
+func (vs *DefaultValueStore) recovery() error {
 	start := time.Now()
 	fromDiskCount := 0
 	causedChangeCount := int64(0)
@@ -874,12 +904,12 @@ func (vs *DefaultValueStore) recovery() {
 	batchesPos := make([]int, len(batches))
 	fp, err := os.Open(vs.pathtoc)
 	if err != nil {
-		panic(err)
+		return err
 	}
 	names, err := fp.Readdirnames(-1)
 	fp.Close()
 	if err != nil {
-		panic(err)
+		return err
 	}
 	sort.Strings(names)
 	for i := 0; i < len(names); i++ {
@@ -895,7 +925,11 @@ func (vs *DefaultValueStore) recovery() {
 			vs.logError("bad timestamp in name: %#v\n", names[i])
 			continue
 		}
-		vf := newValuesFile(vs, namets, osOpenReadSeeker)
+		vf, err := newValuesFile(vs, namets, osOpenReadSeeker)
+		if err != nil {
+			vs.logError("error opening %s: %s\n", names[i], err)
+			continue
+		}
 		fp, err := os.Open(path.Join(vs.pathtoc, names[i]))
 		if err != nil {
 			vs.logError("error opening %s: %s\n", names[i], err)
@@ -1017,4 +1051,5 @@ func (vs *DefaultValueStore) recovery() {
 		stats := vs.Stats(false).(*Stats)
 		vs.logInfo("%d key locations loaded in %s, %.0f/s; %d caused change; %d resulting locations referencing %d bytes.\n", fromDiskCount, dur, float64(fromDiskCount)/(float64(dur)/float64(time.Second)), causedChangeCount, stats.Values, stats.ValueBytes)
 	}
+	return nil
 }

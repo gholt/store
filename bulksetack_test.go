@@ -9,7 +9,10 @@ import (
 )
 
 func TestBulkSetAckRead(t *testing.T) {
-	vs := New(&Config{MsgRing: &msgRingPlaceholder{}})
+	vs, err := New(&Config{MsgRing: &msgRingPlaceholder{}})
+	if err != nil {
+		t.Fatal("")
+	}
 	for i := 0; i < len(vs.bulkSetAckState.inBulkSetAckDoneChans); i++ {
 		vs.bulkSetAckState.inMsgChan <- nil
 	}
@@ -40,7 +43,10 @@ func TestBulkSetAckRead(t *testing.T) {
 }
 
 func TestBulkSetAckReadLowSendCap(t *testing.T) {
-	vs := New(&Config{MsgRing: &msgRingPlaceholder{}, BulkSetAckMsgCap: 1})
+	vs, err := New(&Config{MsgRing: &msgRingPlaceholder{}, BulkSetAckMsgCap: 1})
+	if err != nil {
+		t.Fatal("")
+	}
 	for i := 0; i < len(vs.bulkSetAckState.inBulkSetAckDoneChans); i++ {
 		vs.bulkSetAckState.inMsgChan <- nil
 	}
@@ -66,11 +72,14 @@ func TestBulkSetAckMsgIncoming(t *testing.T) {
 	r := b.Ring()
 	r.SetLocalNode(n.ID() + 1) // so we're not responsible for anything
 	m := &msgRingPlaceholder{ring: r}
-	vs := New(&Config{
+	vs, err := New(&Config{
 		MsgRing:             m,
 		InBulkSetAckWorkers: 1,
 		InBulkSetAckMsgs:    1,
 	})
+	if err != nil {
+		t.Fatal("")
+	}
 	vs.EnableAll()
 	defer vs.DisableAll()
 	ts, err := vs.write(1, 2, 0x300, []byte("testing"), true)
@@ -115,11 +124,14 @@ func TestBulkSetAckMsgIncoming(t *testing.T) {
 
 func TestBulkSetAckMsgIncomingNoRing(t *testing.T) {
 	m := &msgRingPlaceholder{}
-	vs := New(&Config{
+	vs, err := New(&Config{
 		MsgRing:             m,
 		InBulkSetAckWorkers: 1,
 		InBulkSetAckMsgs:    1,
 	})
+	if err != nil {
+		t.Fatal("")
+	}
 	vs.EnableAll()
 	defer vs.DisableAll()
 	ts, err := vs.write(1, 2, 0x300, []byte("testing"), true)
@@ -164,7 +176,10 @@ func TestBulkSetAckMsgIncomingNoRing(t *testing.T) {
 }
 
 func TestBulkSetAckMsgOut(t *testing.T) {
-	vs := New(&Config{MsgRing: &msgRingPlaceholder{}})
+	vs, err := New(&Config{MsgRing: &msgRingPlaceholder{}})
+	if err != nil {
+		t.Fatal("")
+	}
 	bsam := vs.newOutBulkSetAckMsg()
 	if bsam.MsgType() != _BULK_SET_ACK_MSG_TYPE {
 		t.Fatal(bsam.MsgType())
@@ -215,10 +230,13 @@ func TestBulkSetAckMsgOut(t *testing.T) {
 }
 
 func TestBulkSetAckMsgOutWriteError(t *testing.T) {
-	vs := New(&Config{MsgRing: &msgRingPlaceholder{}})
+	vs, err := New(&Config{MsgRing: &msgRingPlaceholder{}})
+	if err != nil {
+		t.Fatal("")
+	}
 	bsam := vs.newOutBulkSetAckMsg()
 	bsam.add(1, 2, 0x300)
-	_, err := bsam.WriteContent(&testErrorWriter{})
+	_, err = bsam.WriteContent(&testErrorWriter{})
 	if err == nil {
 		t.Fatal(err)
 	}
@@ -226,7 +244,10 @@ func TestBulkSetAckMsgOutWriteError(t *testing.T) {
 }
 
 func TestBulkSetAckMsgOutHitCap(t *testing.T) {
-	vs := New(&Config{MsgRing: &msgRingPlaceholder{}, BulkSetAckMsgCap: _BULK_SET_ACK_MSG_ENTRY_LENGTH + 3})
+	vs, err := New(&Config{MsgRing: &msgRingPlaceholder{}, BulkSetAckMsgCap: _BULK_SET_ACK_MSG_ENTRY_LENGTH + 3})
+	if err != nil {
+		t.Fatal("")
+	}
 	bsam := vs.newOutBulkSetAckMsg()
 	if !bsam.add(1, 2, 0x300) {
 		t.Fatal("")

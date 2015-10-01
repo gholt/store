@@ -35,5 +35,6 @@ func (vm *valuesMem) read(keyA uint64, keyB uint64, timestampbits uint64, offset
 	return timestampbits, value, nil
 }
 
-func (vm *valuesMem) close() {
+func (vm *valuesMem) close() error {
+	return nil
 }
