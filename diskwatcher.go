@@ -49,12 +49,13 @@ func (vs *DefaultValueStore) diskWatcher() {
 		usagetoc := utoc.Usage()
 		if disabled {
 			if (vs.diskWatcherState.freeReenableThreshold == 0 || (vs.diskWatcherState.free >= vs.diskWatcherState.freeReenableThreshold && vs.diskWatcherState.freetoc >= vs.diskWatcherState.freeReenableThreshold)) && (vs.diskWatcherState.usageReenableThreshold == 0 || (usage <= vs.diskWatcherState.usageReenableThreshold && usagetoc <= vs.diskWatcherState.usageReenableThreshold)) {
-				vs.logCritical("passed the threshold for automatic re-enabling\n")
+				vs.logCritical("passed the free/usage threshold for automatic re-enabling\n")
 				vs.enableWrites(false) // false indicates non-user call
 				disabled = false
 			}
 		} else {
 			if (vs.diskWatcherState.freeDisableThreshold != 0 && (vs.diskWatcherState.free <= vs.diskWatcherState.freeDisableThreshold || vs.diskWatcherState.freetoc <= vs.diskWatcherState.freeDisableThreshold)) || (vs.diskWatcherState.usageDisableThreshold != 0 && (usage >= vs.diskWatcherState.usageDisableThreshold || usagetoc >= vs.diskWatcherState.usageDisableThreshold)) {
+				vs.logCritical("passed the free/usage threshold for automatic disabling\n")
 				vs.disableWrites(false) // false indicates non-user call
 				disabled = true
 			}
