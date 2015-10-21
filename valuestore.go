@@ -250,7 +250,7 @@ func New(c *Config) (*DefaultValueStore, error) {
 	cfg := resolveConfig(c)
 	vlm := cfg.ValueLocMap
 	if vlm == nil {
-		vlm = valuelocmap.New(nil)
+		vlm = valuelocmap.NewValueLocMap(nil)
 	}
 	vlm.SetInactiveMask(_TSB_INACTIVE)
 	vs := &DefaultValueStore{

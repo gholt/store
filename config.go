@@ -75,7 +75,7 @@ type Config struct {
 	WritePagesPerWorker int
 	// ValueLocMap allows overriding the default ValueLocMap, an interface used
 	// by ValueStore for tracking the mappings from keys to the locations of
-	// their values. Defaults to github.com/gholt/valuelocmap.New().
+	// their values. Defaults to github.com/gholt/valuelocmap.NewValueLocMap().
 	ValueLocMap valuelocmap.ValueLocMap
 	// MsgRing sets the ring.MsgRing to use for determining the key ranges the
 	// ValueStore is responsible for as well as providing methods to send
