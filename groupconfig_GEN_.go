@@ -85,12 +85,12 @@ type GroupStoreConfig struct {
 	// MsgTimeout indicates the maximum milliseconds a message can be pending
 	// before just discarding it. Defaults to 100 milliseconds.
 	MsgTimeout int
-	// ValuesFileCap indicates how large a values file can be before closing it
-	// and opening a new one. Defaults to 4,294,967,295 bytes.
-	ValuesFileCap int
-	// ValuesFileReaders indicates how many open file descriptors are allowed
-	// per values file for reading. Defaults to Workers.
-	ValuesFileReaders int
+	// FileCap indicates how large a file can be before closing it and opening
+	// a new one. Defaults to 4,294,967,295 bytes.
+	FileCap int
+	// FileReaders indicates how many open file descriptors are allowed per
+	// file for reading. Defaults to Workers.
+	FileReaders int
 	// RecoveryBatchSize indicates how many keys to set in a batch while
 	// performing recovery (initial start up). Defaults to 1,048,576 keys.
 	RecoveryBatchSize int
@@ -366,31 +366,31 @@ func resolveGroupStoreConfig(c *GroupStoreConfig) *GroupStoreConfig {
 	if cfg.MsgTimeout < 1 {
 		cfg.MsgTimeout = 100
 	}
-	if env := os.Getenv("GROUPSTORE_VALUES_FILE_CAP"); env != "" {
+	if env := os.Getenv("GROUPSTORE_FILE_CAP"); env != "" {
 		if val, err := strconv.Atoi(env); err == nil {
-			cfg.ValuesFileCap = val
+			cfg.FileCap = val
 		}
 	}
-	if cfg.ValuesFileCap == 0 {
-		cfg.ValuesFileCap = math.MaxUint32
+	if cfg.FileCap == 0 {
+		cfg.FileCap = math.MaxUint32
 	}
 	// TODO: Make the 40 and 8 consts
-	if cfg.ValuesFileCap < 48+cfg.ValueCap { // header value trailer
-		cfg.ValuesFileCap = 48 + cfg.ValueCap
+	if cfg.FileCap < 48+cfg.ValueCap { // header value trailer
+		cfg.FileCap = 48 + cfg.ValueCap
 	}
-	if cfg.ValuesFileCap > math.MaxUint32 {
-		cfg.ValuesFileCap = math.MaxUint32
+	if cfg.FileCap > math.MaxUint32 {
+		cfg.FileCap = math.MaxUint32
 	}
-	if env := os.Getenv("GROUPSTORE_VALUES_FILE_READERS"); env != "" {
+	if env := os.Getenv("GROUPSTORE_FILE_READERS"); env != "" {
 		if val, err := strconv.Atoi(env); err == nil {
-			cfg.ValuesFileReaders = val
+			cfg.FileReaders = val
 		}
 	}
-	if cfg.ValuesFileReaders == 0 {
-		cfg.ValuesFileReaders = cfg.Workers
+	if cfg.FileReaders == 0 {
+		cfg.FileReaders = cfg.Workers
 	}
-	if cfg.ValuesFileReaders < 1 {
-		cfg.ValuesFileReaders = 1
+	if cfg.FileReaders < 1 {
+		cfg.FileReaders = 1
 	}
 	if env := os.Getenv("GROUPSTORE_RECOVERY_BATCH_SIZE"); env != "" {
 		if val, err := strconv.Atoi(env); err == nil {

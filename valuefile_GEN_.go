@@ -4,7 +4,6 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
-	"os"
 	"path"
 	"sync"
 	"sync/atomic"
@@ -14,43 +13,35 @@ import (
 	"gopkg.in/gholt/brimutil.v1"
 )
 
-type valuesFile struct {
+type valueFile struct {
 	vs                  *DefaultValueStore
 	name                string
 	id                  uint32
 	bts                 int64
 	writerFP            io.WriteCloser
 	atOffset            uint32
-	freeChan            chan *valuesFileWriteBuf
-	checksumChan        chan *valuesFileWriteBuf
-	writeChan           chan *valuesFileWriteBuf
+	freeChan            chan *valueFileWriteBuf
+	checksumChan        chan *valueFileWriteBuf
+	writeChan           chan *valueFileWriteBuf
 	doneChan            chan struct{}
-	buf                 *valuesFileWriteBuf
+	buf                 *valueFileWriteBuf
 	freeableVMChanIndex int
 	readerFPs           []brimutil.ChecksummedReader
 	readerLocks         []sync.Mutex
 	readerLens          [][]byte
 }
 
-type valuesFileWriteBuf struct {
+type valueFileWriteBuf struct {
 	seq    int
 	buf    []byte
 	offset uint32
-	vms    []*valuesMem
+	vms    []*valueMem
 }
 
-func osOpenReadSeeker(name string) (io.ReadSeeker, error) {
-	return os.Open(name)
-}
-
-func osCreateWriteCloser(name string) (io.WriteCloser, error) {
-	return os.Create(name)
-}
-
-func newValuesFile(vs *DefaultValueStore, bts int64, openReadSeeker func(name string) (io.ReadSeeker, error)) (*valuesFile, error) {
-	vf := &valuesFile{vs: vs, bts: bts}
+func newValueFile(vs *DefaultValueStore, bts int64, openReadSeeker func(name string) (io.ReadSeeker, error)) (*valueFile, error) {
+	vf := &valueFile{vs: vs, bts: bts}
 	vf.name = path.Join(vs.path, fmt.Sprintf("%019d.values", vf.bts))
-	vf.readerFPs = make([]brimutil.ChecksummedReader, vs.valuesFileReaders)
+	vf.readerFPs = make([]brimutil.ChecksummedReader, vs.fileReaders)
 	vf.readerLocks = make([]sync.Mutex, len(vf.readerFPs))
 	vf.readerLens = make([][]byte, len(vf.readerFPs))
 	for i := 0; i < len(vf.readerFPs); i++ {
@@ -62,7 +53,7 @@ func newValuesFile(vs *DefaultValueStore, bts int64, openReadSeeker func(name st
 		vf.readerLens[i] = make([]byte, 4)
 	}
 	var err error
-	vf.id, err = vs.addValueLocBlock(vf)
+	vf.id, err = vs.addLocBlock(vf)
 	if err != nil {
 		vf.close()
 		return nil, err
@@ -70,20 +61,20 @@ func newValuesFile(vs *DefaultValueStore, bts int64, openReadSeeker func(name st
 	return vf, nil
 }
 
-func createValuesFile(vs *DefaultValueStore, createWriteCloser func(name string) (io.WriteCloser, error), openReadSeeker func(name string) (io.ReadSeeker, error)) (*valuesFile, error) {
-	vf := &valuesFile{vs: vs, bts: time.Now().UnixNano()}
+func createValueFile(vs *DefaultValueStore, createWriteCloser func(name string) (io.WriteCloser, error), openReadSeeker func(name string) (io.ReadSeeker, error)) (*valueFile, error) {
+	vf := &valueFile{vs: vs, bts: time.Now().UnixNano()}
 	vf.name = path.Join(vs.path, fmt.Sprintf("%019d.values", vf.bts))
 	fp, err := createWriteCloser(vf.name)
 	if err != nil {
 		return nil, err
 	}
 	vf.writerFP = fp
-	vf.freeChan = make(chan *valuesFileWriteBuf, vs.workers)
+	vf.freeChan = make(chan *valueFileWriteBuf, vs.workers)
 	for i := 0; i < vs.workers; i++ {
-		vf.freeChan <- &valuesFileWriteBuf{buf: make([]byte, vs.checksumInterval+4)}
+		vf.freeChan <- &valueFileWriteBuf{buf: make([]byte, vs.checksumInterval+4)}
 	}
-	vf.checksumChan = make(chan *valuesFileWriteBuf, vs.workers)
-	vf.writeChan = make(chan *valuesFileWriteBuf, vs.workers)
+	vf.checksumChan = make(chan *valueFileWriteBuf, vs.workers)
+	vf.writeChan = make(chan *valueFileWriteBuf, vs.workers)
 	vf.doneChan = make(chan struct{})
 	vf.buf = <-vf.freeChan
 	head := []byte("VALUESTORE v0                   ")
@@ -94,7 +85,7 @@ func createValuesFile(vs *DefaultValueStore, createWriteCloser func(name string)
 	for i := 0; i < vs.workers; i++ {
 		go vf.checksummer()
 	}
-	vf.readerFPs = make([]brimutil.ChecksummedReader, vs.valuesFileReaders)
+	vf.readerFPs = make([]brimutil.ChecksummedReader, vs.fileReaders)
 	vf.readerLocks = make([]sync.Mutex, len(vf.readerFPs))
 	vf.readerLens = make([][]byte, len(vf.readerFPs))
 	for i := 0; i < len(vf.readerFPs); i++ {
@@ -109,18 +100,19 @@ func createValuesFile(vs *DefaultValueStore, createWriteCloser func(name string)
 		vf.readerFPs[i] = brimutil.NewChecksummedReader(fp, int(vs.checksumInterval), murmur3.New32)
 		vf.readerLens[i] = make([]byte, 4)
 	}
-	vf.id, err = vs.addValueLocBlock(vf)
+	vf.id, err = vs.addLocBlock(vf)
 	if err != nil {
 		return nil, err
 	}
 	return vf, nil
 }
 
-func (vf *valuesFile) timestampnano() int64 {
+func (vf *valueFile) timestampnano() int64 {
 	return vf.bts
 }
 
-func (vf *valuesFile) read(keyA uint64, keyB uint64, timestampbits uint64, offset uint32, length uint32, value []byte) (uint64, []byte, error) {
+// TODO: nameKey needs to go all throughout the code.
+func (vf *valueFile) read(keyA uint64, keyB uint64, timestampbits uint64, offset uint32, length uint32, value []byte) (uint64, []byte, error) {
 	// TODO: Add calling Verify occasionally on the readerFPs, maybe randomly
 	// inside here or maybe randomly requested by the caller.
 	if timestampbits&_TSB_DELETION != 0 {
@@ -145,7 +137,7 @@ func (vf *valuesFile) read(keyA uint64, keyB uint64, timestampbits uint64, offse
 	return timestampbits, value, nil
 }
 
-func (vf *valuesFile) write(vm *valuesMem) {
+func (vf *valueFile) write(vm *valueMem) {
 	if vm == nil {
 		return
 	}
@@ -183,7 +175,7 @@ func (vf *valuesFile) write(vm *valuesMem) {
 	}
 }
 
-func (vf *valuesFile) close() error {
+func (vf *valueFile) close() error {
 	var reterr error
 	close(vf.checksumChan)
 	for i := 0; i < cap(vf.checksumChan); i++ {
@@ -241,7 +233,7 @@ func (vf *valuesFile) close() error {
 	return reterr
 }
 
-func (vf *valuesFile) checksummer() {
+func (vf *valueFile) checksummer() {
 	for {
 		buf := <-vf.checksumChan
 		if buf == nil {
@@ -253,7 +245,7 @@ func (vf *valuesFile) checksummer() {
 	vf.doneChan <- struct{}{}
 }
 
-func (vf *valuesFile) writer() {
+func (vf *valueFile) writer() {
 	var seq int
 	lastWasNil := false
 	for {

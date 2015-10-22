@@ -149,7 +149,7 @@ func (vs *DefaultGroupStore) compactionPass() {
 	for _, name := range names {
 		namets, valid := vs.compactionCandidate(path.Join(vs.pathtoc, name))
 		if valid {
-			jobChan <- &groupCompactionJob{path.Join(vs.pathtoc, name), vs.valueLocBlockIDFromTimestampnano(namets)}
+			jobChan <- &groupCompactionJob{path.Join(vs.pathtoc, name), vs.locBlockIDFromTimestampnano(namets)}
 		}
 	}
 	close(jobChan)
@@ -210,7 +210,7 @@ func (vs *DefaultGroupStore) compactionWorker(jobChan chan *groupCompactionJob, 
 					vs.logCritical("Unable to remove %s values %s\n", c.name, err)
 					continue
 				}
-				err = vs.closeValueLocBlock(c.candidateBlockID)
+				err = vs.closeLocBlock(c.candidateBlockID)
 				if err != nil {
 					vs.logCritical("error closing in-memory block for %s: %s\n", c.name, err)
 				}
@@ -252,7 +252,7 @@ func (vs *DefaultGroupStore) compactionWorker(jobChan chan *groupCompactionJob, 
 						vs.logCritical("Unable to remove %s values %s\n", c.name, err)
 						continue
 					}
-					err = vs.closeValueLocBlock(c.candidateBlockID)
+					err = vs.closeLocBlock(c.candidateBlockID)
 					if err != nil {
 						vs.logCritical("error closing in-memory block for %s: %s\n", c.name, err)
 					}
@@ -442,7 +442,8 @@ func (vs *DefaultGroupStore) compactFile(name string, candidateBlockID uint32) (
 					cr.stale++
 				} else {
 					var value []byte
-					_, value, err := vs.read(keyA, keyB, value)
+					// TODO: nameKey needs to go all throughout the code.
+					_, value, err := vs.read(keyA, keyB, 0, 0, value)
 					if err != nil {
 						fp.Close()
 						return cr, fmt.Errorf("error on read for compaction rewrite: %s", err)
@@ -466,7 +467,8 @@ func (vs *DefaultGroupStore) compactFile(name string, candidateBlockID uint32) (
 					cr.stale++
 				} else {
 					var value []byte
-					_, value, err := vs.read(keyA, keyB, value)
+					// TODO: nameKey needs to go all throughout the code.
+					_, value, err := vs.read(keyA, keyB, 0, 0, value)
 					if err != nil {
 						fp.Close()
 						return cr, fmt.Errorf("error on read for compaction rewrite: %s", err)

@@ -8,7 +8,7 @@ import (
 	"gopkg.in/gholt/brimtext.v1"
 )
 
-type Stats struct {
+type ValueStoreStats struct {
 	// Values is the number of values in the ValueStore.
 	Values uint64
 	// ValuesBytes is the number of bytes of the values in the ValueStore.
@@ -142,7 +142,7 @@ type Stats struct {
 	freeTOCBlockChanIn         int
 	pendingTOCBlockChanCap     int
 	pendingTOCBlockChanIn      int
-	maxValueLocBlockID         uint64
+	maxLocBlockID              uint64
 	path                       string
 	pathtoc                    string
 	workers                    int
@@ -156,8 +156,8 @@ type Stats struct {
 	minValueAlloc              int
 	writePagesPerWorker        int
 	tombstoneAge               int
-	valuesFileCap              uint32
-	valuesFileReaders          int
+	fileCap                    uint32
+	fileReaders                int
 	checksumInterval           uint32
 	replicationIgnoreRecent    int
 	vlmDebugInfo               fmt.Stringer
@@ -167,22 +167,22 @@ type Stats struct {
 // that this is a relatively expensive call; debug = true will make it even
 // more expensive.
 //
-// The public counter fields returned in the Stats will reset with each read.
+// The public counter fields returned in the stats will reset with each read.
 // In other words, if Stats().WriteCount gives the value 10 and no more Writes
 // occur before Stats() is called again, that second Stats().WriteCount will
 // have the value 0.
 //
 // The various values reported when debug=true are left undocumented because
 // they are subject to change based on implementation. They are only provided
-// when the Stats.String() is called.
+// when the stats.String() is called.
 //
 // Note that this function returns a fmt.Stringer because other implementations
-// of ValueStore shouldn't be tied to this implementation's Stats struct. But,
-// if it's known that DefaultValueStore is in use, a quick cast can be done to
-// gain access to individual fields.
+// of ValueStore shouldn't be tied to this implementation's ValueStoreStats
+// struct. But, if it's known that DefaultValueStore is in use, a quick cast
+// can be done to gain access to individual fields.
 func (vs *DefaultValueStore) Stats(debug bool) fmt.Stringer {
 	vs.statsLock.Lock()
-	stats := &Stats{
+	stats := &ValueStoreStats{
 		Lookups:                      atomic.LoadInt32(&vs.lookups),
 		LookupErrors:                 atomic.LoadInt32(&vs.lookupErrors),
 		Reads:                        atomic.LoadInt32(&vs.reads),
@@ -288,7 +288,7 @@ func (vs *DefaultValueStore) Stats(debug bool) fmt.Stringer {
 		stats.freeTOCBlockChanIn = len(vs.freeTOCBlockChan)
 		stats.pendingTOCBlockChanCap = cap(vs.pendingTOCBlockChan)
 		stats.pendingTOCBlockChanIn = len(vs.pendingTOCBlockChan)
-		stats.maxValueLocBlockID = atomic.LoadUint64(&vs.valueLocBlockIDer)
+		stats.maxLocBlockID = atomic.LoadUint64(&vs.locBlockIDer)
 		stats.path = vs.path
 		stats.pathtoc = vs.pathtoc
 		stats.workers = vs.workers
@@ -302,8 +302,8 @@ func (vs *DefaultValueStore) Stats(debug bool) fmt.Stringer {
 		stats.minValueAlloc = vs.minValueAlloc
 		stats.writePagesPerWorker = vs.writePagesPerWorker
 		stats.tombstoneAge = int((vs.tombstoneDiscardState.age >> _TSB_UTIL_BITS) * 1000 / uint64(time.Second))
-		stats.valuesFileCap = vs.valuesFileCap
-		stats.valuesFileReaders = vs.valuesFileReaders
+		stats.fileCap = vs.fileCap
+		stats.fileReaders = vs.fileReaders
 		stats.checksumInterval = vs.checksumInterval
 		stats.replicationIgnoreRecent = int(vs.replicationIgnoreRecent / uint64(time.Second))
 		vlmStats := vs.vlm.Stats(true)
@@ -314,7 +314,7 @@ func (vs *DefaultValueStore) Stats(debug bool) fmt.Stringer {
 	return stats
 }
 
-func (stats *Stats) String() string {
+func (stats *ValueStoreStats) String() string {
 	report := [][]string{
 		{"Values", fmt.Sprintf("%d", stats.Values)},
 		{"ValueBytes", fmt.Sprintf("%d", stats.ValueBytes)},
@@ -378,7 +378,7 @@ func (stats *Stats) String() string {
 			{"freeTOCBlockChanIn", fmt.Sprintf("%d", stats.freeTOCBlockChanIn)},
 			{"pendingTOCBlockChanCap", fmt.Sprintf("%d", stats.pendingTOCBlockChanCap)},
 			{"pendingTOCBlockChanIn", fmt.Sprintf("%d", stats.pendingTOCBlockChanIn)},
-			{"maxValueLocBlockID", fmt.Sprintf("%d", stats.maxValueLocBlockID)},
+			{"maxLocBlockID", fmt.Sprintf("%d", stats.maxLocBlockID)},
 			{"path", stats.path},
 			{"pathtoc", stats.pathtoc},
 			{"workers", fmt.Sprintf("%d", stats.workers)},
@@ -392,8 +392,8 @@ func (stats *Stats) String() string {
 			{"minValueAlloc", fmt.Sprintf("%d", stats.minValueAlloc)},
 			{"writePagesPerWorker", fmt.Sprintf("%d", stats.writePagesPerWorker)},
 			{"tombstoneAge", fmt.Sprintf("%d", stats.tombstoneAge)},
-			{"valuesFileCap", fmt.Sprintf("%d", stats.valuesFileCap)},
-			{"valuesFileReaders", fmt.Sprintf("%d", stats.valuesFileReaders)},
+			{"fileCap", fmt.Sprintf("%d", stats.fileCap)},
+			{"fileReaders", fmt.Sprintf("%d", stats.fileReaders)},
 			{"checksumInterval", fmt.Sprintf("%d", stats.checksumInterval)},
 			{"replicationIgnoreRecent", fmt.Sprintf("%d", stats.replicationIgnoreRecent)},
 			{"vlmDebugInfo", stats.vlmDebugInfo.String()},

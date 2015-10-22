@@ -63,18 +63,18 @@ type DefaultGroupStore struct {
 	logDebug                LogFunc
 	randMutex               sync.Mutex
 	rand                    *rand.Rand
-	freeableVMChans         []chan *valuesMem
-	freeVMChan              chan *valuesMem
+	freeableVMChans         []chan *groupMem
+	freeVMChan              chan *groupMem
 	freeVWRChans            []chan *groupWriteReq
 	pendingVWRChans         []chan *groupWriteReq
-	vfVMChan                chan *valuesMem
+	vfVMChan                chan *groupMem
 	freeTOCBlockChan        chan []byte
 	pendingTOCBlockChan     chan []byte
 	activeTOCA              uint64
 	activeTOCB              uint64
 	flushedChan             chan struct{}
-	valueLocBlocks          []valueLocBlock
-	valueLocBlockIDer       uint64
+	locBlocks               []groupLocBlock
+	locBlockIDer            uint64
 	path                    string
 	pathtoc                 string
 	vlm                     valuelocmap.GroupLocMap
@@ -84,8 +84,8 @@ type DefaultGroupStore struct {
 	pageSize                uint32
 	minValueAlloc           int
 	writePagesPerWorker     int
-	valuesFileCap           uint32
-	valuesFileReaders       int
+	fileCap                 uint32
+	fileReaders             int
 	checksumInterval        uint32
 	msgRing                 ring.MsgRing
 	tombstoneDiscardState   groupTombstoneDiscardState
@@ -148,18 +148,12 @@ type groupWriteReq struct {
 var enableGroupWriteReq *groupWriteReq = &groupWriteReq{}
 var disableGroupWriteReq *groupWriteReq = &groupWriteReq{}
 var flushGroupWriteReq *groupWriteReq = &groupWriteReq{}
-var flushGroupsMem *valuesMem = &valuesMem{}
+var flushGroupMem *groupMem = &groupMem{}
 
-type valueLocBlock interface {
+type groupLocBlock interface {
 	timestampnano() int64
-	read(keyA uint64, keyB uint64, timestampbits uint64, offset uint32, length uint32, value []byte) (uint64, []byte, error)
+	read(keyA uint64, keyB uint64, nameKeyA uint64, nameKeyB uint64, timestampbits uint64, offset uint32, length uint32, value []byte) (uint64, []byte, error)
 	close() error
-}
-
-type backgroundNotification struct {
-	enable   bool
-	disable  bool
-	doneChan chan struct{}
 }
 
 // New creates a DefaultGroupStore for use in storing []byte values referenced
@@ -169,7 +163,7 @@ type backgroundNotification struct {
 // be in use and therefore DisableAll() and Flush() should be called prior to
 // the process exiting to ensure all processing is done and the buffers are
 // flushed.
-func New(c *GroupStoreConfig) (*DefaultGroupStore, error) {
+func NewGroupStore(c *GroupStoreConfig) (*DefaultGroupStore, error) {
 	cfg := resolveGroupStoreConfig(c)
 	vlm := cfg.GroupLocMap
 	if vlm == nil {
@@ -183,7 +177,7 @@ func New(c *GroupStoreConfig) (*DefaultGroupStore, error) {
 		logInfo:                 cfg.LogInfo,
 		logDebug:                cfg.LogDebug,
 		rand:                    cfg.Rand,
-		valueLocBlocks:          make([]valueLocBlock, math.MaxUint16),
+		locBlocks:               make([]groupLocBlock, math.MaxUint16),
 		path:                    cfg.Path,
 		pathtoc:                 cfg.PathTOC,
 		vlm:                     vlm,
@@ -194,30 +188,30 @@ func New(c *GroupStoreConfig) (*DefaultGroupStore, error) {
 		pageSize:                uint32(cfg.PageSize),
 		minValueAlloc:           cfg.minValueAlloc,
 		writePagesPerWorker:     cfg.WritePagesPerWorker,
-		valuesFileCap:           uint32(cfg.ValuesFileCap),
-		valuesFileReaders:       cfg.ValuesFileReaders,
+		fileCap:                 uint32(cfg.FileCap),
+		fileReaders:             cfg.FileReaders,
 		checksumInterval:        uint32(cfg.ChecksumInterval),
 		msgRing:                 cfg.MsgRing,
 	}
-	vs.freeableVMChans = make([]chan *valuesMem, vs.workers)
+	vs.freeableVMChans = make([]chan *groupMem, vs.workers)
 	for i := 0; i < cap(vs.freeableVMChans); i++ {
-		vs.freeableVMChans[i] = make(chan *valuesMem, vs.workers)
+		vs.freeableVMChans[i] = make(chan *groupMem, vs.workers)
 	}
-	vs.freeVMChan = make(chan *valuesMem, vs.workers*vs.writePagesPerWorker)
+	vs.freeVMChan = make(chan *groupMem, vs.workers*vs.writePagesPerWorker)
 	vs.freeVWRChans = make([]chan *groupWriteReq, vs.workers)
 	vs.pendingVWRChans = make([]chan *groupWriteReq, vs.workers)
-	vs.vfVMChan = make(chan *valuesMem, vs.workers)
+	vs.vfVMChan = make(chan *groupMem, vs.workers)
 	vs.freeTOCBlockChan = make(chan []byte, vs.workers*2)
 	vs.pendingTOCBlockChan = make(chan []byte, vs.workers)
 	vs.flushedChan = make(chan struct{}, 1)
 	for i := 0; i < cap(vs.freeVMChan); i++ {
-		vm := &valuesMem{
+		vm := &groupMem{
 			vs:     vs,
 			toc:    make([]byte, 0, vs.pageSize),
 			values: make([]byte, 0, vs.pageSize),
 		}
 		var err error
-		vm.id, err = vs.addValueLocBlock(vm)
+		vm.id, err = vs.addLocBlock(vm)
 		if err != nil {
 			return nil, err
 		}
@@ -352,7 +346,7 @@ func (vs *DefaultGroupStore) Lookup(keyA uint64, keyB uint64) (int64, uint32, er
 	return int64(timestampbits >> _TSB_UTIL_BITS), length, err
 }
 
-func (vs *DefaultGroupStore) lookup(keyA, keyB uint64) (uint64, uint32, uint32, error) {
+func (vs *DefaultGroupStore) lookup(keyA uint64, keyB uint64) (uint64, uint32, uint32, error) {
 	// TODO: nameKey needs to go all throughout the code.
 	timestampbits, id, _, length := vs.vlm.Get(keyA, keyB, 0, 0)
 	if id == 0 || timestampbits&_TSB_DELETION != 0 {
@@ -368,22 +362,21 @@ func (vs *DefaultGroupStore) lookup(keyA, keyB uint64) (uint64, uint32, uint32, 
 // Note that err == ErrNotFound with timestampmicro == 0 indicates keyA, keyB
 // was not known at all whereas err == ErrNotFound with timestampmicro != 0
 // indicates keyA, keyB was known and had a deletion marker (aka tombstone).
-func (vs *DefaultGroupStore) Read(keyA uint64, keyB uint64, value []byte) (int64, []byte, error) {
+func (vs *DefaultGroupStore) Read(keyA uint64, keyB uint64, nameKeyA uint64, nameKeyB uint64, value []byte) (int64, []byte, error) {
 	atomic.AddInt32(&vs.reads, 1)
-	timestampbits, value, err := vs.read(keyA, keyB, value)
+	timestampbits, value, err := vs.read(keyA, keyB, nameKeyA, nameKeyB, value)
 	if err != nil {
 		atomic.AddInt32(&vs.readErrors, 1)
 	}
 	return int64(timestampbits >> _TSB_UTIL_BITS), value, err
 }
 
-func (vs *DefaultGroupStore) read(keyA uint64, keyB uint64, value []byte) (uint64, []byte, error) {
-	// TODO: nameKey needs to go all throughout the code.
-	timestampbits, id, offset, length := vs.vlm.Get(keyA, keyB, 0, 0)
+func (vs *DefaultGroupStore) read(keyA uint64, keyB uint64, nameKeyA uint64, nameKeyB uint64, value []byte) (uint64, []byte, error) {
+	timestampbits, id, offset, length := vs.vlm.Get(keyA, keyB, nameKeyA, nameKeyB)
 	if id == 0 || timestampbits&_TSB_DELETION != 0 || timestampbits&_TSB_LOCAL_REMOVAL != 0 {
 		return timestampbits, value, ErrNotFound
 	}
-	return vs.valueLocBlock(id).read(keyA, keyB, timestampbits, offset, length, value)
+	return vs.locBlock(id).read(keyA, keyB, nameKeyA, nameKeyB, timestampbits, offset, length, value)
 }
 
 // Write stores timestampmicro, value for keyA, keyB and returns the previously
@@ -450,25 +443,25 @@ func (vs *DefaultGroupStore) Delete(keyA uint64, keyB uint64, timestampmicro int
 	return int64(ptimestampbits >> _TSB_UTIL_BITS), err
 }
 
-func (vs *DefaultGroupStore) valueLocBlock(valueLocBlockID uint32) valueLocBlock {
-	return vs.valueLocBlocks[valueLocBlockID]
+func (vs *DefaultGroupStore) locBlock(locBlockID uint32) groupLocBlock {
+	return vs.locBlocks[locBlockID]
 }
 
-func (vs *DefaultGroupStore) addValueLocBlock(block valueLocBlock) (uint32, error) {
-	id := atomic.AddUint64(&vs.valueLocBlockIDer, 1)
+func (vs *DefaultGroupStore) addLocBlock(block groupLocBlock) (uint32, error) {
+	id := atomic.AddUint64(&vs.locBlockIDer, 1)
 	if id >= math.MaxUint32 {
-		return 0, errors.New("too many valueLocBlocks")
+		return 0, errors.New("too many loc blocks")
 	}
-	vs.valueLocBlocks[id] = block
+	vs.locBlocks[id] = block
 	return uint32(id), nil
 }
 
-func (vs *DefaultGroupStore) valueLocBlockIDFromTimestampnano(tsn int64) uint32 {
-	for i := 1; i <= len(vs.valueLocBlocks); i++ {
-		if vs.valueLocBlocks[i] == nil {
+func (vs *DefaultGroupStore) locBlockIDFromTimestampnano(tsn int64) uint32 {
+	for i := 1; i <= len(vs.locBlocks); i++ {
+		if vs.locBlocks[i] == nil {
 			return 0
 		} else {
-			if tsn == vs.valueLocBlocks[i].timestampnano() {
+			if tsn == vs.locBlocks[i].timestampnano() {
 				return uint32(i)
 			}
 		}
@@ -476,17 +469,17 @@ func (vs *DefaultGroupStore) valueLocBlockIDFromTimestampnano(tsn int64) uint32 
 	return 0
 }
 
-func (vs *DefaultGroupStore) closeValueLocBlock(valueLocBlockID uint32) error {
-	return vs.valueLocBlocks[valueLocBlockID].close()
+func (vs *DefaultGroupStore) closeLocBlock(locBlockID uint32) error {
+	return vs.locBlocks[locBlockID].close()
 }
 
-func (vs *DefaultGroupStore) memClearer(freeableVMChan chan *valuesMem) {
+func (vs *DefaultGroupStore) memClearer(freeableVMChan chan *groupMem) {
 	var tb []byte
 	var tbTS int64
 	var tbOffset int
 	for {
 		vm := <-freeableVMChan
-		if vm == flushValuesMem {
+		if vm == flushGroupMem {
 			if tb != nil {
 				vs.pendingTOCBlockChan <- tb
 				tb = nil
@@ -494,7 +487,7 @@ func (vs *DefaultGroupStore) memClearer(freeableVMChan chan *valuesMem) {
 			vs.pendingTOCBlockChan <- nil
 			continue
 		}
-		vf := vs.valueLocBlock(vm.vfID)
+		vf := vs.locBlock(vm.vfID)
 		if tb != nil && tbTS != vf.timestampnano() {
 			vs.pendingTOCBlockChan <- tb
 			tb = nil
@@ -546,7 +539,7 @@ func (vs *DefaultGroupStore) memClearer(freeableVMChan chan *valuesMem) {
 
 func (vs *DefaultGroupStore) memWriter(pendingVWRChan chan *groupWriteReq) {
 	var enabled bool
-	var vm *valuesMem
+	var vm *groupMem
 	var vmTOCOffset int
 	var vmMemOffset int
 	for {
@@ -564,7 +557,7 @@ func (vs *DefaultGroupStore) memWriter(pendingVWRChan chan *groupWriteReq) {
 				vs.vfVMChan <- vm
 				vm = nil
 			}
-			vs.vfVMChan <- flushValuesMem
+			vs.vfVMChan <- flushGroupMem
 			continue
 		}
 		if !enabled && !vwr.internal {
@@ -620,13 +613,13 @@ func (vs *DefaultGroupStore) memWriter(pendingVWRChan chan *groupWriteReq) {
 }
 
 func (vs *DefaultGroupStore) vfWriter() {
-	var vf *valuesFile
+	var vf *groupFile
 	memWritersFlushLeft := len(vs.pendingVWRChans)
 	var tocLen uint64
 	var valueLen uint64
 	for {
 		vm := <-vs.vfVMChan
-		if vm == flushValuesMem {
+		if vm == flushGroupMem {
 			memWritersFlushLeft--
 			if memWritersFlushLeft > 0 {
 				continue
@@ -639,12 +632,12 @@ func (vs *DefaultGroupStore) vfWriter() {
 				vf = nil
 			}
 			for i := 0; i < len(vs.freeableVMChans); i++ {
-				vs.freeableVMChans[i] <- flushValuesMem
+				vs.freeableVMChans[i] <- flushGroupMem
 			}
 			memWritersFlushLeft = len(vs.pendingVWRChans)
 			continue
 		}
-		if vf != nil && (tocLen+uint64(len(vm.toc)) >= uint64(vs.valuesFileCap) || valueLen+uint64(len(vm.values)) > uint64(vs.valuesFileCap)) {
+		if vf != nil && (tocLen+uint64(len(vm.toc)) >= uint64(vs.fileCap) || valueLen+uint64(len(vm.values)) > uint64(vs.fileCap)) {
 			err := vf.close()
 			if err != nil {
 				vs.logCritical("error closing %s: %s\n", vf.name, err)
@@ -653,7 +646,7 @@ func (vs *DefaultGroupStore) vfWriter() {
 		}
 		if vf == nil {
 			var err error
-			vf, err = createValuesFile(vs, osCreateWriteCloser, osOpenReadSeeker)
+			vf, err = createGroupFile(vs, osCreateWriteCloser, osOpenReadSeeker)
 			if err != nil {
 				vs.logCritical("vfWriter: %s\n", err)
 				break
@@ -813,11 +806,13 @@ func (vs *DefaultGroupStore) recovery() error {
 						wr.blockID = 0
 					}
 					if vs.logDebug != nil {
-						if vs.vlm.Set(wr.keyA, wr.keyB, wr.timestampbits, wr.blockID, wr.offset, wr.length, true) < wr.timestampbits {
+						// TODO: nameKey needs to go all throughout the code.
+						if vs.vlm.Set(wr.keyA, wr.keyB, 0, 0, wr.timestampbits, wr.blockID, wr.offset, wr.length, true) < wr.timestampbits {
 							atomic.AddInt64(&causedChangeCount, 1)
 						}
 					} else {
-						vs.vlm.Set(wr.keyA, wr.keyB, wr.timestampbits, wr.blockID, wr.offset, wr.length, true)
+						// TODO: nameKey needs to go all throughout the code.
+						vs.vlm.Set(wr.keyA, wr.keyB, 0, 0, wr.timestampbits, wr.blockID, wr.offset, wr.length, true)
 					}
 				}
 				freeBatchChan <- batch
@@ -852,7 +847,7 @@ func (vs *DefaultGroupStore) recovery() error {
 			vs.logError("bad timestamp in name: %#v\n", names[i])
 			continue
 		}
-		vf, err := newValuesFile(vs, namets, osOpenReadSeeker)
+		vf, err := newGroupFile(vs, namets, osOpenReadSeeker)
 		if err != nil {
 			vs.logError("error opening %s: %s\n", names[i], err)
 			continue
@@ -975,7 +970,7 @@ func (vs *DefaultGroupStore) recovery() error {
 	wg.Wait()
 	if vs.logDebug != nil {
 		dur := time.Now().Sub(start)
-		stats := vs.Stats(false).(*Stats)
+		stats := vs.Stats(false).(*GroupStoreStats)
 		vs.logInfo("%d key locations loaded in %s, %.0f/s; %d caused change; %d resulting locations referencing %d bytes.\n", fromDiskCount, dur, float64(fromDiskCount)/(float64(dur)/float64(time.Second)), causedChangeCount, stats.Values, stats.ValueBytes)
 	}
 	return nil

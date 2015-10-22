@@ -59,24 +59,34 @@ package valuestore
 //go:generate got store.got groupstore_GEN_.go TT=GROUP T=Group t=group
 //go:generate got config.got valueconfig_GEN_.go TT=VALUE T=Value t=value
 //go:generate got config.got groupconfig_GEN_.go TT=GROUP T=Group t=group
-//go:generate got bulkset.got valuebulkset.go TT=VALUE T=Value t=value
-//go:generate got bulkset.got groupbulkset.go TT=GROUP T=Group t=group
-//go:generate got bulksetack.got valuebulksetack.go TT=VALUE T=Value t=value
-//go:generate got bulksetack.got groupbulksetack.go TT=GROUP T=Group t=group
-//go:generate got pullreplication.got valuepullreplication.go TT=VALUE T=Value t=value
-//go:generate got pullreplication.got grouppullreplication.go TT=GROUP T=Group t=group
-//go:generate got pushreplication.got valuepushreplication.go TT=VALUE T=Value t=value
-//go:generate got pushreplication.got grouppushreplication.go TT=GROUP T=Group t=group
-//go:generate got tombstonediscard.got valuetombstonediscard.go TT=VALUE T=Value t=value
-//go:generate got tombstonediscard.got grouptombstonediscard.go TT=GROUP T=Group t=group
-//go:generate got compaction.got valuecompaction.go TT=VALUE T=Value t=value
-//go:generate got compaction.got groupcompaction.go TT=GROUP T=Group t=group
-//go:generate got diskwatcher.got valuediskwatcher.go TT=VALUE T=Value t=value
-//go:generate got diskwatcher.got groupdiskwatcher.go TT=GROUP T=Group t=group
+//go:generate got mem.got valuemem_GEN_.go TT=VALUE T=Value t=value
+//go:generate got mem.got groupmem_GEN_.go TT=GROUP T=Group t=group
+//go:generate got file.got valuefile_GEN_.go TT=VALUE T=Value t=value
+//go:generate got file.got groupfile_GEN_.go TT=GROUP T=Group t=group
+//go:generate got bulkset.got valuebulkset_GEN_.go TT=VALUE T=Value t=value
+//go:generate got bulkset.got groupbulkset_GEN_.go TT=GROUP T=Group t=group
+//go:generate got bulksetack.got valuebulksetack_GEN_.go TT=VALUE T=Value t=value
+//go:generate got bulksetack.got groupbulksetack_GEN_.go TT=GROUP T=Group t=group
+//go:generate got pullreplication.got valuepullreplication_GEN_.go TT=VALUE T=Value t=value
+//go:generate got pullreplication.got grouppullreplication_GEN_.go TT=GROUP T=Group t=group
+//go:generate got ktbloomfilter.got valuektbloomfilter_GEN_.go TT=VALUE T=Value t=value
+//go:generate got ktbloomfilter.got groupktbloomfilter_GEN_.go TT=GROUP T=Group t=group
+//go:generate got pushreplication.got valuepushreplication_GEN_.go TT=VALUE T=Value t=value
+//go:generate got pushreplication.got grouppushreplication_GEN_.go TT=GROUP T=Group t=group
+//go:generate got tombstonediscard.got valuetombstonediscard_GEN_.go TT=VALUE T=Value t=value
+//go:generate got tombstonediscard.got grouptombstonediscard_GEN_.go TT=GROUP T=Group t=group
+//go:generate got compaction.got valuecompaction_GEN_.go TT=VALUE T=Value t=value
+//go:generate got compaction.got groupcompaction_GEN_.go TT=GROUP T=Group t=group
+//go:generate got diskwatcher.got valuediskwatcher_GEN_.go TT=VALUE T=Value t=value
+//go:generate got diskwatcher.got groupdiskwatcher_GEN_.go TT=GROUP T=Group t=group
+//go:generate got stats.got valuestats_GEN_.go TT=VALUE T=Value t=value
+//go:generate got stats.got groupstats_GEN_.go TT=GROUP T=Group t=group
 
 import (
 	"errors"
+	"io"
 	"math"
+	"os"
 )
 
 const (
@@ -102,6 +112,20 @@ const (
 var ErrNotFound error = errors.New("not found")
 var ErrDisabled error = errors.New("disabled")
 
+var toss []byte = make([]byte, 65536)
+
+func osOpenReadSeeker(name string) (io.ReadSeeker, error) {
+	return os.Open(name)
+}
+
+func osCreateWriteCloser(name string) (io.WriteCloser, error) {
+	return os.Create(name)
+}
+
 type LogFunc func(format string, v ...interface{})
 
-var toss []byte = make([]byte, 65536)
+type backgroundNotification struct {
+	enable   bool
+	disable  bool
+	doneChan chan struct{}
+}

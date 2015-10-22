@@ -63,18 +63,18 @@ type DefaultValueStore struct {
 	logDebug                LogFunc
 	randMutex               sync.Mutex
 	rand                    *rand.Rand
-	freeableVMChans         []chan *valuesMem
-	freeVMChan              chan *valuesMem
+	freeableVMChans         []chan *valueMem
+	freeVMChan              chan *valueMem
 	freeVWRChans            []chan *valueWriteReq
 	pendingVWRChans         []chan *valueWriteReq
-	vfVMChan                chan *valuesMem
+	vfVMChan                chan *valueMem
 	freeTOCBlockChan        chan []byte
 	pendingTOCBlockChan     chan []byte
 	activeTOCA              uint64
 	activeTOCB              uint64
 	flushedChan             chan struct{}
-	valueLocBlocks          []valueLocBlock
-	valueLocBlockIDer       uint64
+	locBlocks               []valueLocBlock
+	locBlockIDer            uint64
 	path                    string
 	pathtoc                 string
 	vlm                     valuelocmap.ValueLocMap
@@ -84,8 +84,8 @@ type DefaultValueStore struct {
 	pageSize                uint32
 	minValueAlloc           int
 	writePagesPerWorker     int
-	valuesFileCap           uint32
-	valuesFileReaders       int
+	fileCap                 uint32
+	fileReaders             int
 	checksumInterval        uint32
 	msgRing                 ring.MsgRing
 	tombstoneDiscardState   valueTombstoneDiscardState
@@ -148,18 +148,12 @@ type valueWriteReq struct {
 var enableValueWriteReq *valueWriteReq = &valueWriteReq{}
 var disableValueWriteReq *valueWriteReq = &valueWriteReq{}
 var flushValueWriteReq *valueWriteReq = &valueWriteReq{}
-var flushValuesMem *valuesMem = &valuesMem{}
+var flushValueMem *valueMem = &valueMem{}
 
 type valueLocBlock interface {
 	timestampnano() int64
 	read(keyA uint64, keyB uint64, timestampbits uint64, offset uint32, length uint32, value []byte) (uint64, []byte, error)
 	close() error
-}
-
-type backgroundNotification struct {
-	enable   bool
-	disable  bool
-	doneChan chan struct{}
 }
 
 // New creates a DefaultValueStore for use in storing []byte values referenced
@@ -169,7 +163,7 @@ type backgroundNotification struct {
 // be in use and therefore DisableAll() and Flush() should be called prior to
 // the process exiting to ensure all processing is done and the buffers are
 // flushed.
-func New(c *ValueStoreConfig) (*DefaultValueStore, error) {
+func NewValueStore(c *ValueStoreConfig) (*DefaultValueStore, error) {
 	cfg := resolveValueStoreConfig(c)
 	vlm := cfg.ValueLocMap
 	if vlm == nil {
@@ -183,7 +177,7 @@ func New(c *ValueStoreConfig) (*DefaultValueStore, error) {
 		logInfo:                 cfg.LogInfo,
 		logDebug:                cfg.LogDebug,
 		rand:                    cfg.Rand,
-		valueLocBlocks:          make([]valueLocBlock, math.MaxUint16),
+		locBlocks:               make([]valueLocBlock, math.MaxUint16),
 		path:                    cfg.Path,
 		pathtoc:                 cfg.PathTOC,
 		vlm:                     vlm,
@@ -194,30 +188,30 @@ func New(c *ValueStoreConfig) (*DefaultValueStore, error) {
 		pageSize:                uint32(cfg.PageSize),
 		minValueAlloc:           cfg.minValueAlloc,
 		writePagesPerWorker:     cfg.WritePagesPerWorker,
-		valuesFileCap:           uint32(cfg.ValuesFileCap),
-		valuesFileReaders:       cfg.ValuesFileReaders,
+		fileCap:                 uint32(cfg.FileCap),
+		fileReaders:             cfg.FileReaders,
 		checksumInterval:        uint32(cfg.ChecksumInterval),
 		msgRing:                 cfg.MsgRing,
 	}
-	vs.freeableVMChans = make([]chan *valuesMem, vs.workers)
+	vs.freeableVMChans = make([]chan *valueMem, vs.workers)
 	for i := 0; i < cap(vs.freeableVMChans); i++ {
-		vs.freeableVMChans[i] = make(chan *valuesMem, vs.workers)
+		vs.freeableVMChans[i] = make(chan *valueMem, vs.workers)
 	}
-	vs.freeVMChan = make(chan *valuesMem, vs.workers*vs.writePagesPerWorker)
+	vs.freeVMChan = make(chan *valueMem, vs.workers*vs.writePagesPerWorker)
 	vs.freeVWRChans = make([]chan *valueWriteReq, vs.workers)
 	vs.pendingVWRChans = make([]chan *valueWriteReq, vs.workers)
-	vs.vfVMChan = make(chan *valuesMem, vs.workers)
+	vs.vfVMChan = make(chan *valueMem, vs.workers)
 	vs.freeTOCBlockChan = make(chan []byte, vs.workers*2)
 	vs.pendingTOCBlockChan = make(chan []byte, vs.workers)
 	vs.flushedChan = make(chan struct{}, 1)
 	for i := 0; i < cap(vs.freeVMChan); i++ {
-		vm := &valuesMem{
+		vm := &valueMem{
 			vs:     vs,
 			toc:    make([]byte, 0, vs.pageSize),
 			values: make([]byte, 0, vs.pageSize),
 		}
 		var err error
-		vm.id, err = vs.addValueLocBlock(vm)
+		vm.id, err = vs.addLocBlock(vm)
 		if err != nil {
 			return nil, err
 		}
@@ -352,7 +346,7 @@ func (vs *DefaultValueStore) Lookup(keyA uint64, keyB uint64) (int64, uint32, er
 	return int64(timestampbits >> _TSB_UTIL_BITS), length, err
 }
 
-func (vs *DefaultValueStore) lookup(keyA, keyB uint64) (uint64, uint32, uint32, error) {
+func (vs *DefaultValueStore) lookup(keyA uint64, keyB uint64) (uint64, uint32, uint32, error) {
 	// TODO: nameKey needs to go all throughout the code.
 	timestampbits, id, _, length := vs.vlm.Get(keyA, keyB)
 	if id == 0 || timestampbits&_TSB_DELETION != 0 {
@@ -378,12 +372,11 @@ func (vs *DefaultValueStore) Read(keyA uint64, keyB uint64, value []byte) (int64
 }
 
 func (vs *DefaultValueStore) read(keyA uint64, keyB uint64, value []byte) (uint64, []byte, error) {
-	// TODO: nameKey needs to go all throughout the code.
 	timestampbits, id, offset, length := vs.vlm.Get(keyA, keyB)
 	if id == 0 || timestampbits&_TSB_DELETION != 0 || timestampbits&_TSB_LOCAL_REMOVAL != 0 {
 		return timestampbits, value, ErrNotFound
 	}
-	return vs.valueLocBlock(id).read(keyA, keyB, timestampbits, offset, length, value)
+	return vs.locBlock(id).read(keyA, keyB, timestampbits, offset, length, value)
 }
 
 // Write stores timestampmicro, value for keyA, keyB and returns the previously
@@ -450,25 +443,25 @@ func (vs *DefaultValueStore) Delete(keyA uint64, keyB uint64, timestampmicro int
 	return int64(ptimestampbits >> _TSB_UTIL_BITS), err
 }
 
-func (vs *DefaultValueStore) valueLocBlock(valueLocBlockID uint32) valueLocBlock {
-	return vs.valueLocBlocks[valueLocBlockID]
+func (vs *DefaultValueStore) locBlock(locBlockID uint32) valueLocBlock {
+	return vs.locBlocks[locBlockID]
 }
 
-func (vs *DefaultValueStore) addValueLocBlock(block valueLocBlock) (uint32, error) {
-	id := atomic.AddUint64(&vs.valueLocBlockIDer, 1)
+func (vs *DefaultValueStore) addLocBlock(block valueLocBlock) (uint32, error) {
+	id := atomic.AddUint64(&vs.locBlockIDer, 1)
 	if id >= math.MaxUint32 {
-		return 0, errors.New("too many valueLocBlocks")
+		return 0, errors.New("too many loc blocks")
 	}
-	vs.valueLocBlocks[id] = block
+	vs.locBlocks[id] = block
 	return uint32(id), nil
 }
 
-func (vs *DefaultValueStore) valueLocBlockIDFromTimestampnano(tsn int64) uint32 {
-	for i := 1; i <= len(vs.valueLocBlocks); i++ {
-		if vs.valueLocBlocks[i] == nil {
+func (vs *DefaultValueStore) locBlockIDFromTimestampnano(tsn int64) uint32 {
+	for i := 1; i <= len(vs.locBlocks); i++ {
+		if vs.locBlocks[i] == nil {
 			return 0
 		} else {
-			if tsn == vs.valueLocBlocks[i].timestampnano() {
+			if tsn == vs.locBlocks[i].timestampnano() {
 				return uint32(i)
 			}
 		}
@@ -476,17 +469,17 @@ func (vs *DefaultValueStore) valueLocBlockIDFromTimestampnano(tsn int64) uint32 
 	return 0
 }
 
-func (vs *DefaultValueStore) closeValueLocBlock(valueLocBlockID uint32) error {
-	return vs.valueLocBlocks[valueLocBlockID].close()
+func (vs *DefaultValueStore) closeLocBlock(locBlockID uint32) error {
+	return vs.locBlocks[locBlockID].close()
 }
 
-func (vs *DefaultValueStore) memClearer(freeableVMChan chan *valuesMem) {
+func (vs *DefaultValueStore) memClearer(freeableVMChan chan *valueMem) {
 	var tb []byte
 	var tbTS int64
 	var tbOffset int
 	for {
 		vm := <-freeableVMChan
-		if vm == flushValuesMem {
+		if vm == flushValueMem {
 			if tb != nil {
 				vs.pendingTOCBlockChan <- tb
 				tb = nil
@@ -494,7 +487,7 @@ func (vs *DefaultValueStore) memClearer(freeableVMChan chan *valuesMem) {
 			vs.pendingTOCBlockChan <- nil
 			continue
 		}
-		vf := vs.valueLocBlock(vm.vfID)
+		vf := vs.locBlock(vm.vfID)
 		if tb != nil && tbTS != vf.timestampnano() {
 			vs.pendingTOCBlockChan <- tb
 			tb = nil
@@ -546,7 +539,7 @@ func (vs *DefaultValueStore) memClearer(freeableVMChan chan *valuesMem) {
 
 func (vs *DefaultValueStore) memWriter(pendingVWRChan chan *valueWriteReq) {
 	var enabled bool
-	var vm *valuesMem
+	var vm *valueMem
 	var vmTOCOffset int
 	var vmMemOffset int
 	for {
@@ -564,7 +557,7 @@ func (vs *DefaultValueStore) memWriter(pendingVWRChan chan *valueWriteReq) {
 				vs.vfVMChan <- vm
 				vm = nil
 			}
-			vs.vfVMChan <- flushValuesMem
+			vs.vfVMChan <- flushValueMem
 			continue
 		}
 		if !enabled && !vwr.internal {
@@ -620,13 +613,13 @@ func (vs *DefaultValueStore) memWriter(pendingVWRChan chan *valueWriteReq) {
 }
 
 func (vs *DefaultValueStore) vfWriter() {
-	var vf *valuesFile
+	var vf *valueFile
 	memWritersFlushLeft := len(vs.pendingVWRChans)
 	var tocLen uint64
 	var valueLen uint64
 	for {
 		vm := <-vs.vfVMChan
-		if vm == flushValuesMem {
+		if vm == flushValueMem {
 			memWritersFlushLeft--
 			if memWritersFlushLeft > 0 {
 				continue
@@ -639,12 +632,12 @@ func (vs *DefaultValueStore) vfWriter() {
 				vf = nil
 			}
 			for i := 0; i < len(vs.freeableVMChans); i++ {
-				vs.freeableVMChans[i] <- flushValuesMem
+				vs.freeableVMChans[i] <- flushValueMem
 			}
 			memWritersFlushLeft = len(vs.pendingVWRChans)
 			continue
 		}
-		if vf != nil && (tocLen+uint64(len(vm.toc)) >= uint64(vs.valuesFileCap) || valueLen+uint64(len(vm.values)) > uint64(vs.valuesFileCap)) {
+		if vf != nil && (tocLen+uint64(len(vm.toc)) >= uint64(vs.fileCap) || valueLen+uint64(len(vm.values)) > uint64(vs.fileCap)) {
 			err := vf.close()
 			if err != nil {
 				vs.logCritical("error closing %s: %s\n", vf.name, err)
@@ -653,7 +646,7 @@ func (vs *DefaultValueStore) vfWriter() {
 		}
 		if vf == nil {
 			var err error
-			vf, err = createValuesFile(vs, osCreateWriteCloser, osOpenReadSeeker)
+			vf, err = createValueFile(vs, osCreateWriteCloser, osOpenReadSeeker)
 			if err != nil {
 				vs.logCritical("vfWriter: %s\n", err)
 				break
@@ -813,10 +806,12 @@ func (vs *DefaultValueStore) recovery() error {
 						wr.blockID = 0
 					}
 					if vs.logDebug != nil {
+						// TODO: nameKey needs to go all throughout the code.
 						if vs.vlm.Set(wr.keyA, wr.keyB, wr.timestampbits, wr.blockID, wr.offset, wr.length, true) < wr.timestampbits {
 							atomic.AddInt64(&causedChangeCount, 1)
 						}
 					} else {
+						// TODO: nameKey needs to go all throughout the code.
 						vs.vlm.Set(wr.keyA, wr.keyB, wr.timestampbits, wr.blockID, wr.offset, wr.length, true)
 					}
 				}
@@ -852,7 +847,7 @@ func (vs *DefaultValueStore) recovery() error {
 			vs.logError("bad timestamp in name: %#v\n", names[i])
 			continue
 		}
-		vf, err := newValuesFile(vs, namets, osOpenReadSeeker)
+		vf, err := newValueFile(vs, namets, osOpenReadSeeker)
 		if err != nil {
 			vs.logError("error opening %s: %s\n", names[i], err)
 			continue
@@ -975,7 +970,7 @@ func (vs *DefaultValueStore) recovery() error {
 	wg.Wait()
 	if vs.logDebug != nil {
 		dur := time.Now().Sub(start)
-		stats := vs.Stats(false).(*Stats)
+		stats := vs.Stats(false).(*ValueStoreStats)
 		vs.logInfo("%d key locations loaded in %s, %.0f/s; %d caused change; %d resulting locations referencing %d bytes.\n", fromDiskCount, dur, float64(fromDiskCount)/(float64(dur)/float64(time.Second)), causedChangeCount, stats.Values, stats.ValueBytes)
 	}
 	return nil

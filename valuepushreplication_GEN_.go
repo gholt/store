@@ -190,6 +190,7 @@ func (vs *DefaultValueStore) outPushReplicationPass() {
 		var timestampbits uint64
 		var err error
 		for i := 0; i < len(list); i += 2 {
+			// TODO: nameKey needs to go all throughout the code.
 			timestampbits, valbuf, err = vs.read(list[i], list[i+1], valbuf[:0])
 			// This might mean we need to send a deletion or it might mean the
 			// key has been completely removed from our records

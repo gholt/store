@@ -8,10 +8,10 @@ import (
 	"github.com/spaolacci/murmur3"
 )
 
-const _KT_BLOOM_FILTER_HEADER_BYTES int = 20
+const _GROUP_KT_BLOOM_FILTER_HEADER_BYTES int = 20
 
-// ktBloomFilter is a key+timestamp bloom filter implementation.
-type ktBloomFilter struct {
+// groupKTBloomFilter is a key+timestamp bloom filter implementation.
+type groupKTBloomFilter struct {
 	n       uint64
 	p       float64
 	salt    uint32
@@ -21,9 +21,9 @@ type ktBloomFilter struct {
 	scratch []byte
 }
 
-func newKTBloomFilter(n uint64, p float64, salt uint16) *ktBloomFilter {
+func newGroupKTBloomFilter(n uint64, p float64, salt uint16) *groupKTBloomFilter {
 	m := -((float64(n) * math.Log(p)) / math.Pow(math.Log(2), 2))
-	return &ktBloomFilter{
+	return &groupKTBloomFilter{
 		n:       n,
 		p:       p,
 		salt:    uint32(salt) << 16,
@@ -34,12 +34,12 @@ func newKTBloomFilter(n uint64, p float64, salt uint16) *ktBloomFilter {
 	}
 }
 
-func newKTBloomFilterFromMsg(prm *pullReplicationMsg, headerOffset int) *ktBloomFilter {
+func newGroupKTBloomFilterFromMsg(prm *groupPullReplicationMsg, headerOffset int) *groupKTBloomFilter {
 	n := binary.BigEndian.Uint64(prm.header[headerOffset:])
 	p := math.Float64frombits(binary.BigEndian.Uint64(prm.header[headerOffset+8:]))
 	salt := binary.BigEndian.Uint16(prm.header[headerOffset+16:])
 	m := -((float64(n) * math.Log(p)) / math.Pow(math.Log(2), 2))
-	return &ktBloomFilter{
+	return &groupKTBloomFilter{
 		n:       n,
 		p:       p,
 		salt:    uint32(salt) << 16,
@@ -50,18 +50,18 @@ func newKTBloomFilterFromMsg(prm *pullReplicationMsg, headerOffset int) *ktBloom
 	}
 }
 
-func (ktbf *ktBloomFilter) toMsg(prm *pullReplicationMsg, headerOffset int) {
+func (ktbf *groupKTBloomFilter) toMsg(prm *groupPullReplicationMsg, headerOffset int) {
 	binary.BigEndian.PutUint64(prm.header[headerOffset:], ktbf.n)
 	binary.BigEndian.PutUint64(prm.header[headerOffset+8:], math.Float64bits(ktbf.p))
 	binary.BigEndian.PutUint16(prm.header[headerOffset+16:], uint16(ktbf.salt>>16))
 	copy(prm.body, ktbf.bits)
 }
 
-func (ktbf *ktBloomFilter) String() string {
-	return fmt.Sprintf("ktBloomFilter %p n=%d p=%f salt=%d m=%d k=%d bytes=%d", ktbf, ktbf.n, ktbf.p, ktbf.salt>>16, ktbf.m, ktbf.kDiv4*4, len(ktbf.bits))
+func (ktbf *groupKTBloomFilter) String() string {
+	return fmt.Sprintf("groupKTBloomFilter %p n=%d p=%f salt=%d m=%d k=%d bytes=%d", ktbf, ktbf.n, ktbf.p, ktbf.salt>>16, ktbf.m, ktbf.kDiv4*4, len(ktbf.bits))
 }
 
-func (ktbf *ktBloomFilter) add(keyA uint64, keyB uint64, timestamp uint64) {
+func (ktbf *groupKTBloomFilter) add(keyA uint64, keyB uint64, timestamp uint64) {
 	// TODO: There are optimization opportunities here as keyA and keyB can be
 	// considered to already have good bit distribution and using a hashing
 	// function to mix-in timestamp, salt, and i instead of redoing the whole
@@ -84,7 +84,7 @@ func (ktbf *ktBloomFilter) add(keyA uint64, keyB uint64, timestamp uint64) {
 	}
 }
 
-func (ktbf *ktBloomFilter) mayHave(keyA uint64, keyB uint64, timestamp uint64) bool {
+func (ktbf *groupKTBloomFilter) mayHave(keyA uint64, keyB uint64, timestamp uint64) bool {
 	scratch := ktbf.scratch
 	binary.BigEndian.PutUint64(scratch[4:], keyA)
 	binary.BigEndian.PutUint64(scratch[12:], keyB)
@@ -112,7 +112,7 @@ func (ktbf *ktBloomFilter) mayHave(keyA uint64, keyB uint64, timestamp uint64) b
 	return true
 }
 
-func (ktbf *ktBloomFilter) reset(salt uint16) {
+func (ktbf *groupKTBloomFilter) reset(salt uint16) {
 	b := ktbf.bits
 	l := len(b)
 	for i := 0; i < l; i++ {
