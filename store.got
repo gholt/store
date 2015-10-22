@@ -54,7 +54,7 @@ type {{.T}}Store interface {
     ValueCap() uint32
 }
 
-// Default{{.T}}Store instances are created with New.
+// Default{{.T}}Store instances are created with New{{.T}}Store.
 type Default{{.T}}Store struct {
     logCritical             LogFunc
     logError                LogFunc
@@ -156,7 +156,7 @@ type {{.t}}LocBlock interface {
     close() error
 }
 
-// New creates a Default{{.T}}Store for use in storing []byte values referenced
+// New{{.T}}Store creates a Default{{.T}}Store for use in storing []byte values referenced
 // by 128 bit keys.
 //
 // Note that a lot of buffering, multiple cores, and background processes can

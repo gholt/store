@@ -8,8 +8,8 @@ import (
 	"github.com/gholt/ring"
 )
 
-func TestBulkSetAckRead(t *testing.T) {
-	vs, err := New(&Config{MsgRing: &msgRingPlaceholder{}})
+func TestValueBulkSetAckRead(t *testing.T) {
+	vs, err := NewValueStore(&ValueStoreConfig{MsgRing: &msgRingPlaceholder{}})
 	if err != nil {
 		t.Fatal("")
 	}
@@ -42,8 +42,8 @@ func TestBulkSetAckRead(t *testing.T) {
 	}
 }
 
-func TestBulkSetAckReadLowSendCap(t *testing.T) {
-	vs, err := New(&Config{MsgRing: &msgRingPlaceholder{}, BulkSetAckMsgCap: 1})
+func TestValueBulkSetAckReadLowSendCap(t *testing.T) {
+	vs, err := NewValueStore(&ValueStoreConfig{MsgRing: &msgRingPlaceholder{}, BulkSetAckMsgCap: 1})
 	if err != nil {
 		t.Fatal("")
 	}
@@ -63,7 +63,7 @@ func TestBulkSetAckReadLowSendCap(t *testing.T) {
 	<-vs.bulkSetAckState.inMsgChan
 }
 
-func TestBulkSetAckMsgIncoming(t *testing.T) {
+func TestValueBulkSetAckMsgIncoming(t *testing.T) {
 	b := ring.NewBuilder(64)
 	n, err := b.AddNode(true, 1, nil, nil, "", nil)
 	if err != nil {
@@ -72,7 +72,7 @@ func TestBulkSetAckMsgIncoming(t *testing.T) {
 	r := b.Ring()
 	r.SetLocalNode(n.ID() + 1) // so we're not responsible for anything
 	m := &msgRingPlaceholder{ring: r}
-	vs, err := New(&Config{
+	vs, err := NewValueStore(&ValueStoreConfig{
 		MsgRing:             m,
 		InBulkSetAckWorkers: 1,
 		InBulkSetAckMsgs:    1,
@@ -122,9 +122,9 @@ func TestBulkSetAckMsgIncoming(t *testing.T) {
 	}
 }
 
-func TestBulkSetAckMsgIncomingNoRing(t *testing.T) {
+func TestValueBulkSetAckMsgIncomingNoRing(t *testing.T) {
 	m := &msgRingPlaceholder{}
-	vs, err := New(&Config{
+	vs, err := NewValueStore(&ValueStoreConfig{
 		MsgRing:             m,
 		InBulkSetAckWorkers: 1,
 		InBulkSetAckMsgs:    1,
@@ -175,13 +175,13 @@ func TestBulkSetAckMsgIncomingNoRing(t *testing.T) {
 	}
 }
 
-func TestBulkSetAckMsgOut(t *testing.T) {
-	vs, err := New(&Config{MsgRing: &msgRingPlaceholder{}})
+func TestValueBulkSetAckMsgOut(t *testing.T) {
+	vs, err := NewValueStore(&ValueStoreConfig{MsgRing: &msgRingPlaceholder{}})
 	if err != nil {
 		t.Fatal("")
 	}
 	bsam := vs.newOutBulkSetAckMsg()
-	if bsam.MsgType() != _BULK_SET_ACK_MSG_TYPE {
+	if bsam.MsgType() != _VALUE_BULK_SET_ACK_MSG_TYPE {
 		t.Fatal(bsam.MsgType())
 	}
 	if bsam.MsgLength() != 0 {
@@ -202,10 +202,10 @@ func TestBulkSetAckMsgOut(t *testing.T) {
 	bsam = vs.newOutBulkSetAckMsg()
 	bsam.add(1, 2, 0x300)
 	bsam.add(4, 5, 0x600)
-	if bsam.MsgType() != _BULK_SET_ACK_MSG_TYPE {
+	if bsam.MsgType() != _VALUE_BULK_SET_ACK_MSG_TYPE {
 		t.Fatal(bsam.MsgType())
 	}
-	if bsam.MsgLength() != _BULK_SET_ACK_MSG_ENTRY_LENGTH+_BULK_SET_ACK_MSG_ENTRY_LENGTH {
+	if bsam.MsgLength() != _VALUE_BULK_SET_ACK_MSG_ENTRY_LENGTH+_VALUE_BULK_SET_ACK_MSG_ENTRY_LENGTH {
 		t.Fatal(bsam.MsgLength())
 	}
 	buf = bytes.NewBuffer(nil)
@@ -213,7 +213,7 @@ func TestBulkSetAckMsgOut(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if n != _BULK_SET_ACK_MSG_ENTRY_LENGTH+_BULK_SET_ACK_MSG_ENTRY_LENGTH {
+	if n != _VALUE_BULK_SET_ACK_MSG_ENTRY_LENGTH+_VALUE_BULK_SET_ACK_MSG_ENTRY_LENGTH {
 		t.Fatal(n)
 	}
 	if !bytes.Equal(buf.Bytes(), []byte{
@@ -229,8 +229,8 @@ func TestBulkSetAckMsgOut(t *testing.T) {
 	bsam.Free()
 }
 
-func TestBulkSetAckMsgOutWriteError(t *testing.T) {
-	vs, err := New(&Config{MsgRing: &msgRingPlaceholder{}})
+func TestValueBulkSetAckMsgOutWriteError(t *testing.T) {
+	vs, err := NewValueStore(&ValueStoreConfig{MsgRing: &msgRingPlaceholder{}})
 	if err != nil {
 		t.Fatal("")
 	}
@@ -243,8 +243,8 @@ func TestBulkSetAckMsgOutWriteError(t *testing.T) {
 	bsam.Free()
 }
 
-func TestBulkSetAckMsgOutHitCap(t *testing.T) {
-	vs, err := New(&Config{MsgRing: &msgRingPlaceholder{}, BulkSetAckMsgCap: _BULK_SET_ACK_MSG_ENTRY_LENGTH + 3})
+func TestValueBulkSetAckMsgOutHitCap(t *testing.T) {
+	vs, err := NewValueStore(&ValueStoreConfig{MsgRing: &msgRingPlaceholder{}, BulkSetAckMsgCap: _VALUE_BULK_SET_ACK_MSG_ENTRY_LENGTH + 3})
 	if err != nil {
 		t.Fatal("")
 	}

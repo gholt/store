@@ -7,57 +7,8 @@ import (
 	"testing"
 )
 
-type memBuf struct {
-	buf []byte
-}
-
-type memFile struct {
-	buf *memBuf
-	pos int64
-}
-
-func (f *memFile) Read(p []byte) (int, error) {
-	n := copy(p, f.buf.buf[f.pos:])
-	if n == 0 {
-		return 0, io.EOF
-	}
-	f.pos += int64(n)
-	return n, nil
-}
-
-func (f *memFile) Seek(offset int64, whence int) (int64, error) {
-	switch whence {
-	case 0:
-		f.pos = offset
-	case 1:
-		f.pos += offset
-	case 2:
-		f.pos = int64(len(f.buf.buf)) + offset
-	}
-	return f.pos, nil
-}
-
-func (f *memFile) Write(p []byte) (int, error) {
-	pl := int64(len(p))
-	if int64(len(f.buf.buf))-f.pos < pl {
-		buf := make([]byte, int64(f.pos+pl))
-		copy(buf, f.buf.buf)
-		copy(buf[f.pos:], p)
-		f.buf.buf = buf
-		f.pos += pl
-		return int(pl), nil
-	}
-	copy(f.buf.buf[f.pos:], p)
-	f.pos += pl
-	return int(pl), nil
-}
-
-func (f *memFile) Close() error {
-	return nil
-}
-
-func TestValuesFileReading(t *testing.T) {
-	vs, err := New(nil)
+func TestValueValuesFileReading(t *testing.T) {
+	vs, err := NewValueStore(nil)
 	if err != nil {
 		t.Fatal("")
 	}
@@ -65,7 +16,7 @@ func TestValuesFileReading(t *testing.T) {
 	openReadSeeker := func(name string) (io.ReadSeeker, error) {
 		return &memFile{buf: buf}, nil
 	}
-	vf, err := newValuesFile(vs, 12345, openReadSeeker)
+	vf, err := newValueFile(vs, 12345, openReadSeeker)
 	if err != nil {
 		t.Fatal("")
 	}
@@ -143,8 +94,8 @@ func TestValuesFileReading(t *testing.T) {
 	}
 }
 
-func TestValuesFileWritingEmpty(t *testing.T) {
-	vs, err := New(nil)
+func TestValueValuesFileWritingEmpty(t *testing.T) {
+	vs, err := NewValueStore(nil)
 	if err != nil {
 		t.Fatal("")
 	}
@@ -155,7 +106,7 @@ func TestValuesFileWritingEmpty(t *testing.T) {
 	openReadSeeker := func(name string) (io.ReadSeeker, error) {
 		return &memFile{buf: buf}, nil
 	}
-	vf, err := createValuesFile(vs, createWriteCloser, openReadSeeker)
+	vf, err := createValueFile(vs, createWriteCloser, openReadSeeker)
 	if err != nil {
 		t.Fatal("")
 	}
@@ -187,13 +138,13 @@ func TestValuesFileWritingEmpty(t *testing.T) {
 	}
 }
 
-func TestValuesFileWritingEmpty2(t *testing.T) {
-	vs, err := New(nil)
+func TestValueValuesFileWritingEmpty2(t *testing.T) {
+	vs, err := NewValueStore(nil)
 	if err != nil {
 		t.Fatal("")
 	}
-	vs.freeableVMChans = make([]chan *valuesMem, 1)
-	vs.freeableVMChans[0] = make(chan *valuesMem, 1)
+	vs.freeableVMChans = make([]chan *valueMem, 1)
+	vs.freeableVMChans[0] = make(chan *valueMem, 1)
 	buf := &memBuf{}
 	createWriteCloser := func(name string) (io.WriteCloser, error) {
 		return &memFile{buf: buf}, nil
@@ -201,14 +152,14 @@ func TestValuesFileWritingEmpty2(t *testing.T) {
 	openReadSeeker := func(name string) (io.ReadSeeker, error) {
 		return &memFile{buf: buf}, nil
 	}
-	vf, err := createValuesFile(vs, createWriteCloser, openReadSeeker)
+	vf, err := createValueFile(vs, createWriteCloser, openReadSeeker)
 	if err != nil {
 		t.Fatal("")
 	}
 	if vf == nil {
 		t.Fatal("")
 	}
-	vm := &valuesMem{values: []byte{}}
+	vm := &valueMem{values: []byte{}}
 	vm.vfID = 123
 	vf.write(vm)
 	vf.close()
@@ -239,8 +190,8 @@ func TestValuesFileWritingEmpty2(t *testing.T) {
 	}
 }
 
-func TestValuesFileWriting(t *testing.T) {
-	vs, err := New(nil)
+func TestValueValuesFileWriting(t *testing.T) {
+	vs, err := NewValueStore(nil)
 	if err != nil {
 		t.Fatal("")
 	}
@@ -251,7 +202,7 @@ func TestValuesFileWriting(t *testing.T) {
 	openReadSeeker := func(name string) (io.ReadSeeker, error) {
 		return &memFile{buf: buf}, nil
 	}
-	vf, err := createValuesFile(vs, createWriteCloser, openReadSeeker)
+	vf, err := createValueFile(vs, createWriteCloser, openReadSeeker)
 	if err != nil {
 		t.Fatal("")
 	}
@@ -261,7 +212,7 @@ func TestValuesFileWriting(t *testing.T) {
 	values := make([]byte, 1234)
 	copy(values, []byte("0123456789abcdef"))
 	values[1233] = 1
-	vf.write(&valuesMem{values: values})
+	vf.write(&valueMem{values: values})
 	vf.close()
 	bl := len(buf.buf)
 	if bl != 1234+52 {
@@ -290,8 +241,8 @@ func TestValuesFileWriting(t *testing.T) {
 	}
 }
 
-func TestValuesFileWritingMore(t *testing.T) {
-	vs, err := New(nil)
+func TestValueValuesFileWritingMore(t *testing.T) {
+	vs, err := NewValueStore(nil)
 	if err != nil {
 		t.Fatal("")
 	}
@@ -302,7 +253,7 @@ func TestValuesFileWritingMore(t *testing.T) {
 	openReadSeeker := func(name string) (io.ReadSeeker, error) {
 		return &memFile{buf: buf}, nil
 	}
-	vf, err := createValuesFile(vs, createWriteCloser, openReadSeeker)
+	vf, err := createValueFile(vs, createWriteCloser, openReadSeeker)
 	if err != nil {
 		t.Fatal("")
 	}
@@ -312,7 +263,7 @@ func TestValuesFileWritingMore(t *testing.T) {
 	values := make([]byte, 123456)
 	copy(values, []byte("0123456789abcdef"))
 	values[1233] = 1
-	vf.write(&valuesMem{values: values})
+	vf.write(&valueMem{values: values})
 	vf.close()
 	bl := len(buf.buf)
 	if bl != 123456+int(123512/vs.checksumInterval*4)+52 {
@@ -338,13 +289,13 @@ func TestValuesFileWritingMore(t *testing.T) {
 	}
 }
 
-func TestValuesFileWritingMultiple(t *testing.T) {
-	vs, err := New(nil)
+func TestValueValuesFileWritingMultiple(t *testing.T) {
+	vs, err := NewValueStore(nil)
 	if err != nil {
 		t.Fatal("")
 	}
-	vs.freeableVMChans = make([]chan *valuesMem, 1)
-	vs.freeableVMChans[0] = make(chan *valuesMem, 2)
+	vs.freeableVMChans = make([]chan *valueMem, 1)
+	vs.freeableVMChans[0] = make(chan *valueMem, 2)
 	buf := &memBuf{}
 	createWriteCloser := func(name string) (io.WriteCloser, error) {
 		return &memFile{buf: buf}, nil
@@ -352,7 +303,7 @@ func TestValuesFileWritingMultiple(t *testing.T) {
 	openReadSeeker := func(name string) (io.ReadSeeker, error) {
 		return &memFile{buf: buf}, nil
 	}
-	vf, err := createValuesFile(vs, createWriteCloser, openReadSeeker)
+	vf, err := createValueFile(vs, createWriteCloser, openReadSeeker)
 	if err != nil {
 		t.Fatal("")
 	}
@@ -361,11 +312,11 @@ func TestValuesFileWritingMultiple(t *testing.T) {
 	}
 	values1 := make([]byte, 12345)
 	copy(values1, []byte("0123456789abcdef"))
-	vm1 := &valuesMem{values: values1}
+	vm1 := &valueMem{values: values1}
 	vf.write(vm1)
 	values2 := make([]byte, 54321)
 	copy(values2, []byte("fedcba9876543210"))
-	vm2 := &valuesMem{values: values2}
+	vm2 := &valueMem{values: values2}
 	vf.write(vm2)
 	vf.close()
 	if vm1.vfID != vf.id {

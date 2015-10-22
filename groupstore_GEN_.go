@@ -54,7 +54,7 @@ type GroupStore interface {
 	ValueCap() uint32
 }
 
-// DefaultGroupStore instances are created with New.
+// DefaultGroupStore instances are created with NewGroupStore.
 type DefaultGroupStore struct {
 	logCritical             LogFunc
 	logError                LogFunc
@@ -156,7 +156,7 @@ type groupLocBlock interface {
 	close() error
 }
 
-// New creates a DefaultGroupStore for use in storing []byte values referenced
+// NewGroupStore creates a DefaultGroupStore for use in storing []byte values referenced
 // by 128 bit keys.
 //
 // Note that a lot of buffering, multiple cores, and background processes can

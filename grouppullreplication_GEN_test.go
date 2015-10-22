@@ -8,7 +8,7 @@ import (
 	"github.com/gholt/ring"
 )
 
-type msgRingPullReplicationTester struct {
+type msgRingGroupPullReplicationTester struct {
 	ring               ring.Ring
 	lock               sync.Mutex
 	msgToNodeIDs       []uint64
@@ -16,26 +16,26 @@ type msgRingPullReplicationTester struct {
 	bodyToPartitions   [][]byte
 }
 
-func (m *msgRingPullReplicationTester) Ring() ring.Ring {
+func (m *msgRingGroupPullReplicationTester) Ring() ring.Ring {
 	return m.ring
 }
 
-func (m *msgRingPullReplicationTester) MaxMsgLength() uint64 {
+func (m *msgRingGroupPullReplicationTester) MaxMsgLength() uint64 {
 	return 65536
 }
 
-func (m *msgRingPullReplicationTester) SetMsgHandler(msgType uint64, handler ring.MsgUnmarshaller) {
+func (m *msgRingGroupPullReplicationTester) SetMsgHandler(msgType uint64, handler ring.MsgUnmarshaller) {
 }
 
-func (m *msgRingPullReplicationTester) MsgToNode(msg ring.Msg, nodeID uint64, timeout time.Duration) {
+func (m *msgRingGroupPullReplicationTester) MsgToNode(msg ring.Msg, nodeID uint64, timeout time.Duration) {
 	m.lock.Lock()
 	m.msgToNodeIDs = append(m.msgToNodeIDs, nodeID)
 	m.lock.Unlock()
 	msg.Free()
 }
 
-func (m *msgRingPullReplicationTester) MsgToOtherReplicas(msg ring.Msg, partition uint32, timeout time.Duration) {
-	prm, ok := msg.(*pullReplicationMsg)
+func (m *msgRingGroupPullReplicationTester) MsgToOtherReplicas(msg ring.Msg, partition uint32, timeout time.Duration) {
+	prm, ok := msg.(*groupPullReplicationMsg)
 	if ok {
 		m.lock.Lock()
 		h := make([]byte, len(prm.header))
@@ -49,7 +49,7 @@ func (m *msgRingPullReplicationTester) MsgToOtherReplicas(msg ring.Msg, partitio
 	msg.Free()
 }
 
-func TestPullReplicationSimple(t *testing.T) {
+func TestGroupPullReplicationSimple(t *testing.T) {
 	b := ring.NewBuilder(64)
 	b.SetReplicaCount(2)
 	n, err := b.AddNode(true, 1, nil, nil, "", nil)
@@ -62,8 +62,8 @@ func TestPullReplicationSimple(t *testing.T) {
 	}
 	r := b.Ring()
 	r.SetLocalNode(n.ID())
-	m := &msgRingPullReplicationTester{ring: r}
-	vs, err := New(&Config{MsgRing: m})
+	m := &msgRingGroupPullReplicationTester{ring: r}
+	vs, err := NewGroupStore(&GroupStoreConfig{MsgRing: m})
 	if err != nil {
 		t.Fatal("")
 	}
@@ -83,7 +83,7 @@ func TestPullReplicationSimple(t *testing.T) {
 	mayHave := false
 	m.lock.Lock()
 	for i := 0; i < len(m.headerToPartitions); i++ {
-		prm := &pullReplicationMsg{vs: vs, header: m.headerToPartitions[i], body: m.bodyToPartitions[i]}
+		prm := &groupPullReplicationMsg{vs: vs, header: m.headerToPartitions[i], body: m.bodyToPartitions[i]}
 		bf := prm.ktBloomFilter()
 		if bf.mayHave(1, 2, 0x300) {
 			mayHave = true

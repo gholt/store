@@ -5,14 +5,14 @@ import (
 	"testing"
 )
 
-func TestValuesMemRead(t *testing.T) {
-	vs, err := New(nil)
+func TestValueValuesMemRead(t *testing.T) {
+	vs, err := NewValueStore(nil)
 	if err != nil {
 		t.Fatal("")
 	}
-	vm1 := &valuesMem{id: 1, vs: vs, values: []byte("0123456789abcdef")}
-	vm2 := &valuesMem{id: 2, vs: vs, values: []byte("fedcba9876543210")}
-	vs.valueLocBlocks = []valueLocBlock{nil, vm1, vm2}
+	vm1 := &valueMem{id: 1, vs: vs, values: []byte("0123456789abcdef")}
+	vm2 := &valueMem{id: 2, vs: vs, values: []byte("fedcba9876543210")}
+	vs.locBlocks = []valueLocBlock{nil, vm1, vm2}
 	tsn := vm1.timestampnano()
 	if tsn != math.MaxInt64 {
 		t.Fatal(tsn)

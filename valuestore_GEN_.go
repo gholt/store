@@ -54,7 +54,7 @@ type ValueStore interface {
 	ValueCap() uint32
 }
 
-// DefaultValueStore instances are created with New.
+// DefaultValueStore instances are created with NewValueStore.
 type DefaultValueStore struct {
 	logCritical             LogFunc
 	logError                LogFunc
@@ -156,7 +156,7 @@ type valueLocBlock interface {
 	close() error
 }
 
-// New creates a DefaultValueStore for use in storing []byte values referenced
+// NewValueStore creates a DefaultValueStore for use in storing []byte values referenced
 // by 128 bit keys.
 //
 // Note that a lot of buffering, multiple cores, and background processes can

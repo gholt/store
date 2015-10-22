@@ -6,8 +6,8 @@ import (
 	"testing"
 )
 
-func TestKTBloomFilterBasic(t *testing.T) {
-	f := newKTBloomFilter(10, 0.01, 0)
+func TestGroupKTBloomFilterBasic(t *testing.T) {
+	f := newGroupKTBloomFilter(10, 0.01, 0)
 	if f.mayHave(1, 2, 3) {
 		t.Fatal("")
 	}
@@ -20,7 +20,7 @@ func TestKTBloomFilterBasic(t *testing.T) {
 		t.Fatal("")
 	}
 	s := f.String()
-	if !strings.HasPrefix(s, "ktBloomFilter 0x") {
+	if !strings.HasPrefix(s, "groupKTBloomFilter 0x") {
 		t.Fatal(s)
 	}
 	if !strings.HasSuffix(s, " n=10 p=0.010000 salt=0 m=96 k=8 bytes=12") {
@@ -28,8 +28,8 @@ func TestKTBloomFilterBasic(t *testing.T) {
 	}
 }
 
-func TestKTBloomFilterLots(t *testing.T) {
-	f := newKTBloomFilter(100, 0.01, 0)
+func TestGroupKTBloomFilterLots(t *testing.T) {
+	f := newGroupKTBloomFilter(100, 0.01, 0)
 	for i := uint64(0); i < 100; i++ {
 		f.add(i, i, i)
 	}
@@ -45,18 +45,18 @@ func TestKTBloomFilterLots(t *testing.T) {
 	}
 }
 
-func TestKTBloomFilterPersistence(t *testing.T) {
-	f := newKTBloomFilter(10, 0.01, 0)
+func TestGroupKTBloomFilterPersistence(t *testing.T) {
+	f := newGroupKTBloomFilter(10, 0.01, 0)
 	for i := uint64(0); i < 100; i++ {
 		f.add(i, i, i)
 	}
-	m := &pullReplicationMsg{
+	m := &groupPullReplicationMsg{
 		vs:     nil,
-		header: make([]byte, _KT_BLOOM_FILTER_HEADER_BYTES+_PULL_REPLICATION_MSG_HEADER_BYTES),
+		header: make([]byte, _GROUP_KT_BLOOM_FILTER_HEADER_BYTES+_GROUP_PULL_REPLICATION_MSG_HEADER_BYTES),
 		body:   make([]byte, len(f.bits)),
 	}
-	f.toMsg(m, _PULL_REPLICATION_MSG_HEADER_BYTES)
-	f2 := newKTBloomFilterFromMsg(m, _PULL_REPLICATION_MSG_HEADER_BYTES)
+	f.toMsg(m, _GROUP_PULL_REPLICATION_MSG_HEADER_BYTES)
+	f2 := newGroupKTBloomFilterFromMsg(m, _GROUP_PULL_REPLICATION_MSG_HEADER_BYTES)
 	if f2.n != f.n {
 		t.Fatal(f2.n)
 	}

@@ -4,64 +4,14 @@ import (
 	"bytes"
 	"encoding/binary"
 	"io"
-	"sync"
 	"testing"
 	"time"
 
 	"github.com/gholt/ring"
 )
 
-type msgRingPlaceholder struct {
-	ring            ring.Ring
-	lock            sync.Mutex
-	msgToNodeIDs    []uint64
-	msgToPartitions []uint32
-}
-
-func (m *msgRingPlaceholder) Ring() ring.Ring {
-	return m.ring
-}
-
-func (m *msgRingPlaceholder) MaxMsgLength() uint64 {
-	return 65536
-}
-
-func (m *msgRingPlaceholder) SetMsgHandler(msgType uint64, handler ring.MsgUnmarshaller) {
-}
-
-func (m *msgRingPlaceholder) MsgToNode(msg ring.Msg, nodeID uint64, timeout time.Duration) {
-	m.lock.Lock()
-	m.msgToNodeIDs = append(m.msgToNodeIDs, nodeID)
-	m.lock.Unlock()
-	msg.Free()
-}
-
-func (m *msgRingPlaceholder) MsgToOtherReplicas(msg ring.Msg, partition uint32, timeout time.Duration) {
-	m.lock.Lock()
-	m.msgToPartitions = append(m.msgToPartitions, partition)
-	m.lock.Unlock()
-	msg.Free()
-}
-
-type testErrorWriter struct {
-	goodBytes int
-}
-
-func (w *testErrorWriter) Write(p []byte) (int, error) {
-	if w.goodBytes >= len(p) {
-		w.goodBytes -= len(p)
-		return len(p), nil
-	}
-	if w.goodBytes > 0 {
-		n := w.goodBytes
-		w.goodBytes = 0
-		return n, io.EOF
-	}
-	return 0, io.EOF
-}
-
-func TestBulkSetReadObviouslyTooShort(t *testing.T) {
-	vs, err := New(&Config{MsgRing: &msgRingPlaceholder{}})
+func TestValueBulkSetReadObviouslyTooShort(t *testing.T) {
+	vs, err := NewValueStore(&ValueStoreConfig{MsgRing: &msgRingPlaceholder{}})
 	if err != nil {
 		t.Fatal("")
 	}
@@ -95,8 +45,8 @@ func TestBulkSetReadObviouslyTooShort(t *testing.T) {
 	}
 }
 
-func TestBulkSetRead(t *testing.T) {
-	vs, err := New(&Config{MsgRing: &msgRingPlaceholder{}})
+func TestValueBulkSetRead(t *testing.T) {
+	vs, err := NewValueStore(&ValueStoreConfig{MsgRing: &msgRingPlaceholder{}})
 	if err != nil {
 		t.Fatal("")
 	}
@@ -115,11 +65,11 @@ func TestBulkSetRead(t *testing.T) {
 	}
 	<-vs.bulkSetState.inMsgChan
 	// Again, but with an error in the header.
-	n, err = vs.newInBulkSetMsg(bytes.NewBuffer(make([]byte, _BULK_SET_MSG_HEADER_LENGTH-1)), 100)
+	n, err = vs.newInBulkSetMsg(bytes.NewBuffer(make([]byte, _VALUE_BULK_SET_MSG_HEADER_LENGTH-1)), 100)
 	if err != io.EOF {
 		t.Fatal(err)
 	}
-	if n != _BULK_SET_MSG_HEADER_LENGTH-1 {
+	if n != _VALUE_BULK_SET_MSG_HEADER_LENGTH-1 {
 		t.Fatal(n)
 	}
 	select {
@@ -142,8 +92,8 @@ func TestBulkSetRead(t *testing.T) {
 	}
 }
 
-func TestBulkSetReadLowSendCap(t *testing.T) {
-	vs, err := New(&Config{MsgRing: &msgRingPlaceholder{}, BulkSetMsgCap: _BULK_SET_MSG_HEADER_LENGTH + 1})
+func TestValueBulkSetReadLowSendCap(t *testing.T) {
+	vs, err := NewValueStore(&ValueStoreConfig{MsgRing: &msgRingPlaceholder{}, BulkSetMsgCap: _VALUE_BULK_SET_MSG_HEADER_LENGTH + 1})
 	if err != nil {
 		t.Fatal("")
 	}
@@ -166,7 +116,7 @@ func TestBulkSetReadLowSendCap(t *testing.T) {
 	<-vs.bulkSetState.inMsgChan
 }
 
-func TestBulkSetMsgWithoutAck(t *testing.T) {
+func TestValueBulkSetMsgWithoutAck(t *testing.T) {
 	b := ring.NewBuilder(64)
 	n, err := b.AddNode(true, 1, nil, nil, "", nil)
 	if err != nil {
@@ -175,7 +125,7 @@ func TestBulkSetMsgWithoutAck(t *testing.T) {
 	r := b.Ring()
 	r.SetLocalNode(n.ID())
 	m := &msgRingPlaceholder{ring: r}
-	vs, err := New(&Config{
+	vs, err := NewValueStore(&ValueStoreConfig{
 		MsgRing:          m,
 		InBulkSetWorkers: 1,
 		InBulkSetMsgs:    1,
@@ -212,7 +162,7 @@ func TestBulkSetMsgWithoutAck(t *testing.T) {
 	}
 }
 
-func TestBulkSetMsgWithAck(t *testing.T) {
+func TestValueBulkSetMsgWithAck(t *testing.T) {
 	b := ring.NewBuilder(64)
 	n, err := b.AddNode(true, 1, nil, nil, "", nil)
 	if err != nil {
@@ -221,7 +171,7 @@ func TestBulkSetMsgWithAck(t *testing.T) {
 	r := b.Ring()
 	r.SetLocalNode(n.ID())
 	m := &msgRingPlaceholder{ring: r}
-	vs, err := New(&Config{
+	vs, err := NewValueStore(&ValueStoreConfig{
 		MsgRing:          m,
 		InBulkSetWorkers: 1,
 		InBulkSetMsgs:    1,
@@ -265,9 +215,9 @@ func TestBulkSetMsgWithAck(t *testing.T) {
 	}
 }
 
-func TestBulkSetMsgWithoutRing(t *testing.T) {
+func TestValueBulkSetMsgWithoutRing(t *testing.T) {
 	m := &msgRingPlaceholder{}
-	vs, err := New(&Config{
+	vs, err := NewValueStore(&ValueStoreConfig{
 		MsgRing:          m,
 		InBulkSetWorkers: 1,
 		InBulkSetMsgs:    1,
@@ -305,16 +255,16 @@ func TestBulkSetMsgWithoutRing(t *testing.T) {
 	}
 }
 
-func TestBulkSetMsgOut(t *testing.T) {
-	vs, err := New(&Config{MsgRing: &msgRingPlaceholder{}})
+func TestValueBulkSetMsgOut(t *testing.T) {
+	vs, err := NewValueStore(&ValueStoreConfig{MsgRing: &msgRingPlaceholder{}})
 	if err != nil {
 		t.Fatal("")
 	}
 	bsm := vs.newOutBulkSetMsg()
-	if bsm.MsgType() != _BULK_SET_MSG_TYPE {
+	if bsm.MsgType() != _VALUE_BULK_SET_MSG_TYPE {
 		t.Fatal(bsm.MsgType())
 	}
-	if bsm.MsgLength() != _BULK_SET_MSG_HEADER_LENGTH {
+	if bsm.MsgLength() != _VALUE_BULK_SET_MSG_HEADER_LENGTH {
 		t.Fatal(bsm.MsgLength())
 	}
 	buf := bytes.NewBuffer(nil)
@@ -322,7 +272,7 @@ func TestBulkSetMsgOut(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if n != _BULK_SET_MSG_HEADER_LENGTH {
+	if n != _VALUE_BULK_SET_MSG_HEADER_LENGTH {
 		t.Fatal(n)
 	}
 	if !bytes.Equal(buf.Bytes(), []byte{0, 0, 0, 0, 0, 0, 0, 0}) {
@@ -333,10 +283,10 @@ func TestBulkSetMsgOut(t *testing.T) {
 	binary.BigEndian.PutUint64(bsm.header, 12345)
 	bsm.add(1, 2, 0x300, nil)
 	bsm.add(4, 5, 0x600, []byte("testing"))
-	if bsm.MsgType() != _BULK_SET_MSG_TYPE {
+	if bsm.MsgType() != _VALUE_BULK_SET_MSG_TYPE {
 		t.Fatal(bsm.MsgType())
 	}
-	if bsm.MsgLength() != _BULK_SET_MSG_HEADER_LENGTH+_BULK_SET_MSG_ENTRY_HEADER_LENGTH+0+_BULK_SET_MSG_ENTRY_HEADER_LENGTH+7 {
+	if bsm.MsgLength() != _VALUE_BULK_SET_MSG_HEADER_LENGTH+_VALUE_BULK_SET_MSG_ENTRY_HEADER_LENGTH+0+_VALUE_BULK_SET_MSG_ENTRY_HEADER_LENGTH+7 {
 		t.Fatal(bsm.MsgLength())
 	}
 	buf = bytes.NewBuffer(nil)
@@ -344,7 +294,7 @@ func TestBulkSetMsgOut(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if n != _BULK_SET_MSG_HEADER_LENGTH+_BULK_SET_MSG_ENTRY_HEADER_LENGTH+0+_BULK_SET_MSG_ENTRY_HEADER_LENGTH+7 {
+	if n != _VALUE_BULK_SET_MSG_HEADER_LENGTH+_VALUE_BULK_SET_MSG_ENTRY_HEADER_LENGTH+0+_VALUE_BULK_SET_MSG_ENTRY_HEADER_LENGTH+7 {
 		t.Fatal(n)
 	}
 	if !bytes.Equal(buf.Bytes(), []byte{
@@ -364,7 +314,7 @@ func TestBulkSetMsgOut(t *testing.T) {
 	bsm.Free()
 }
 
-func TestBulkSetMsgOutDefaultsToFromLocalNode(t *testing.T) {
+func TestValueBulkSetMsgOutDefaultsToFromLocalNode(t *testing.T) {
 	b := ring.NewBuilder(64)
 	n, err := b.AddNode(true, 1, nil, nil, "", nil)
 	if err != nil {
@@ -372,7 +322,7 @@ func TestBulkSetMsgOutDefaultsToFromLocalNode(t *testing.T) {
 	}
 	r := b.Ring()
 	r.SetLocalNode(n.ID())
-	vs, err := New(&Config{MsgRing: &msgRingPlaceholder{ring: r}})
+	vs, err := NewValueStore(&ValueStoreConfig{MsgRing: &msgRingPlaceholder{ring: r}})
 	if err != nil {
 		t.Fatal("")
 	}
@@ -382,8 +332,8 @@ func TestBulkSetMsgOutDefaultsToFromLocalNode(t *testing.T) {
 	}
 }
 
-func TestBulkSetMsgOutWriteError(t *testing.T) {
-	vs, err := New(&Config{MsgRing: &msgRingPlaceholder{}})
+func TestValueBulkSetMsgOutWriteError(t *testing.T) {
+	vs, err := NewValueStore(&ValueStoreConfig{MsgRing: &msgRingPlaceholder{}})
 	if err != nil {
 		t.Fatal("")
 	}
@@ -395,8 +345,8 @@ func TestBulkSetMsgOutWriteError(t *testing.T) {
 	bsm.Free()
 }
 
-func TestBulkSetMsgOutHitCap(t *testing.T) {
-	vs, err := New(&Config{MsgRing: &msgRingPlaceholder{}, BulkSetMsgCap: _BULK_SET_MSG_HEADER_LENGTH + _BULK_SET_MSG_ENTRY_HEADER_LENGTH + 3})
+func TestValueBulkSetMsgOutHitCap(t *testing.T) {
+	vs, err := NewValueStore(&ValueStoreConfig{MsgRing: &msgRingPlaceholder{}, BulkSetMsgCap: _VALUE_BULK_SET_MSG_HEADER_LENGTH + _VALUE_BULK_SET_MSG_ENTRY_HEADER_LENGTH + 3})
 	if err != nil {
 		t.Fatal("")
 	}
