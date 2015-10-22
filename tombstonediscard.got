@@ -9,36 +9,36 @@ import (
 	"gopkg.in/gholt/brimtime.v1"
 )
 
-type tombstoneDiscardState struct {
+type {{.t}}TombstoneDiscardState struct {
 	interval      int
 	age           uint64
 	notifyChan    chan *backgroundNotification
 	abort         uint32
-	localRemovals [][]localRemovalEntry
+	localRemovals [][]{{.t}}LocalRemovalEntry
 	batchSize     int
 }
 
-type localRemovalEntry struct {
+type {{.t}}LocalRemovalEntry struct {
 	keyA          uint64
 	keyB          uint64
 	timestampbits uint64
 }
 
-func (vs *DefaultValueStore) tombstoneDiscardConfig(cfg *Config) {
+func (vs *Default{{.T}}Store) tombstoneDiscardConfig(cfg *{{.T}}StoreConfig) {
 	vs.tombstoneDiscardState.interval = cfg.TombstoneDiscardInterval
 	vs.tombstoneDiscardState.age = (uint64(cfg.TombstoneAge) * uint64(time.Second) / 1000) << _TSB_UTIL_BITS
 	vs.tombstoneDiscardState.notifyChan = make(chan *backgroundNotification, 1)
 	vs.tombstoneDiscardState.batchSize = cfg.TombstoneDiscardBatchSize
 }
 
-func (vs *DefaultValueStore) tombstoneDiscardLaunch() {
+func (vs *Default{{.T}}Store) tombstoneDiscardLaunch() {
 	go vs.tombstoneDiscardLauncher()
 }
 
 // DisableTombstoneDiscard will stop any discard passes until
 // EnableTombstoneDiscard is called. A discard pass removes expired tombstones
 // (deletion markers).
-func (vs *DefaultValueStore) DisableTombstoneDiscard() {
+func (vs *Default{{.T}}Store) DisableTombstoneDiscard() {
 	c := make(chan struct{}, 1)
 	vs.tombstoneDiscardState.notifyChan <- &backgroundNotification{
 		disable:  true,
@@ -49,7 +49,7 @@ func (vs *DefaultValueStore) DisableTombstoneDiscard() {
 
 // EnableTombstoneDiscard will resume discard passes. A discard pass removes
 // expired tombstones (deletion markers).
-func (vs *DefaultValueStore) EnableTombstoneDiscard() {
+func (vs *Default{{.T}}Store) EnableTombstoneDiscard() {
 	c := make(chan struct{}, 1)
 	vs.tombstoneDiscardState.notifyChan <- &backgroundNotification{
 		enable:   true,
@@ -62,14 +62,14 @@ func (vs *DefaultValueStore) EnableTombstoneDiscard() {
 // tombstones (deletion markers) rather than waiting for the next interval. If
 // a pass is currently executing, it will be stopped and restarted so that a
 // call to this function ensures one complete pass occurs.
-func (vs *DefaultValueStore) TombstoneDiscardPass() {
+func (vs *Default{{.T}}Store) TombstoneDiscardPass() {
 	atomic.StoreUint32(&vs.tombstoneDiscardState.abort, 1)
 	c := make(chan struct{}, 1)
 	vs.tombstoneDiscardState.notifyChan <- &backgroundNotification{doneChan: c}
 	<-c
 }
 
-func (vs *DefaultValueStore) tombstoneDiscardLauncher() {
+func (vs *Default{{.T}}Store) tombstoneDiscardLauncher() {
 	var enabled bool
 	interval := float64(vs.tombstoneDiscardState.interval) * float64(time.Second)
 	vs.randMutex.Lock()
@@ -114,7 +114,7 @@ func (vs *DefaultValueStore) tombstoneDiscardLauncher() {
 	}
 }
 
-func (vs *DefaultValueStore) tombstoneDiscardPass() {
+func (vs *Default{{.T}}Store) tombstoneDiscardPass() {
 	if vs.logDebug != nil {
 		begin := time.Now()
 		defer func() {
@@ -128,7 +128,7 @@ func (vs *DefaultValueStore) tombstoneDiscardPass() {
 // tombstoneDiscardPassLocalRemovals removes all valuelocmap entries marked
 // with the _TSB_LOCAL_REMOVAL bit. These are entries that other routines have
 // indicated are no longer needed in memory.
-func (vs *DefaultValueStore) tombstoneDiscardPassLocalRemovals() {
+func (vs *Default{{.T}}Store) tombstoneDiscardPassLocalRemovals() {
 	// Each worker will perform a pass on a subsection of each partition's key
 	// space. Additionally, each worker will start their work on different
 	// partition. This reduces contention for a given section of the
@@ -180,7 +180,7 @@ func (vs *DefaultValueStore) tombstoneDiscardPassLocalRemovals() {
 // tombstoneDiscardPassExpiredDeletions scans for valuelocmap entries marked
 // with _TSB_DELETION (but not _TSB_LOCAL_REMOVAL) that are older than the
 // maximum tombstone age and marks them for _TSB_LOCAL_REMOVAL.
-func (vs *DefaultValueStore) tombstoneDiscardPassExpiredDeletions() {
+func (vs *Default{{.T}}Store) tombstoneDiscardPassExpiredDeletions() {
 	// Each worker will perform a pass on a subsection of each partition's key
 	// space. Additionally, each worker will start their work on different
 	// partition. This reduces contention for a given section of the
@@ -194,7 +194,7 @@ func (vs *DefaultValueStore) tombstoneDiscardPassExpiredDeletions() {
 	}
 	workerMax := uint64(vs.workers - 1)
 	workerPartitionPiece := (uint64(1) << partitionShift) / (workerMax + 1)
-	work := func(partition uint64, worker uint64, localRemovals []localRemovalEntry) {
+	work := func(partition uint64, worker uint64, localRemovals []{{.t}}LocalRemovalEntry) {
 		partitionOnLeftBits := partition << partitionShift
 		rangeBegin := partitionOnLeftBits + (workerPartitionPiece * worker)
 		var rangeEnd uint64
@@ -236,7 +236,7 @@ func (vs *DefaultValueStore) tombstoneDiscardPassExpiredDeletions() {
 	// To avoid memory churn, the localRemovals scratchpads are allocated just
 	// once and passed in to the workers.
 	for len(vs.tombstoneDiscardState.localRemovals) <= int(workerMax) {
-		vs.tombstoneDiscardState.localRemovals = append(vs.tombstoneDiscardState.localRemovals, make([]localRemovalEntry, vs.tombstoneDiscardState.batchSize))
+		vs.tombstoneDiscardState.localRemovals = append(vs.tombstoneDiscardState.localRemovals, make([]{{.t}}LocalRemovalEntry, vs.tombstoneDiscardState.batchSize))
 	}
 	wg := &sync.WaitGroup{}
 	wg.Add(int(workerMax + 1))

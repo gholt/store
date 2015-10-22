@@ -1,57 +1,3 @@
-// Package valuestore provides a disk-backed data structure for use in storing
-// []byte values referenced by 128 bit keys with options for replication.
-//
-// It can handle billions of keys (as memory allows) and full concurrent access
-// across many cores. All location information about each key is stored in
-// memory for speed, but values are stored on disk with the exception of
-// recently written data being buffered first and batched to disk later.
-//
-// This has been written with SSDs in mind, but spinning drives should work
-// also; though storing valuestoc files (Table Of Contents, key location
-// information) on a separate disk from values files is recommended in that
-// case.
-//
-// Each key is two 64bit values, known as keyA and keyB uint64 values. These
-// are usually created by a hashing function of the key name, but that duty is
-// left outside this package.
-//
-// Each modification is recorded with an int64 timestamp that is the number of
-// microseconds since the Unix epoch (see
-// github.com/gholt/brimtime.TimeToUnixMicro). With a write and delete for the
-// exact same timestamp, the delete wins. This allows a delete to be issued for
-// a specific write without fear of deleting any newer write.
-//
-// Internally, each modification is stored with a uint64 timestamp that is
-// equivalent to (brimtime.TimeToUnixMicro(time.Now())<<8) with the lowest 8
-// bits used to indicate deletions and other bookkeeping items. This means that
-// the allowable time range is 1970-01-01 00:00:00 +0000 UTC (+1 microsecond
-// because all zeroes indicates a missing item) to 4253-05-31 22:20:37.927935
-// +0000 UTC. There are constants TIMESTAMPMICRO_MIN and TIMESTAMPMICRO_MAX
-// available for bounding usage.
-//
-// There are background tasks for:
-//
-// * TombstoneDiscard: This will discard older tombstones (deletion markers).
-// Tombstones are kept for Config.TombstoneAge seconds and are used to ensure a
-// replicated older value doesn't resurrect a deleted value. But, keeping all
-// tombstones for all time is a waste of resources, so they are discarded over
-// time. Config.TombstoneAge controls how long they should be kept and should
-// be set to an amount greater than several replication passes.
-//
-// * PullReplication: This will continually send out pull replication requests
-// for all the partitions the ValueStore is responsible for, as determined by
-// the Config.MsgRing. The other responsible parties will respond to these
-// requests with data they have that was missing from the pull replication
-// request. Bloom filters are used to reduce bandwidth which has the downside
-// that a very small percentage of items may be missed each pass. A moving salt
-// is used with each bloom filter so that after a few passes there is an
-// exceptionally high probability that all items will be accounted for.
-//
-// * PushReplication: This will continually send out any data for any
-// partitions the ValueStore is *not* responsible for, as determined by the
-// Config.MsgRing. The responsible parties will respond to these requests with
-// acknowledgements of the data they received, allowing the requester to
-// discard the out of place data.
 package valuestore
 
 import (
@@ -77,31 +23,11 @@ import (
 	"gopkg.in/gholt/brimutil.v1"
 )
 
-const (
-	_TSB_UTIL_BITS = 8
-	_TSB_INACTIVE  = 0xff
-	_TSB_DELETION  = 0x80
-	// _TSB_COMPACTION_REWRITE indicates an item is being rewritten as part of
-	// compaction to the last disk file.
-	_TSB_COMPACTION_REWRITE = 0x01
-	// _TSB_LOCAL_REMOVAL indicates an item to be removed locally due to push
-	// replication (local store wasn't considered responsible for the item
-	// according to the ring) or a deletion marker expiration. An item marked
-	// for local removal will be retained in memory until the local removal
-	// marker is written to disk.
-	_TSB_LOCAL_REMOVAL = 0x02
-)
-
-const (
-	TIMESTAMPMICRO_MIN = int64(uint64(1) << _TSB_UTIL_BITS)
-	TIMESTAMPMICRO_MAX = int64(uint64(math.MaxUint64) >> _TSB_UTIL_BITS)
-)
-
-// ValueStore is an interface for a disk-backed data structure that stores
+// GroupStore is an interface for a disk-backed data structure that stores
 // []byte values referenced by 128 bit keys with options for replication.
 //
-// For documentation on each of these functions, see the DefaultValueStore.
-type ValueStore interface {
+// For documentation on each of these functions, see the DefaultGroupStore.
+type GroupStore interface {
 	Lookup(keyA uint64, keyB uint64) (int64, uint32, error)
 	Read(keyA uint64, keyB uint64, value []byte) (int64, []byte, error)
 	Write(keyA uint64, keyB uint64, timestamp int64, value []byte) (int64, error)
@@ -128,11 +54,8 @@ type ValueStore interface {
 	ValueCap() uint32
 }
 
-var ErrNotFound error = errors.New("not found")
-var ErrDisabled error = errors.New("disabled")
-
-// DefaultValueStore instances are created with New.
-type DefaultValueStore struct {
+// DefaultGroupStore instances are created with New.
+type DefaultGroupStore struct {
 	logCritical             LogFunc
 	logError                LogFunc
 	logWarning              LogFunc
@@ -142,8 +65,8 @@ type DefaultValueStore struct {
 	rand                    *rand.Rand
 	freeableVMChans         []chan *valuesMem
 	freeVMChan              chan *valuesMem
-	freeVWRChans            []chan *valueWriteReq
-	pendingVWRChans         []chan *valueWriteReq
+	freeVWRChans            []chan *groupWriteReq
+	pendingVWRChans         []chan *groupWriteReq
 	vfVMChan                chan *valuesMem
 	freeTOCBlockChan        chan []byte
 	pendingTOCBlockChan     chan []byte
@@ -154,7 +77,7 @@ type DefaultValueStore struct {
 	valueLocBlockIDer       uint64
 	path                    string
 	pathtoc                 string
-	vlm                     valuelocmap.ValueLocMap
+	vlm                     valuelocmap.GroupLocMap
 	workers                 int
 	recoveryBatchSize       int
 	valueCap                uint32
@@ -165,16 +88,16 @@ type DefaultValueStore struct {
 	valuesFileReaders       int
 	checksumInterval        uint32
 	msgRing                 ring.MsgRing
-	tombstoneDiscardState   tombstoneDiscardState
+	tombstoneDiscardState   groupTombstoneDiscardState
 	replicationIgnoreRecent uint64
-	pullReplicationState    pullReplicationState
-	pushReplicationState    pushReplicationState
-	compactionState         compactionState
-	bulkSetState            bulkSetState
-	bulkSetAckState         bulkSetAckState
+	pullReplicationState    groupPullReplicationState
+	pushReplicationState    groupPushReplicationState
+	compactionState         groupCompactionState
+	bulkSetState            groupBulkSetState
+	bulkSetAckState         groupBulkSetAckState
 	disableEnableWritesLock sync.Mutex
 	userDisabled            bool
-	diskWatcherState        diskWatcherState
+	diskWatcherState        groupDiskWatcherState
 
 	statsLock                    sync.Mutex
 	lookups                      int32
@@ -213,7 +136,7 @@ type DefaultValueStore struct {
 	smallFileCompactions         int32
 }
 
-type valueWriteReq struct {
+type groupWriteReq struct {
 	keyA          uint64
 	keyB          uint64
 	timestampbits uint64
@@ -222,10 +145,10 @@ type valueWriteReq struct {
 	internal      bool
 }
 
-var enableValueWriteReq *valueWriteReq = &valueWriteReq{}
-var disableValueWriteReq *valueWriteReq = &valueWriteReq{}
-var flushValueWriteReq *valueWriteReq = &valueWriteReq{}
-var flushValuesMem *valuesMem = &valuesMem{}
+var enableGroupWriteReq *groupWriteReq = &groupWriteReq{}
+var disableGroupWriteReq *groupWriteReq = &groupWriteReq{}
+var flushGroupWriteReq *groupWriteReq = &groupWriteReq{}
+var flushGroupsMem *valuesMem = &valuesMem{}
 
 type valueLocBlock interface {
 	timestampnano() int64
@@ -239,21 +162,21 @@ type backgroundNotification struct {
 	doneChan chan struct{}
 }
 
-// New creates a DefaultValueStore for use in storing []byte values referenced
+// New creates a DefaultGroupStore for use in storing []byte values referenced
 // by 128 bit keys.
 //
 // Note that a lot of buffering, multiple cores, and background processes can
 // be in use and therefore DisableAll() and Flush() should be called prior to
 // the process exiting to ensure all processing is done and the buffers are
 // flushed.
-func New(c *Config) (*DefaultValueStore, error) {
-	cfg := resolveConfig(c)
-	vlm := cfg.ValueLocMap
+func New(c *GroupStoreConfig) (*DefaultGroupStore, error) {
+	cfg := resolveGroupStoreConfig(c)
+	vlm := cfg.GroupLocMap
 	if vlm == nil {
-		vlm = valuelocmap.NewValueLocMap(nil)
+		vlm = valuelocmap.NewGroupLocMap(nil)
 	}
 	vlm.SetInactiveMask(_TSB_INACTIVE)
-	vs := &DefaultValueStore{
+	vs := &DefaultGroupStore{
 		logCritical:             cfg.LogCritical,
 		logError:                cfg.LogError,
 		logWarning:              cfg.LogWarning,
@@ -281,8 +204,8 @@ func New(c *Config) (*DefaultValueStore, error) {
 		vs.freeableVMChans[i] = make(chan *valuesMem, vs.workers)
 	}
 	vs.freeVMChan = make(chan *valuesMem, vs.workers*vs.writePagesPerWorker)
-	vs.freeVWRChans = make([]chan *valueWriteReq, vs.workers)
-	vs.pendingVWRChans = make([]chan *valueWriteReq, vs.workers)
+	vs.freeVWRChans = make([]chan *groupWriteReq, vs.workers)
+	vs.pendingVWRChans = make([]chan *groupWriteReq, vs.workers)
 	vs.vfVMChan = make(chan *valuesMem, vs.workers)
 	vs.freeTOCBlockChan = make(chan []byte, vs.workers*2)
 	vs.pendingTOCBlockChan = make(chan []byte, vs.workers)
@@ -301,13 +224,13 @@ func New(c *Config) (*DefaultValueStore, error) {
 		vs.freeVMChan <- vm
 	}
 	for i := 0; i < len(vs.freeVWRChans); i++ {
-		vs.freeVWRChans[i] = make(chan *valueWriteReq, vs.workers*2)
+		vs.freeVWRChans[i] = make(chan *groupWriteReq, vs.workers*2)
 		for j := 0; j < vs.workers*2; j++ {
-			vs.freeVWRChans[i] <- &valueWriteReq{errChan: make(chan error, 1)}
+			vs.freeVWRChans[i] <- &groupWriteReq{errChan: make(chan error, 1)}
 		}
 	}
 	for i := 0; i < len(vs.pendingVWRChans); i++ {
-		vs.pendingVWRChans[i] = make(chan *valueWriteReq)
+		vs.pendingVWRChans[i] = make(chan *groupWriteReq)
 	}
 	for i := 0; i < cap(vs.freeTOCBlockChan); i++ {
 		vs.freeTOCBlockChan <- make([]byte, 0, vs.pageSize)
@@ -341,14 +264,14 @@ func New(c *Config) (*DefaultValueStore, error) {
 	return vs, nil
 }
 
-// ValueCap returns the maximum length of a value the ValueStore can
+// ValueCap returns the maximum length of a value the GroupStore can
 // accept.
-func (vs *DefaultValueStore) ValueCap() uint32 {
+func (vs *DefaultGroupStore) ValueCap() uint32 {
 	return vs.valueCap
 }
 
 // DisableAll calls DisableAllBackground(), and DisableWrites().
-func (vs *DefaultValueStore) DisableAll() {
+func (vs *DefaultGroupStore) DisableAll() {
 	vs.DisableAllBackground()
 	vs.DisableWrites()
 }
@@ -356,7 +279,7 @@ func (vs *DefaultValueStore) DisableAll() {
 // DisableAllBackground calls DisableTombstoneDiscard(), DisableCompaction(),
 // DisableOutPullReplication(), DisableOutPushReplication(), but does *not*
 // call DisableWrites().
-func (vs *DefaultValueStore) DisableAllBackground() {
+func (vs *DefaultGroupStore) DisableAllBackground() {
 	vs.DisableTombstoneDiscard()
 	vs.DisableCompaction()
 	vs.DisableOutPullReplication()
@@ -365,7 +288,7 @@ func (vs *DefaultValueStore) DisableAllBackground() {
 
 // EnableAll calls EnableTombstoneDiscard(), EnableCompaction(),
 // EnableOutPullReplication(), EnableOutPushReplication(), and EnableWrites().
-func (vs *DefaultValueStore) EnableAll() {
+func (vs *DefaultGroupStore) EnableAll() {
 	vs.EnableTombstoneDiscard()
 	vs.EnableOutPullReplication()
 	vs.EnableOutPushReplication()
@@ -375,32 +298,32 @@ func (vs *DefaultValueStore) EnableAll() {
 
 // DisableWrites will cause any incoming Write or Delete requests to respond
 // with ErrDisabled until EnableWrites is called.
-func (vs *DefaultValueStore) DisableWrites() {
+func (vs *DefaultGroupStore) DisableWrites() {
 	vs.disableWrites(true)
 }
 
-func (vs *DefaultValueStore) disableWrites(userCall bool) {
+func (vs *DefaultGroupStore) disableWrites(userCall bool) {
 	vs.disableEnableWritesLock.Lock()
 	if userCall {
 		vs.userDisabled = true
 	}
 	for _, c := range vs.pendingVWRChans {
-		c <- disableValueWriteReq
+		c <- disableGroupWriteReq
 	}
 	vs.disableEnableWritesLock.Unlock()
 }
 
 // EnableWrites will resume accepting incoming Write and Delete requests.
-func (vs *DefaultValueStore) EnableWrites() {
+func (vs *DefaultGroupStore) EnableWrites() {
 	vs.enableWrites(true)
 }
 
-func (vs *DefaultValueStore) enableWrites(userCall bool) {
+func (vs *DefaultGroupStore) enableWrites(userCall bool) {
 	vs.disableEnableWritesLock.Lock()
 	if userCall || !vs.userDisabled {
 		vs.userDisabled = false
 		for _, c := range vs.pendingVWRChans {
-			c <- enableValueWriteReq
+			c <- enableGroupWriteReq
 		}
 	}
 	vs.disableEnableWritesLock.Unlock()
@@ -408,9 +331,9 @@ func (vs *DefaultValueStore) enableWrites(userCall bool) {
 
 // Flush will ensure buffered data (at the time of the call) is written to
 // disk.
-func (vs *DefaultValueStore) Flush() {
+func (vs *DefaultGroupStore) Flush() {
 	for _, c := range vs.pendingVWRChans {
-		c <- flushValueWriteReq
+		c <- flushGroupWriteReq
 	}
 	<-vs.flushedChan
 }
@@ -420,7 +343,7 @@ func (vs *DefaultValueStore) Flush() {
 // Note that err == ErrNotFound with timestampmicro == 0 indicates keyA, keyB
 // was not known at all whereas err == ErrNotFound with timestampmicro != 0
 // indicates keyA, keyB was known and had a deletion marker (aka tombstone).
-func (vs *DefaultValueStore) Lookup(keyA uint64, keyB uint64) (int64, uint32, error) {
+func (vs *DefaultGroupStore) Lookup(keyA uint64, keyB uint64) (int64, uint32, error) {
 	atomic.AddInt32(&vs.lookups, 1)
 	timestampbits, _, length, err := vs.lookup(keyA, keyB)
 	if err != nil {
@@ -429,8 +352,9 @@ func (vs *DefaultValueStore) Lookup(keyA uint64, keyB uint64) (int64, uint32, er
 	return int64(timestampbits >> _TSB_UTIL_BITS), length, err
 }
 
-func (vs *DefaultValueStore) lookup(keyA, keyB uint64) (uint64, uint32, uint32, error) {
-	timestampbits, id, _, length := vs.vlm.Get(keyA, keyB)
+func (vs *DefaultGroupStore) lookup(keyA, keyB uint64) (uint64, uint32, uint32, error) {
+	// TODO: nameKey needs to go all throughout the code.
+	timestampbits, id, _, length := vs.vlm.Get(keyA, keyB, 0, 0)
 	if id == 0 || timestampbits&_TSB_DELETION != 0 {
 		return timestampbits, id, 0, ErrNotFound
 	}
@@ -444,7 +368,7 @@ func (vs *DefaultValueStore) lookup(keyA, keyB uint64) (uint64, uint32, uint32, 
 // Note that err == ErrNotFound with timestampmicro == 0 indicates keyA, keyB
 // was not known at all whereas err == ErrNotFound with timestampmicro != 0
 // indicates keyA, keyB was known and had a deletion marker (aka tombstone).
-func (vs *DefaultValueStore) Read(keyA uint64, keyB uint64, value []byte) (int64, []byte, error) {
+func (vs *DefaultGroupStore) Read(keyA uint64, keyB uint64, value []byte) (int64, []byte, error) {
 	atomic.AddInt32(&vs.reads, 1)
 	timestampbits, value, err := vs.read(keyA, keyB, value)
 	if err != nil {
@@ -453,8 +377,9 @@ func (vs *DefaultValueStore) Read(keyA uint64, keyB uint64, value []byte) (int64
 	return int64(timestampbits >> _TSB_UTIL_BITS), value, err
 }
 
-func (vs *DefaultValueStore) read(keyA uint64, keyB uint64, value []byte) (uint64, []byte, error) {
-	timestampbits, id, offset, length := vs.vlm.Get(keyA, keyB)
+func (vs *DefaultGroupStore) read(keyA uint64, keyB uint64, value []byte) (uint64, []byte, error) {
+	// TODO: nameKey needs to go all throughout the code.
+	timestampbits, id, offset, length := vs.vlm.Get(keyA, keyB, 0, 0)
 	if id == 0 || timestampbits&_TSB_DELETION != 0 || timestampbits&_TSB_LOCAL_REMOVAL != 0 {
 		return timestampbits, value, ErrNotFound
 	}
@@ -465,7 +390,7 @@ func (vs *DefaultValueStore) read(keyA uint64, keyB uint64, value []byte) (uint6
 // stored timestampmicro or returns any error; a newer timestampmicro already
 // in place is not reported as an error. Note that with a write and a delete
 // for the exact same timestampmicro, the delete wins.
-func (vs *DefaultValueStore) Write(keyA uint64, keyB uint64, timestampmicro int64, value []byte) (int64, error) {
+func (vs *DefaultGroupStore) Write(keyA uint64, keyB uint64, timestampmicro int64, value []byte) (int64, error) {
 	atomic.AddInt32(&vs.writes, 1)
 	if timestampmicro < TIMESTAMPMICRO_MIN {
 		atomic.AddInt32(&vs.writeErrors, 1)
@@ -485,7 +410,7 @@ func (vs *DefaultValueStore) Write(keyA uint64, keyB uint64, timestampmicro int6
 	return int64(timestampbits >> _TSB_UTIL_BITS), err
 }
 
-func (vs *DefaultValueStore) write(keyA uint64, keyB uint64, timestampbits uint64, value []byte, internal bool) (uint64, error) {
+func (vs *DefaultGroupStore) write(keyA uint64, keyB uint64, timestampbits uint64, value []byte, internal bool) (uint64, error) {
 	i := int(keyA>>1) % len(vs.freeVWRChans)
 	vwr := <-vs.freeVWRChans[i]
 	vwr.keyA = keyA
@@ -505,7 +430,7 @@ func (vs *DefaultValueStore) write(keyA uint64, keyB uint64, timestampbits uint6
 // stored timestampmicro or returns any error; a newer timestampmicro already
 // in place is not reported as an error. Note that with a write and a delete
 // for the exact same timestampmicro, the delete wins.
-func (vs *DefaultValueStore) Delete(keyA uint64, keyB uint64, timestampmicro int64) (int64, error) {
+func (vs *DefaultGroupStore) Delete(keyA uint64, keyB uint64, timestampmicro int64) (int64, error) {
 	atomic.AddInt32(&vs.deletes, 1)
 	if timestampmicro < TIMESTAMPMICRO_MIN {
 		atomic.AddInt32(&vs.deleteErrors, 1)
@@ -525,11 +450,11 @@ func (vs *DefaultValueStore) Delete(keyA uint64, keyB uint64, timestampmicro int
 	return int64(ptimestampbits >> _TSB_UTIL_BITS), err
 }
 
-func (vs *DefaultValueStore) valueLocBlock(valueLocBlockID uint32) valueLocBlock {
+func (vs *DefaultGroupStore) valueLocBlock(valueLocBlockID uint32) valueLocBlock {
 	return vs.valueLocBlocks[valueLocBlockID]
 }
 
-func (vs *DefaultValueStore) addValueLocBlock(block valueLocBlock) (uint32, error) {
+func (vs *DefaultGroupStore) addValueLocBlock(block valueLocBlock) (uint32, error) {
 	id := atomic.AddUint64(&vs.valueLocBlockIDer, 1)
 	if id >= math.MaxUint32 {
 		return 0, errors.New("too many valueLocBlocks")
@@ -538,7 +463,7 @@ func (vs *DefaultValueStore) addValueLocBlock(block valueLocBlock) (uint32, erro
 	return uint32(id), nil
 }
 
-func (vs *DefaultValueStore) valueLocBlockIDFromTimestampnano(tsn int64) uint32 {
+func (vs *DefaultGroupStore) valueLocBlockIDFromTimestampnano(tsn int64) uint32 {
 	for i := 1; i <= len(vs.valueLocBlocks); i++ {
 		if vs.valueLocBlocks[i] == nil {
 			return 0
@@ -551,11 +476,11 @@ func (vs *DefaultValueStore) valueLocBlockIDFromTimestampnano(tsn int64) uint32 
 	return 0
 }
 
-func (vs *DefaultValueStore) closeValueLocBlock(valueLocBlockID uint32) error {
+func (vs *DefaultGroupStore) closeValueLocBlock(valueLocBlockID uint32) error {
 	return vs.valueLocBlocks[valueLocBlockID].close()
 }
 
-func (vs *DefaultValueStore) memClearer(freeableVMChan chan *valuesMem) {
+func (vs *DefaultGroupStore) memClearer(freeableVMChan chan *valuesMem) {
 	var tb []byte
 	var tbTS int64
 	var tbOffset int
@@ -586,7 +511,8 @@ func (vs *DefaultValueStore) memClearer(freeableVMChan chan *valuesMem) {
 				offset = vm.vfOffset + binary.BigEndian.Uint32(vm.toc[vmTOCOffset+24:])
 				length = binary.BigEndian.Uint32(vm.toc[vmTOCOffset+28:])
 			}
-			if vs.vlm.Set(keyA, keyB, timestampbits, blockID, offset, length, true) > timestampbits {
+			// TODO: nameKey needs to go all throughout the code.
+			if vs.vlm.Set(keyA, keyB, 0, 0, timestampbits, blockID, offset, length, true) > timestampbits {
 				continue
 			}
 			if tb != nil && tbOffset+32 > cap(tb) {
@@ -618,22 +544,22 @@ func (vs *DefaultValueStore) memClearer(freeableVMChan chan *valuesMem) {
 	}
 }
 
-func (vs *DefaultValueStore) memWriter(pendingVWRChan chan *valueWriteReq) {
+func (vs *DefaultGroupStore) memWriter(pendingVWRChan chan *groupWriteReq) {
 	var enabled bool
 	var vm *valuesMem
 	var vmTOCOffset int
 	var vmMemOffset int
 	for {
 		vwr := <-pendingVWRChan
-		if vwr == enableValueWriteReq {
+		if vwr == enableGroupWriteReq {
 			enabled = true
 			continue
 		}
-		if vwr == disableValueWriteReq {
+		if vwr == disableGroupWriteReq {
 			enabled = false
 			continue
 		}
-		if vwr == flushValueWriteReq {
+		if vwr == flushGroupWriteReq {
 			if vm != nil && len(vm.toc) > 0 {
 				vs.vfVMChan <- vm
 				vm = nil
@@ -672,7 +598,8 @@ func (vs *DefaultValueStore) memWriter(pendingVWRChan chan *valueWriteReq) {
 				vm.values[i] = 0
 			}
 		}
-		ptimestampbits := vs.vlm.Set(vwr.keyA, vwr.keyB, vwr.timestampbits, vm.id, uint32(vmMemOffset), uint32(length), false)
+		// TODO: nameKey needs to go all throughout the code.
+		ptimestampbits := vs.vlm.Set(vwr.keyA, vwr.keyB, 0, 0, vwr.timestampbits, vm.id, uint32(vmMemOffset), uint32(length), false)
 		if ptimestampbits < vwr.timestampbits {
 			vm.toc = vm.toc[:vmTOCOffset+32]
 			binary.BigEndian.PutUint64(vm.toc[vmTOCOffset:], vwr.keyA)
@@ -692,7 +619,7 @@ func (vs *DefaultValueStore) memWriter(pendingVWRChan chan *valueWriteReq) {
 	}
 }
 
-func (vs *DefaultValueStore) vfWriter() {
+func (vs *DefaultGroupStore) vfWriter() {
 	var vf *valuesFile
 	memWritersFlushLeft := len(vs.pendingVWRChans)
 	var tocLen uint64
@@ -740,7 +667,7 @@ func (vs *DefaultValueStore) vfWriter() {
 	}
 }
 
-func (vs *DefaultValueStore) tocWriter() {
+func (vs *DefaultGroupStore) tocWriter() {
 	// writerA is the current toc file while writerB is the previously active toc
 	// writerB is kept around in case a "late" key arrives to be flushed whom's value
 	// is actually in the previous values file.
@@ -849,7 +776,7 @@ OuterLoop:
 	}
 }
 
-func (vs *DefaultValueStore) recovery() error {
+func (vs *DefaultGroupStore) recovery() error {
 	start := time.Now()
 	fromDiskCount := 0
 	causedChangeCount := int64(0)

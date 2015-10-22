@@ -13,13 +13,11 @@ import (
 	"github.com/gholt/valuelocmap"
 )
 
-type LogFunc func(format string, v ...interface{})
-
-// Config represents the set of values for configuring a ValueStore. Note that
-// changing the values (shallow changes) in this structure will have no effect
-// on existing ValueStores; but deep changes (such as reconfiguring an existing
-// Logger) will.
-type Config struct {
+// ValueStoreConfig represents the set of values for configuring a ValueStore.
+// Note that changing the values (shallow changes) in this structure will have
+// no effect on existing ValueStores; but deep changes (such as reconfiguring
+// an existing Logger) will.
+type ValueStoreConfig struct {
 	// LogCritical sets the func to use for critical messages. Defaults logging
 	// to os.Stderr.
 	LogCritical LogFunc
@@ -226,8 +224,8 @@ type Config struct {
 	UsageReenableThreshold float32
 }
 
-func resolveConfig(c *Config) *Config {
-	cfg := &Config{}
+func resolveValueStoreConfig(c *ValueStoreConfig) *ValueStoreConfig {
+	cfg := &ValueStoreConfig{}
 	if c != nil {
 		*cfg = *c
 	}

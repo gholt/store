@@ -8,28 +8,28 @@ import (
 
 // bsam: entries:n
 // bsam entry: keyA:8, keyB:8, timestampbits:8
-const _BULK_SET_ACK_MSG_TYPE = 0x39589f4746844e3b
-const _BULK_SET_ACK_MSG_ENTRY_LENGTH = 24
+const _{{.TT}}_BULK_SET_ACK_MSG_TYPE = 0x39589f4746844e3b
+const _{{.TT}}_BULK_SET_ACK_MSG_ENTRY_LENGTH = 24
 
-type bulkSetAckState struct {
-	inMsgChan             chan *bulkSetAckMsg
-	inFreeMsgChan         chan *bulkSetAckMsg
-	outFreeMsgChan        chan *bulkSetAckMsg
+type {{.t}}BulkSetAckState struct {
+	inMsgChan             chan *{{.t}}BulkSetAckMsg
+	inFreeMsgChan         chan *{{.t}}BulkSetAckMsg
+	outFreeMsgChan        chan *{{.t}}BulkSetAckMsg
 	inBulkSetAckDoneChans []chan struct{}
 }
 
-type bulkSetAckMsg struct {
-	vs   *DefaultValueStore
+type {{.t}}BulkSetAckMsg struct {
+	vs   *Default{{.T}}Store
 	body []byte
 }
 
-func (vs *DefaultValueStore) bulkSetAckConfig(cfg *Config) {
+func (vs *Default{{.T}}Store) bulkSetAckConfig(cfg *{{.T}}StoreConfig) {
 	if vs.msgRing != nil {
-		vs.msgRing.SetMsgHandler(_BULK_SET_ACK_MSG_TYPE, vs.newInBulkSetAckMsg)
-		vs.bulkSetAckState.inMsgChan = make(chan *bulkSetAckMsg, cfg.InBulkSetAckMsgs)
-		vs.bulkSetAckState.inFreeMsgChan = make(chan *bulkSetAckMsg, cfg.InBulkSetAckMsgs)
+		vs.msgRing.SetMsgHandler(_{{.TT}}_BULK_SET_ACK_MSG_TYPE, vs.newInBulkSetAckMsg)
+		vs.bulkSetAckState.inMsgChan = make(chan *{{.t}}BulkSetAckMsg, cfg.InBulkSetAckMsgs)
+		vs.bulkSetAckState.inFreeMsgChan = make(chan *{{.t}}BulkSetAckMsg, cfg.InBulkSetAckMsgs)
 		for i := 0; i < cap(vs.bulkSetAckState.inFreeMsgChan); i++ {
-			vs.bulkSetAckState.inFreeMsgChan <- &bulkSetAckMsg{
+			vs.bulkSetAckState.inFreeMsgChan <- &{{.t}}BulkSetAckMsg{
 				vs:   vs,
 				body: make([]byte, cfg.BulkSetAckMsgCap),
 			}
@@ -38,9 +38,9 @@ func (vs *DefaultValueStore) bulkSetAckConfig(cfg *Config) {
 		for i := 0; i < len(vs.bulkSetAckState.inBulkSetAckDoneChans); i++ {
 			vs.bulkSetAckState.inBulkSetAckDoneChans[i] = make(chan struct{}, 1)
 		}
-		vs.bulkSetAckState.outFreeMsgChan = make(chan *bulkSetAckMsg, cfg.OutBulkSetAckMsgs)
+		vs.bulkSetAckState.outFreeMsgChan = make(chan *{{.t}}BulkSetAckMsg, cfg.OutBulkSetAckMsgs)
 		for i := 0; i < cap(vs.bulkSetAckState.outFreeMsgChan); i++ {
-			vs.bulkSetAckState.outFreeMsgChan <- &bulkSetAckMsg{
+			vs.bulkSetAckState.outFreeMsgChan <- &{{.t}}BulkSetAckMsg{
 				vs:   vs,
 				body: make([]byte, cfg.BulkSetAckMsgCap),
 			}
@@ -48,7 +48,7 @@ func (vs *DefaultValueStore) bulkSetAckConfig(cfg *Config) {
 	}
 }
 
-func (vs *DefaultValueStore) bulkSetAckLaunch() {
+func (vs *Default{{.T}}Store) bulkSetAckLaunch() {
 	for i := 0; i < len(vs.bulkSetAckState.inBulkSetAckDoneChans); i++ {
 		go vs.inBulkSetAck(vs.bulkSetAckState.inBulkSetAckDoneChans[i])
 	}
@@ -56,12 +56,12 @@ func (vs *DefaultValueStore) bulkSetAckLaunch() {
 
 // newInBulkSetAckMsg reads bulk-set-ack messages from the MsgRing and puts
 // them on the inMsgChan for the inBulkSetAck workers to work on.
-func (vs *DefaultValueStore) newInBulkSetAckMsg(r io.Reader, l uint64) (uint64, error) {
-	var bsam *bulkSetAckMsg
+func (vs *Default{{.T}}Store) newInBulkSetAckMsg(r io.Reader, l uint64) (uint64, error) {
+	var bsam *{{.t}}BulkSetAckMsg
 	select {
 	case bsam = <-vs.bulkSetAckState.inFreeMsgChan:
 	default:
-		// If there isn't a free bulkSetAckMsg, just read and discard the
+		// If there isn't a free {{.t}}BulkSetAckMsg, just read and discard the
 		// incoming bulk-set-ack message.
 		left := l
 		var sn int
@@ -106,7 +106,7 @@ func (vs *DefaultValueStore) newInBulkSetAckMsg(r io.Reader, l uint64) (uint64, 
 
 // inBulkSetAck actually processes incoming bulk-set-ack messages; there may be
 // more than one of these workers.
-func (vs *DefaultValueStore) inBulkSetAck(doneChan chan struct{}) {
+func (vs *Default{{.T}}Store) inBulkSetAck(doneChan chan struct{}) {
 	for {
 		bsam := <-vs.bulkSetAckState.inMsgChan
 		if bsam == nil {
@@ -119,8 +119,8 @@ func (vs *DefaultValueStore) inBulkSetAck(doneChan chan struct{}) {
 		}
 		b := bsam.body
 		// div mul just ensures any trailing bytes are dropped
-		l := len(b) / _BULK_SET_ACK_MSG_ENTRY_LENGTH * _BULK_SET_ACK_MSG_ENTRY_LENGTH
-		for o := 0; o < l; o += _BULK_SET_ACK_MSG_ENTRY_LENGTH {
+		l := len(b) / _{{.TT}}_BULK_SET_ACK_MSG_ENTRY_LENGTH * _{{.TT}}_BULK_SET_ACK_MSG_ENTRY_LENGTH
+		for o := 0; o < l; o += _{{.TT}}_BULK_SET_ACK_MSG_ENTRY_LENGTH {
 			keyA := binary.BigEndian.Uint64(b[o:])
 			if ring != nil && !ring.Responsible(uint32(keyA>>rightwardPartitionShift)) {
 				atomic.AddInt32(&vs.inBulkSetAckWrites, 1)
@@ -138,42 +138,42 @@ func (vs *DefaultValueStore) inBulkSetAck(doneChan chan struct{}) {
 	doneChan <- struct{}{}
 }
 
-// newOutBulkSetAckMsg gives an initialized bulkSetAckMsg for filling out and
+// newOutBulkSetAckMsg gives an initialized {{.t}}BulkSetAckMsg for filling out and
 // eventually sending using the MsgRing. The MsgRing (or someone else if the
-// message doesn't end up with the MsgRing) will call bulkSetAckMsg.Free()
-// eventually and the bulkSetAckMsg will be requeued for reuse later. There is
-// a fixed number of outgoing bulkSetAckMsg instances that can exist at any
+// message doesn't end up with the MsgRing) will call {{.t}}BulkSetAckMsg.Free()
+// eventually and the {{.t}}BulkSetAckMsg will be requeued for reuse later. There is
+// a fixed number of outgoing {{.t}}BulkSetAckMsg instances that can exist at any
 // given time, capping memory usage. Once the limit is reached, this method
-// will block until a bulkSetAckMsg is available to return.
-func (vs *DefaultValueStore) newOutBulkSetAckMsg() *bulkSetAckMsg {
+// will block until a {{.t}}BulkSetAckMsg is available to return.
+func (vs *Default{{.T}}Store) newOutBulkSetAckMsg() *{{.t}}BulkSetAckMsg {
 	bsam := <-vs.bulkSetAckState.outFreeMsgChan
 	bsam.body = bsam.body[:0]
 	return bsam
 }
 
-func (bsam *bulkSetAckMsg) MsgType() uint64 {
-	return _BULK_SET_ACK_MSG_TYPE
+func (bsam *{{.t}}BulkSetAckMsg) MsgType() uint64 {
+	return _{{.TT}}_BULK_SET_ACK_MSG_TYPE
 }
 
-func (bsam *bulkSetAckMsg) MsgLength() uint64 {
+func (bsam *{{.t}}BulkSetAckMsg) MsgLength() uint64 {
 	return uint64(len(bsam.body))
 }
 
-func (bsam *bulkSetAckMsg) WriteContent(w io.Writer) (uint64, error) {
+func (bsam *{{.t}}BulkSetAckMsg) WriteContent(w io.Writer) (uint64, error) {
 	n, err := w.Write(bsam.body)
 	return uint64(n), err
 }
 
-func (bsam *bulkSetAckMsg) Free() {
+func (bsam *{{.t}}BulkSetAckMsg) Free() {
 	bsam.vs.bulkSetAckState.outFreeMsgChan <- bsam
 }
 
-func (bsam *bulkSetAckMsg) add(keyA uint64, keyB uint64, timestampbits uint64) bool {
+func (bsam *{{.t}}BulkSetAckMsg) add(keyA uint64, keyB uint64, timestampbits uint64) bool {
 	o := len(bsam.body)
-	if o+_BULK_SET_ACK_MSG_ENTRY_LENGTH >= cap(bsam.body) {
+	if o+_{{.TT}}_BULK_SET_ACK_MSG_ENTRY_LENGTH >= cap(bsam.body) {
 		return false
 	}
-	bsam.body = bsam.body[:o+_BULK_SET_ACK_MSG_ENTRY_LENGTH]
+	bsam.body = bsam.body[:o+_{{.TT}}_BULK_SET_ACK_MSG_ENTRY_LENGTH]
 	binary.BigEndian.PutUint64(bsam.body[o:], keyA)
 	binary.BigEndian.PutUint64(bsam.body[o+8:], keyB)
 	binary.BigEndian.PutUint64(bsam.body[o+16:], timestampbits)

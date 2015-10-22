@@ -9,34 +9,34 @@ import (
 	"gopkg.in/gholt/brimtime.v1"
 )
 
-type pushReplicationState struct {
+type {{.t}}PushReplicationState struct {
 	outWorkers    int
 	outInterval   int
 	outNotifyChan chan *backgroundNotification
 	outAbort      uint32
-	outMsgChan    chan *pullReplicationMsg
+	outMsgChan    chan *{{.t}}PullReplicationMsg
 	outLists      [][]uint64
 	outValBufs    [][]byte
 	outMsgTimeout time.Duration
 }
 
-func (vs *DefaultValueStore) pushReplicationConfig(cfg *Config) {
+func (vs *Default{{.T}}Store) pushReplicationConfig(cfg *{{.T}}StoreConfig) {
 	vs.pushReplicationState.outWorkers = cfg.OutPushReplicationWorkers
 	vs.pushReplicationState.outInterval = cfg.OutPushReplicationInterval
 	if vs.msgRing != nil {
-		vs.pushReplicationState.outMsgChan = make(chan *pullReplicationMsg, cfg.OutPushReplicationMsgs)
+		vs.pushReplicationState.outMsgChan = make(chan *{{.t}}PullReplicationMsg, cfg.OutPushReplicationMsgs)
 	}
 	vs.pushReplicationState.outNotifyChan = make(chan *backgroundNotification, 1)
 	vs.pushReplicationState.outMsgTimeout = time.Duration(cfg.OutPushReplicationMsgTimeout) * time.Millisecond
 }
 
-func (vs *DefaultValueStore) pushReplicationLaunch() {
+func (vs *Default{{.T}}Store) pushReplicationLaunch() {
 	go vs.outPushReplicationLauncher()
 }
 
 // DisableOutPushReplication will stop any outgoing push replication requests
 // until EnableOutPushReplication is called.
-func (vs *DefaultValueStore) DisableOutPushReplication() {
+func (vs *Default{{.T}}Store) DisableOutPushReplication() {
 	c := make(chan struct{}, 1)
 	vs.pushReplicationState.outNotifyChan <- &backgroundNotification{
 		disable:  true,
@@ -46,7 +46,7 @@ func (vs *DefaultValueStore) DisableOutPushReplication() {
 }
 
 // EnableOutPushReplication will resume outgoing push replication requests.
-func (vs *DefaultValueStore) EnableOutPushReplication() {
+func (vs *Default{{.T}}Store) EnableOutPushReplication() {
 	c := make(chan struct{}, 1)
 	vs.pushReplicationState.outNotifyChan <- &backgroundNotification{
 		enable:   true,
@@ -62,14 +62,14 @@ func (vs *DefaultValueStore) EnableOutPushReplication() {
 // push replication requests, but all the responses will almost certainly not
 // have been received when this function returns. These requests are stateless,
 // and so synchronization at that level is not possible.
-func (vs *DefaultValueStore) OutPushReplicationPass() {
+func (vs *Default{{.T}}Store) OutPushReplicationPass() {
 	atomic.StoreUint32(&vs.pushReplicationState.outAbort, 1)
 	c := make(chan struct{}, 1)
 	vs.pushReplicationState.outNotifyChan <- &backgroundNotification{doneChan: c}
 	<-c
 }
 
-func (vs *DefaultValueStore) outPushReplicationLauncher() {
+func (vs *Default{{.T}}Store) outPushReplicationLauncher() {
 	var enabled bool
 	interval := float64(vs.pushReplicationState.outInterval) * float64(time.Second)
 	vs.randMutex.Lock()
@@ -114,7 +114,7 @@ func (vs *DefaultValueStore) outPushReplicationLauncher() {
 	}
 }
 
-func (vs *DefaultValueStore) outPushReplicationPass() {
+func (vs *Default{{.T}}Store) outPushReplicationPass() {
 	if vs.msgRing == nil {
 		return
 	}
@@ -137,7 +137,7 @@ func (vs *DefaultValueStore) outPushReplicationPass() {
 	// To avoid memory churn, the scratchpad areas are allocated just once and
 	// passed in to the workers.
 	for len(vs.pushReplicationState.outLists) < int(workerMax+1) {
-		vs.pushReplicationState.outLists = append(vs.pushReplicationState.outLists, make([]uint64, vs.bulkSetState.msgCap/_BULK_SET_MSG_MIN_ENTRY_LENGTH))
+		vs.pushReplicationState.outLists = append(vs.pushReplicationState.outLists, make([]uint64, vs.bulkSetState.msgCap/_{{.TT}}_BULK_SET_MSG_MIN_ENTRY_LENGTH))
 	}
 	for len(vs.pushReplicationState.outValBufs) < int(workerMax+1) {
 		vs.pushReplicationState.outValBufs = append(vs.pushReplicationState.outValBufs, make([]byte, vs.valueCap))
@@ -167,8 +167,8 @@ func (vs *DefaultValueStore) outPushReplicationPass() {
 		// batch, those keys will have been removed and the first matching
 		// batch will start with any remaining keys.
 		// First we gather the matching keys to send.
-		vs.vlm.ScanCallback(rangeBegin, rangeEnd, 0, _TSB_LOCAL_REMOVAL, cutoff, math.MaxUint64, func(keyA uint64, keyB uint64, timestampbits uint64, length uint32) bool {
-			inMsgLength := _BULK_SET_MSG_ENTRY_HEADER_LENGTH + int64(length)
+		vs.vlm.ScanCallback(rangeBegin, rangeEnd, 0, _TSB_LOCAL_REMOVAL, cutoff, math.MaxUint64, func(keyA uint64, keyB uint64{{if eq .t "group"}}, nameKeyA uint64, nameKeyB uint64{{end}}, timestampbits uint64, length uint32) bool {
+			inMsgLength := _{{.TT}}_BULK_SET_MSG_ENTRY_HEADER_LENGTH + int64(length)
 			if timestampbits&_TSB_DELETION == 0 || timestampbits >= tombstoneCutoff {
 				list = append(list, keyA, keyB)
 				availableBytes -= inMsgLength

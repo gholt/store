@@ -9,35 +9,35 @@ import (
 
 // bsm: senderNodeID:8 entries:n
 // bsm entry: keyA:8, keyB:8, timestampbits:8, length:4, value:n
-const _BULK_SET_MSG_TYPE = 0x44f58445991a4aa1
-const _BULK_SET_MSG_HEADER_LENGTH = 8
-const _BULK_SET_MSG_ENTRY_HEADER_LENGTH = 28
-const _BULK_SET_MSG_MIN_ENTRY_LENGTH = 28
+const _VALUE_BULK_SET_MSG_TYPE = 0x44f58445991a4aa1
+const _VALUE_BULK_SET_MSG_HEADER_LENGTH = 8
+const _VALUE_BULK_SET_MSG_ENTRY_HEADER_LENGTH = 28
+const _VALUE_BULK_SET_MSG_MIN_ENTRY_LENGTH = 28
 
-type bulkSetState struct {
+type valueBulkSetState struct {
 	msgCap               int
-	inMsgChan            chan *bulkSetMsg
-	inFreeMsgChan        chan *bulkSetMsg
+	inMsgChan            chan *valueBulkSetMsg
+	inFreeMsgChan        chan *valueBulkSetMsg
 	inResponseMsgTimeout time.Duration
-	outFreeMsgChan       chan *bulkSetMsg
+	outFreeMsgChan       chan *valueBulkSetMsg
 	inBulkSetDoneChans   []chan struct{}
 }
 
-type bulkSetMsg struct {
+type valueBulkSetMsg struct {
 	vs     *DefaultValueStore
 	header []byte
 	body   []byte
 }
 
-func (vs *DefaultValueStore) bulkSetConfig(cfg *Config) {
+func (vs *DefaultValueStore) bulkSetConfig(cfg *ValueStoreConfig) {
 	if vs.msgRing != nil {
-		vs.msgRing.SetMsgHandler(_BULK_SET_MSG_TYPE, vs.newInBulkSetMsg)
-		vs.bulkSetState.inMsgChan = make(chan *bulkSetMsg, cfg.InBulkSetMsgs)
-		vs.bulkSetState.inFreeMsgChan = make(chan *bulkSetMsg, cfg.InBulkSetMsgs)
+		vs.msgRing.SetMsgHandler(_VALUE_BULK_SET_MSG_TYPE, vs.newInBulkSetMsg)
+		vs.bulkSetState.inMsgChan = make(chan *valueBulkSetMsg, cfg.InBulkSetMsgs)
+		vs.bulkSetState.inFreeMsgChan = make(chan *valueBulkSetMsg, cfg.InBulkSetMsgs)
 		for i := 0; i < cap(vs.bulkSetState.inFreeMsgChan); i++ {
-			vs.bulkSetState.inFreeMsgChan <- &bulkSetMsg{
+			vs.bulkSetState.inFreeMsgChan <- &valueBulkSetMsg{
 				vs:     vs,
-				header: make([]byte, _BULK_SET_MSG_HEADER_LENGTH),
+				header: make([]byte, _VALUE_BULK_SET_MSG_HEADER_LENGTH),
 				body:   make([]byte, cfg.BulkSetMsgCap),
 			}
 		}
@@ -46,11 +46,11 @@ func (vs *DefaultValueStore) bulkSetConfig(cfg *Config) {
 			vs.bulkSetState.inBulkSetDoneChans[i] = make(chan struct{}, 1)
 		}
 		vs.bulkSetState.msgCap = cfg.BulkSetMsgCap
-		vs.bulkSetState.outFreeMsgChan = make(chan *bulkSetMsg, cfg.OutBulkSetMsgs)
+		vs.bulkSetState.outFreeMsgChan = make(chan *valueBulkSetMsg, cfg.OutBulkSetMsgs)
 		for i := 0; i < cap(vs.bulkSetState.outFreeMsgChan); i++ {
-			vs.bulkSetState.outFreeMsgChan <- &bulkSetMsg{
+			vs.bulkSetState.outFreeMsgChan <- &valueBulkSetMsg{
 				vs:     vs,
-				header: make([]byte, _BULK_SET_MSG_HEADER_LENGTH),
+				header: make([]byte, _VALUE_BULK_SET_MSG_HEADER_LENGTH),
 				body:   make([]byte, cfg.BulkSetMsgCap),
 			}
 		}
@@ -67,11 +67,11 @@ func (vs *DefaultValueStore) bulkSetLaunch() {
 // newInBulkSetMsg reads bulk-set messages from the MsgRing and puts them on
 // the inMsgChan for the inBulkSet workers to work on.
 func (vs *DefaultValueStore) newInBulkSetMsg(r io.Reader, l uint64) (uint64, error) {
-	var bsm *bulkSetMsg
+	var bsm *valueBulkSetMsg
 	select {
 	case bsm = <-vs.bulkSetState.inFreeMsgChan:
 	default:
-		// If there isn't a free bulkSetMsg, just read and discard the incoming
+		// If there isn't a free valueBulkSetMsg, just read and discard the incoming
 		// bulk-set message.
 		left := l
 		var sn int
@@ -92,7 +92,7 @@ func (vs *DefaultValueStore) newInBulkSetMsg(r io.Reader, l uint64) (uint64, err
 		return l, nil
 	}
 	// If the message is obviously too short, just throw it away.
-	if l < _BULK_SET_MSG_HEADER_LENGTH+_BULK_SET_MSG_MIN_ENTRY_LENGTH {
+	if l < _VALUE_BULK_SET_MSG_HEADER_LENGTH+_VALUE_BULK_SET_MSG_MIN_ENTRY_LENGTH {
 		vs.bulkSetState.inFreeMsgChan <- bsm
 		left := l
 		var sn int
@@ -167,7 +167,7 @@ func (vs *DefaultValueStore) inBulkSet(doneChan chan struct{}) {
 		var err error
 		ring := vs.msgRing.Ring()
 		var rightwardPartitionShift uint64
-		var bsam *bulkSetAckMsg
+		var bsam *valueBulkSetAckMsg
 		var rtimestampbits uint64
 		if ring != nil {
 			rightwardPartitionShift = 64 - uint64(ring.PartitionBitCount())
@@ -177,7 +177,7 @@ func (vs *DefaultValueStore) inBulkSet(doneChan chan struct{}) {
 				bsam = vs.newOutBulkSetAckMsg()
 			}
 		}
-		for len(body) > _BULK_SET_MSG_ENTRY_HEADER_LENGTH {
+		for len(body) > _VALUE_BULK_SET_MSG_ENTRY_HEADER_LENGTH {
 			keyA := binary.BigEndian.Uint64(body)
 			keyB := binary.BigEndian.Uint64(body[8:])
 			timestampbits := binary.BigEndian.Uint64(body[16:])
@@ -187,7 +187,7 @@ func (vs *DefaultValueStore) inBulkSet(doneChan chan struct{}) {
 			// Note that deletions are acted upon as internal requests (work
 			// even if writes are disabled due to disk fullness) and new data
 			// writes are not.
-			rtimestampbits, err = vs.write(keyA, keyB, timestampbits, body[_BULK_SET_MSG_ENTRY_HEADER_LENGTH:_BULK_SET_MSG_ENTRY_HEADER_LENGTH+l], timestampbits&_TSB_DELETION != 0)
+			rtimestampbits, err = vs.write(keyA, keyB, timestampbits, body[_VALUE_BULK_SET_MSG_ENTRY_HEADER_LENGTH:_VALUE_BULK_SET_MSG_ENTRY_HEADER_LENGTH+l], timestampbits&_TSB_DELETION != 0)
 			if err != nil {
 				atomic.AddInt32(&vs.inBulkSetWriteErrors, 1)
 			} else if rtimestampbits != timestampbits {
@@ -198,7 +198,7 @@ func (vs *DefaultValueStore) inBulkSet(doneChan chan struct{}) {
 			if err == nil && bsam != nil && ring != nil && ring.Responsible(uint32(keyA>>rightwardPartitionShift)) {
 				bsam.add(keyA, keyB, timestampbits)
 			}
-			body = body[_BULK_SET_MSG_ENTRY_HEADER_LENGTH+l:]
+			body = body[_VALUE_BULK_SET_MSG_ENTRY_HEADER_LENGTH+l:]
 		}
 		if bsam != nil {
 			atomic.AddInt32(&vs.outBulkSetAcks, 1)
@@ -209,14 +209,14 @@ func (vs *DefaultValueStore) inBulkSet(doneChan chan struct{}) {
 	doneChan <- struct{}{}
 }
 
-// newOutBulkSetMsg gives an initialized bulkSetMsg for filling out and
+// newOutBulkSetMsg gives an initialized valueBulkSetMsg for filling out and
 // eventually sending using the MsgRing. The MsgRing (or someone else if the
-// message doesn't end up with the MsgRing) will call bulkSetMsg.Free()
-// eventually and the bulkSetMsg will be requeued for reuse later. There is a
-// fixed number of outgoing bulkSetMsg instances that can exist at any given
+// message doesn't end up with the MsgRing) will call valueBulkSetMsg.Free()
+// eventually and the valueBulkSetMsg will be requeued for reuse later. There is a
+// fixed number of outgoing valueBulkSetMsg instances that can exist at any given
 // time, capping memory usage. Once the limit is reached, this method will
-// block until a bulkSetMsg is available to return.
-func (vs *DefaultValueStore) newOutBulkSetMsg() *bulkSetMsg {
+// block until a valueBulkSetMsg is available to return.
+func (vs *DefaultValueStore) newOutBulkSetMsg() *valueBulkSetMsg {
 	bsm := <-vs.bulkSetState.outFreeMsgChan
 	if vs.msgRing != nil {
 		if r := vs.msgRing.Ring(); r != nil {
@@ -229,15 +229,15 @@ func (vs *DefaultValueStore) newOutBulkSetMsg() *bulkSetMsg {
 	return bsm
 }
 
-func (bsm *bulkSetMsg) MsgType() uint64 {
-	return _BULK_SET_MSG_TYPE
+func (bsm *valueBulkSetMsg) MsgType() uint64 {
+	return _VALUE_BULK_SET_MSG_TYPE
 }
 
-func (bsm *bulkSetMsg) MsgLength() uint64 {
+func (bsm *valueBulkSetMsg) MsgLength() uint64 {
 	return uint64(len(bsm.header) + len(bsm.body))
 }
 
-func (bsm *bulkSetMsg) WriteContent(w io.Writer) (uint64, error) {
+func (bsm *valueBulkSetMsg) WriteContent(w io.Writer) (uint64, error) {
 	n, err := w.Write(bsm.header)
 	if err != nil {
 		return uint64(n), err
@@ -246,27 +246,27 @@ func (bsm *bulkSetMsg) WriteContent(w io.Writer) (uint64, error) {
 	return uint64(len(bsm.header)) + uint64(n), err
 }
 
-func (bsm *bulkSetMsg) Free() {
+func (bsm *valueBulkSetMsg) Free() {
 	bsm.vs.bulkSetState.outFreeMsgChan <- bsm
 }
 
-func (bsm *bulkSetMsg) nodeID() uint64 {
+func (bsm *valueBulkSetMsg) nodeID() uint64 {
 	return binary.BigEndian.Uint64(bsm.header)
 }
 
-func (bsm *bulkSetMsg) add(keyA uint64, keyB uint64, timestampbits uint64, value []byte) bool {
+func (bsm *valueBulkSetMsg) add(keyA uint64, keyB uint64, timestampbits uint64, value []byte) bool {
 	// CONSIDER: I'd rather not have "useless" checks every place wasting
 	// cycles when the caller should have already validated the input; but here
 	// len(value) must not exceed math.MaxUint32.
 	o := len(bsm.body)
-	if o+_BULK_SET_MSG_ENTRY_HEADER_LENGTH+len(value) >= cap(bsm.body) {
+	if o+_VALUE_BULK_SET_MSG_ENTRY_HEADER_LENGTH+len(value) >= cap(bsm.body) {
 		return false
 	}
-	bsm.body = bsm.body[:o+_BULK_SET_MSG_ENTRY_HEADER_LENGTH+len(value)]
+	bsm.body = bsm.body[:o+_VALUE_BULK_SET_MSG_ENTRY_HEADER_LENGTH+len(value)]
 	binary.BigEndian.PutUint64(bsm.body[o:], keyA)
 	binary.BigEndian.PutUint64(bsm.body[o+8:], keyB)
 	binary.BigEndian.PutUint64(bsm.body[o+16:], timestampbits)
 	binary.BigEndian.PutUint32(bsm.body[o+24:], uint32(len(value)))
-	copy(bsm.body[o+_BULK_SET_MSG_ENTRY_HEADER_LENGTH:], value)
+	copy(bsm.body[o+_VALUE_BULK_SET_MSG_ENTRY_HEADER_LENGTH:], value)
 	return true
 }

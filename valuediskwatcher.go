@@ -6,7 +6,7 @@ import (
 	"github.com/ricochet2200/go-disk-usage/du"
 )
 
-type diskWatcherState struct {
+type valueDiskWatcherState struct {
 	freeDisableThreshold   uint64
 	freeReenableThreshold  uint64
 	usageDisableThreshold  float32
@@ -19,7 +19,7 @@ type diskWatcherState struct {
 	sizetoc                uint64
 }
 
-func (vs *DefaultValueStore) diskWatcherConfig(cfg *Config) {
+func (vs *DefaultValueStore) diskWatcherConfig(cfg *ValueStoreConfig) {
 	vs.diskWatcherState.freeDisableThreshold = cfg.FreeDisableThreshold
 	vs.diskWatcherState.freeReenableThreshold = cfg.FreeReenableThreshold
 	vs.diskWatcherState.usageDisableThreshold = cfg.UsageDisableThreshold

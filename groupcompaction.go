@@ -18,7 +18,7 @@ import (
 	"github.com/spaolacci/murmur3"
 )
 
-type compactionState struct {
+type groupCompactionState struct {
 	interval     int
 	workerCount  int
 	ageThreshold int64
@@ -27,7 +27,7 @@ type compactionState struct {
 	notifyChan   chan *backgroundNotification
 }
 
-func (vs *DefaultValueStore) compactionConfig(cfg *Config) {
+func (vs *DefaultGroupStore) compactionConfig(cfg *GroupStoreConfig) {
 	vs.compactionState.interval = cfg.CompactionInterval
 	vs.compactionState.threshold = cfg.CompactionThreshold
 	vs.compactionState.ageThreshold = int64(cfg.CompactionAgeThreshold * 1000000000)
@@ -35,14 +35,14 @@ func (vs *DefaultValueStore) compactionConfig(cfg *Config) {
 	vs.compactionState.workerCount = cfg.CompactionWorkers
 }
 
-func (vs *DefaultValueStore) compactionLaunch() {
+func (vs *DefaultGroupStore) compactionLaunch() {
 	go vs.compactionLauncher()
 }
 
 // DisableCompaction will stop any compaction passes until
 // EnableCompaction is called. A compaction pass searches for files
 // with a percentage of XX deleted entries.
-func (vs *DefaultValueStore) DisableCompaction() {
+func (vs *DefaultGroupStore) DisableCompaction() {
 	c := make(chan struct{}, 1)
 	vs.compactionState.notifyChan <- &backgroundNotification{
 		disable:  true,
@@ -54,7 +54,7 @@ func (vs *DefaultValueStore) DisableCompaction() {
 // EnableCompaction will resume compaction passes.
 // A compaction pass searches for files with a percentage of XX deleted
 // entries.
-func (vs *DefaultValueStore) EnableCompaction() {
+func (vs *DefaultGroupStore) EnableCompaction() {
 	c := make(chan struct{}, 1)
 	vs.compactionState.notifyChan <- &backgroundNotification{
 		enable:   true,
@@ -64,14 +64,14 @@ func (vs *DefaultValueStore) EnableCompaction() {
 }
 
 // CompactionPass will immediately execute a compaction pass to compact stale files.
-func (vs *DefaultValueStore) CompactionPass() {
+func (vs *DefaultGroupStore) CompactionPass() {
 	atomic.StoreUint32(&vs.compactionState.abort, 1)
 	c := make(chan struct{}, 1)
 	vs.compactionState.notifyChan <- &backgroundNotification{doneChan: c}
 	<-c
 }
 
-func (vs *DefaultValueStore) compactionLauncher() {
+func (vs *DefaultGroupStore) compactionLauncher() {
 	var enabled bool
 	interval := float64(vs.compactionState.interval) * float64(time.Second)
 	vs.randMutex.Lock()
@@ -116,12 +116,12 @@ func (vs *DefaultValueStore) compactionLauncher() {
 	}
 }
 
-type compactionJob struct {
+type groupCompactionJob struct {
 	name             string
 	candidateBlockID uint32
 }
 
-func (vs *DefaultValueStore) compactionPass() {
+func (vs *DefaultGroupStore) compactionPass() {
 	if vs.logDebug != nil {
 		begin := time.Now()
 		defer func() {
@@ -140,7 +140,7 @@ func (vs *DefaultValueStore) compactionPass() {
 		return
 	}
 	sort.Strings(names)
-	jobChan := make(chan *compactionJob, len(names))
+	jobChan := make(chan *groupCompactionJob, len(names))
 	wg := &sync.WaitGroup{}
 	for i := 0; i < vs.compactionState.workerCount; i++ {
 		wg.Add(1)
@@ -149,7 +149,7 @@ func (vs *DefaultValueStore) compactionPass() {
 	for _, name := range names {
 		namets, valid := vs.compactionCandidate(path.Join(vs.pathtoc, name))
 		if valid {
-			jobChan <- &compactionJob{path.Join(vs.pathtoc, name), vs.valueLocBlockIDFromTimestampnano(namets)}
+			jobChan <- &groupCompactionJob{path.Join(vs.pathtoc, name), vs.valueLocBlockIDFromTimestampnano(namets)}
 		}
 	}
 	close(jobChan)
@@ -159,7 +159,7 @@ func (vs *DefaultValueStore) compactionPass() {
 // compactionCandidate verifies that the given toc is a valid candidate for
 // compaction and also returns the extracted namets.
 // TODO: This doesn't need to be its own func anymore
-func (vs *DefaultValueStore) compactionCandidate(name string) (int64, bool) {
+func (vs *DefaultGroupStore) compactionCandidate(name string) (int64, bool) {
 	if !strings.HasSuffix(name, ".valuestoc") {
 		return 0, false
 	}
@@ -183,7 +183,7 @@ func (vs *DefaultValueStore) compactionCandidate(name string) (int64, bool) {
 	return namets, true
 }
 
-func (vs *DefaultValueStore) compactionWorker(jobChan chan *compactionJob, wg *sync.WaitGroup) {
+func (vs *DefaultGroupStore) compactionWorker(jobChan chan *groupCompactionJob, wg *sync.WaitGroup) {
 	for c := range jobChan {
 		fstat, err := os.Stat(c.name)
 		if err != nil {
@@ -266,7 +266,7 @@ func (vs *DefaultValueStore) compactionWorker(jobChan chan *compactionJob, wg *s
 	wg.Done()
 }
 
-func (vs *DefaultValueStore) sampleTOC(name string, candidateBlockID uint32, skipOffset, skipCount int) (int, int, error) {
+func (vs *DefaultGroupStore) sampleTOC(name string, candidateBlockID uint32, skipOffset, skipCount int) (int, int, error) {
 	count := 0
 	stale := 0
 	fromDiskBuf := make([]byte, vs.checksumInterval+4)
@@ -373,15 +373,15 @@ func (vs *DefaultValueStore) sampleTOC(name string, candidateBlockID uint32, ski
 
 }
 
-type compactionResult struct {
+type groupCompactionResult struct {
 	checksumFailures int
 	count            int
 	rewrote          int
 	stale            int
 }
 
-func (vs *DefaultValueStore) compactFile(name string, candidateBlockID uint32) (compactionResult, error) {
-	var cr compactionResult
+func (vs *DefaultGroupStore) compactFile(name string, candidateBlockID uint32) (groupCompactionResult, error) {
+	var cr groupCompactionResult
 	fromDiskBuf := make([]byte, vs.checksumInterval+4)
 	fromDiskOverflow := make([]byte, 0, 32)
 	fp, err := os.Open(name)
