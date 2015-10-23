@@ -29,6 +29,9 @@ import (
 // For documentation on each of these functions, see the DefaultGroupStore.
 type GroupStore interface {
 	Lookup(keyA uint64, keyB uint64, nameKeyA uint64, nameKeyB uint64) (int64, uint32, error)
+
+	LookupGroup(keyA uint64, keyB uint64) []LookupGroupItem
+
 	Read(keyA uint64, keyB uint64, nameKeyA uint64, nameKeyB uint64, value []byte) (int64, []byte, error)
 
 	ReadGroup(keyA uint64, keyB uint64) (int, chan *ReadGroupItem)
@@ -105,6 +108,8 @@ type DefaultGroupStore struct {
 	statsLock                    sync.Mutex
 	lookups                      int32
 	lookupErrors                 int32
+	lookupGroups                 int32
+	lookupGroupItems             int32
 	reads                        int32
 	readErrors                   int32
 	readGroups                   int32
@@ -363,6 +368,28 @@ func (vs *DefaultGroupStore) lookup(keyA uint64, keyB uint64, nameKeyA uint64, n
 	return timestampbits, id, length, nil
 }
 
+type LookupGroupItem struct {
+	NameKeyA uint64
+	NameKeyB uint64
+}
+
+// LookupGroup returns all the nameKeyA, nameKeyB pairs matching under keyA,
+// keyB.
+func (vs *DefaultGroupStore) LookupGroup(keyA uint64, keyB uint64) []LookupGroupItem {
+	atomic.AddInt32(&vs.lookupGroups, 1)
+	items := vs.vlm.GetGroup(keyA, keyB)
+	if len(items) == 0 {
+		return nil
+	}
+	atomic.AddInt32(&vs.lookupGroupItems, int32(len(items)))
+	rv := make([]LookupGroupItem, len(items))
+	for i, item := range items {
+		rv[i].NameKeyA = item.NameKeyA
+		rv[i].NameKeyB = item.NameKeyB
+	}
+	return rv
+}
+
 // Read will return timestampmicro, value, err for keyA, keyB, nameKeyA, nameKeyB;
 // if an incoming value is provided, the read value will be appended to it and
 // the whole returned (useful to reuse an existing []byte).
@@ -395,6 +422,10 @@ type ReadGroupItem struct {
 	Value          []byte
 }
 
+// ReadGroup returns all the items with keyA, keyB; the returned int indicates
+// a an estimate of the item count and the items are return through the
+// channel. Note that the int is just an estimate; a different number of items
+// may be returned.
 func (vs *DefaultGroupStore) ReadGroup(keyA uint64, keyB uint64) (int, chan *ReadGroupItem) {
 	atomic.AddInt32(&vs.readGroups, 1)
 	items := vs.vlm.GetGroup(keyA, keyB)

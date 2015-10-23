@@ -60,8 +60,8 @@ writes other than deletes will result in error. Internal writes such as
 compaction and removing successfully push-replicated data will continue.
 
 There is also a modified form of ValueStore called GroupStore that expands the
-primary key to two 128 bit keys and offers a GetGroup method which retrieves
-all matching items for the first key.
+primary key to two 128 bit keys and offers a Lookup/ReadGroup methods which
+retrieves all matching items for the first key.
 
 [API Documentation](http://godoc.org/github.com/gholt/valuestore)
 

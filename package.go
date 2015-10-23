@@ -58,8 +58,8 @@
 // continue.
 //
 // There is also a modified form of ValueStore called GroupStore that expands
-// the primary key to two 128 bit keys and offers a GetGroup method which
-// retrieves all matching items for the first key.
+// the primary key to two 128 bit keys and offers a Lookup/ReadGroup methods
+// which retrieves all matching items for the first key.
 package valuestore
 
 // got is at https://github.com/gholt/got

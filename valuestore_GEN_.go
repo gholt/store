@@ -29,6 +29,7 @@ import (
 // For documentation on each of these functions, see the DefaultValueStore.
 type ValueStore interface {
 	Lookup(keyA uint64, keyB uint64) (int64, uint32, error)
+
 	Read(keyA uint64, keyB uint64, value []byte) (int64, []byte, error)
 
 	Write(keyA uint64, keyB uint64, timestamp int64, value []byte) (int64, error)
@@ -103,6 +104,8 @@ type DefaultValueStore struct {
 	statsLock                    sync.Mutex
 	lookups                      int32
 	lookupErrors                 int32
+	lookupGroups                 int32
+	lookupGroupItems             int32
 	reads                        int32
 	readErrors                   int32
 	readGroups                   int32

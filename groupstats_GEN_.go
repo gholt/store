@@ -18,7 +18,11 @@ type GroupStoreStats struct {
 	// LookupErrors is the number of errors returned by Lookup.
 	LookupErrors int32
 	// Reads is the number of calls to Read.
-	Reads int32
+	// LookupGroups is the number of calls to LookupGroup.
+	LookupGroups int32
+	// LookupGroupItems is the number of items LookupGroup has encountered.
+	LookupGroupItems int32
+	Reads            int32
 	// ReadErrors is the number of errors returned by Read.
 	ReadErrors int32
 	// ReadGroups is the number of calls to ReadGroup.
@@ -189,6 +193,8 @@ func (vs *DefaultGroupStore) Stats(debug bool) fmt.Stringer {
 	stats := &GroupStoreStats{
 		Lookups:                      atomic.LoadInt32(&vs.lookups),
 		LookupErrors:                 atomic.LoadInt32(&vs.lookupErrors),
+		LookupGroups:                 atomic.LoadInt32(&vs.lookupGroups),
+		LookupGroupItems:             atomic.LoadInt32(&vs.lookupGroupItems),
 		Reads:                        atomic.LoadInt32(&vs.reads),
 		ReadErrors:                   atomic.LoadInt32(&vs.readErrors),
 		ReadGroups:                   atomic.LoadInt32(&vs.readGroups),
@@ -232,6 +238,8 @@ func (vs *DefaultGroupStore) Stats(debug bool) fmt.Stringer {
 	}
 	atomic.AddInt32(&vs.lookups, -stats.Lookups)
 	atomic.AddInt32(&vs.lookupErrors, -stats.LookupErrors)
+	atomic.AddInt32(&vs.lookupGroups, -stats.LookupGroups)
+	atomic.AddInt32(&vs.lookupGroupItems, -stats.LookupGroupItems)
 	atomic.AddInt32(&vs.reads, -stats.Reads)
 	atomic.AddInt32(&vs.readErrors, -stats.ReadErrors)
 	atomic.AddInt32(&vs.readGroups, -stats.ReadGroups)
@@ -328,6 +336,8 @@ func (stats *GroupStoreStats) String() string {
 		{"ValueBytes", fmt.Sprintf("%d", stats.ValueBytes)},
 		{"Lookups", fmt.Sprintf("%d", stats.Lookups)},
 		{"LookupErrors", fmt.Sprintf("%d", stats.LookupErrors)},
+		{"LookupGroups", fmt.Sprintf("%d", stats.LookupGroups)},
+		{"LookupGroupItems", fmt.Sprintf("%d", stats.LookupGroupItems)},
 		{"Reads", fmt.Sprintf("%d", stats.Reads)},
 		{"ReadErrors", fmt.Sprintf("%d", stats.ReadErrors)},
 		{"ReadGroups", fmt.Sprintf("%d", stats.ReadGroups)},
