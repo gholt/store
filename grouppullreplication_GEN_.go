@@ -11,7 +11,8 @@ import (
 	"gopkg.in/gholt/brimtime.v1"
 )
 
-const _GROUP_PULL_REPLICATION_MSG_TYPE = 0x579c4bd162f045b3
+const _GROUP_PULL_REPLICATION_MSG_TYPE = 0x34bf87953e59e8d1
+
 const _GROUP_PULL_REPLICATION_MSG_HEADER_BYTES = 44
 
 type groupPullReplicationState struct {

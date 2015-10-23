@@ -8,7 +8,11 @@ import (
 
 // bsam: entries:n
 // bsam entry: keyA:8, keyB:8, timestampbits:8
+{{if eq .t "value"}}
 const _{{.TT}}_BULK_SET_ACK_MSG_TYPE = 0x39589f4746844e3b
+{{else}}
+const _{{.TT}}_BULK_SET_ACK_MSG_TYPE = 0xec3577cc6dbb75bb
+{{end}}
 const _{{.TT}}_BULK_SET_ACK_MSG_ENTRY_LENGTH = 24
 
 type {{.t}}BulkSetAckState struct {

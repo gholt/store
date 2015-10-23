@@ -11,7 +11,11 @@ import (
     "gopkg.in/gholt/brimtime.v1"
 )
 
+{{if eq .t "value"}}
 const _{{.TT}}_PULL_REPLICATION_MSG_TYPE = 0x579c4bd162f045b3
+{{else}}
+const _{{.TT}}_PULL_REPLICATION_MSG_TYPE = 0x34bf87953e59e8d1
+{{end}}
 const _{{.TT}}_PULL_REPLICATION_MSG_HEADER_BYTES = 44
 
 type {{.t}}PullReplicationState struct {

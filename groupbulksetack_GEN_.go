@@ -8,7 +8,9 @@ import (
 
 // bsam: entries:n
 // bsam entry: keyA:8, keyB:8, timestampbits:8
-const _GROUP_BULK_SET_ACK_MSG_TYPE = 0x39589f4746844e3b
+
+const _GROUP_BULK_SET_ACK_MSG_TYPE = 0xec3577cc6dbb75bb
+
 const _GROUP_BULK_SET_ACK_MSG_ENTRY_LENGTH = 24
 
 type groupBulkSetAckState struct {

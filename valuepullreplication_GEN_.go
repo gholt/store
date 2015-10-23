@@ -12,6 +12,7 @@ import (
 )
 
 const _VALUE_PULL_REPLICATION_MSG_TYPE = 0x579c4bd162f045b3
+
 const _VALUE_PULL_REPLICATION_MSG_HEADER_BYTES = 44
 
 type valuePullReplicationState struct {

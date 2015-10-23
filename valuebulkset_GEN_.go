@@ -9,7 +9,9 @@ import (
 
 // bsm: senderNodeID:8 entries:n
 // bsm entry: keyA:8, keyB:8, timestampbits:8, length:4, value:n
+
 const _VALUE_BULK_SET_MSG_TYPE = 0x44f58445991a4aa1
+
 const _VALUE_BULK_SET_MSG_HEADER_LENGTH = 8
 const _VALUE_BULK_SET_MSG_ENTRY_HEADER_LENGTH = 28
 const _VALUE_BULK_SET_MSG_MIN_ENTRY_LENGTH = 28
