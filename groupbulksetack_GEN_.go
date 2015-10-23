@@ -10,8 +10,7 @@ import (
 // bsam entry: keyA:8, keyB:8, timestampbits:8
 
 const _GROUP_BULK_SET_ACK_MSG_TYPE = 0xec3577cc6dbb75bb
-
-const _GROUP_BULK_SET_ACK_MSG_ENTRY_LENGTH = 24
+const _GROUP_BULK_SET_ACK_MSG_ENTRY_LENGTH = 40
 
 type groupBulkSetAckState struct {
 	inMsgChan             chan *groupBulkSetAckMsg
@@ -126,9 +125,8 @@ func (vs *DefaultGroupStore) inBulkSetAck(doneChan chan struct{}) {
 			keyA := binary.BigEndian.Uint64(b[o:])
 			if ring != nil && !ring.Responsible(uint32(keyA>>rightwardPartitionShift)) {
 				atomic.AddInt32(&vs.inBulkSetAckWrites, 1)
-				timestampbits := binary.BigEndian.Uint64(b[o+16:]) | _TSB_LOCAL_REMOVAL
-				// TODO: Fix the group part
-				rtimestampbits, err := vs.write(keyA, binary.BigEndian.Uint64(b[o+8:]), 0, 0, timestampbits, nil, true)
+				timestampbits := binary.BigEndian.Uint64(b[o+32:]) | _TSB_LOCAL_REMOVAL
+				rtimestampbits, err := vs.write(keyA, binary.BigEndian.Uint64(b[o+8:]), binary.BigEndian.Uint64(b[o+16:]), binary.BigEndian.Uint64(b[o+24:]), timestampbits, nil, true)
 				if err != nil {
 					atomic.AddInt32(&vs.inBulkSetAckWriteErrors, 1)
 				} else if rtimestampbits != timestampbits {
@@ -141,13 +139,14 @@ func (vs *DefaultGroupStore) inBulkSetAck(doneChan chan struct{}) {
 	doneChan <- struct{}{}
 }
 
-// newOutBulkSetAckMsg gives an initialized groupBulkSetAckMsg for filling out and
-// eventually sending using the MsgRing. The MsgRing (or someone else if the
-// message doesn't end up with the MsgRing) will call groupBulkSetAckMsg.Free()
-// eventually and the groupBulkSetAckMsg will be requeued for reuse later. There is
-// a fixed number of outgoing groupBulkSetAckMsg instances that can exist at any
-// given time, capping memory usage. Once the limit is reached, this method
-// will block until a groupBulkSetAckMsg is available to return.
+// newOutBulkSetAckMsg gives an initialized groupBulkSetAckMsg for filling out
+// and eventually sending using the MsgRing. The MsgRing (or someone else if
+// the message doesn't end up with the MsgRing) will call
+// groupBulkSetAckMsg.Free() eventually and the groupBulkSetAckMsg will be
+// requeued for reuse later. There is a fixed number of outgoing
+// groupBulkSetAckMsg instances that can exist at any given time, capping
+// memory usage. Once the limit is reached, this method will block until a
+// groupBulkSetAckMsg is available to return.
 func (vs *DefaultGroupStore) newOutBulkSetAckMsg() *groupBulkSetAckMsg {
 	bsam := <-vs.bulkSetAckState.outFreeMsgChan
 	bsam.body = bsam.body[:0]
@@ -177,8 +176,12 @@ func (bsam *groupBulkSetAckMsg) add(keyA uint64, keyB uint64, nameKeyA uint64, n
 		return false
 	}
 	bsam.body = bsam.body[:o+_GROUP_BULK_SET_ACK_MSG_ENTRY_LENGTH]
+
 	binary.BigEndian.PutUint64(bsam.body[o:], keyA)
 	binary.BigEndian.PutUint64(bsam.body[o+8:], keyB)
-	binary.BigEndian.PutUint64(bsam.body[o+16:], timestampbits)
+	binary.BigEndian.PutUint64(bsam.body[o+16:], nameKeyA)
+	binary.BigEndian.PutUint64(bsam.body[o+24:], nameKeyB)
+	binary.BigEndian.PutUint64(bsam.body[o+32:], timestampbits)
+
 	return true
 }

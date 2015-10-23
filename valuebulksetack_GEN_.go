@@ -10,7 +10,6 @@ import (
 // bsam entry: keyA:8, keyB:8, timestampbits:8
 
 const _VALUE_BULK_SET_ACK_MSG_TYPE = 0x39589f4746844e3b
-
 const _VALUE_BULK_SET_ACK_MSG_ENTRY_LENGTH = 24
 
 type valueBulkSetAckState struct {
@@ -127,7 +126,6 @@ func (vs *DefaultValueStore) inBulkSetAck(doneChan chan struct{}) {
 			if ring != nil && !ring.Responsible(uint32(keyA>>rightwardPartitionShift)) {
 				atomic.AddInt32(&vs.inBulkSetAckWrites, 1)
 				timestampbits := binary.BigEndian.Uint64(b[o+16:]) | _TSB_LOCAL_REMOVAL
-				// TODO: Fix the group part
 				rtimestampbits, err := vs.write(keyA, binary.BigEndian.Uint64(b[o+8:]), timestampbits, nil, true)
 				if err != nil {
 					atomic.AddInt32(&vs.inBulkSetAckWriteErrors, 1)
@@ -141,13 +139,14 @@ func (vs *DefaultValueStore) inBulkSetAck(doneChan chan struct{}) {
 	doneChan <- struct{}{}
 }
 
-// newOutBulkSetAckMsg gives an initialized valueBulkSetAckMsg for filling out and
-// eventually sending using the MsgRing. The MsgRing (or someone else if the
-// message doesn't end up with the MsgRing) will call valueBulkSetAckMsg.Free()
-// eventually and the valueBulkSetAckMsg will be requeued for reuse later. There is
-// a fixed number of outgoing valueBulkSetAckMsg instances that can exist at any
-// given time, capping memory usage. Once the limit is reached, this method
-// will block until a valueBulkSetAckMsg is available to return.
+// newOutBulkSetAckMsg gives an initialized valueBulkSetAckMsg for filling out
+// and eventually sending using the MsgRing. The MsgRing (or someone else if
+// the message doesn't end up with the MsgRing) will call
+// valueBulkSetAckMsg.Free() eventually and the valueBulkSetAckMsg will be
+// requeued for reuse later. There is a fixed number of outgoing
+// valueBulkSetAckMsg instances that can exist at any given time, capping
+// memory usage. Once the limit is reached, this method will block until a
+// valueBulkSetAckMsg is available to return.
 func (vs *DefaultValueStore) newOutBulkSetAckMsg() *valueBulkSetAckMsg {
 	bsam := <-vs.bulkSetAckState.outFreeMsgChan
 	bsam.body = bsam.body[:0]
@@ -177,8 +176,10 @@ func (bsam *valueBulkSetAckMsg) add(keyA uint64, keyB uint64, timestampbits uint
 		return false
 	}
 	bsam.body = bsam.body[:o+_VALUE_BULK_SET_ACK_MSG_ENTRY_LENGTH]
+
 	binary.BigEndian.PutUint64(bsam.body[o:], keyA)
 	binary.BigEndian.PutUint64(bsam.body[o+8:], keyB)
 	binary.BigEndian.PutUint64(bsam.body[o+16:], timestampbits)
+
 	return true
 }
