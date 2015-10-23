@@ -71,8 +71,7 @@ func TestValuePullReplicationSimple(t *testing.T) {
 	}
 	vs.EnableAll()
 	defer vs.DisableAll()
-	// TODO: Fix group part
-	_, err = vs.write(1, 2, 0x300, []byte("testing"), false)
+	_, err = vs.write(1, 2, 0x500, []byte("testing"), false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -88,7 +87,7 @@ func TestValuePullReplicationSimple(t *testing.T) {
 	for i := 0; i < len(m.headerToPartitions); i++ {
 		prm := &valuePullReplicationMsg{vs: vs, header: m.headerToPartitions[i], body: m.bodyToPartitions[i]}
 		bf := prm.ktBloomFilter()
-		if bf.mayHave(1, 2, 0x300) {
+		if bf.mayHave(1, 2, 0x500) {
 			mayHave = true
 		}
 	}

@@ -24,13 +24,15 @@ type groupKTBloomFilter struct {
 func newGroupKTBloomFilter(n uint64, p float64, salt uint16) *groupKTBloomFilter {
 	m := -((float64(n) * math.Log(p)) / math.Pow(math.Log(2), 2))
 	return &groupKTBloomFilter{
-		n:       n,
-		p:       p,
-		salt:    uint32(salt) << 16,
-		m:       uint32(math.Ceil(m/8)) * 8,
-		kDiv4:   uint32(math.Ceil(m / float64(n) * math.Log(2) / 4)),
-		bits:    make([]byte, uint32(math.Ceil(m/8))),
-		scratch: make([]byte, 28),
+		n:     n,
+		p:     p,
+		salt:  uint32(salt) << 16,
+		m:     uint32(math.Ceil(m/8)) * 8,
+		kDiv4: uint32(math.Ceil(m / float64(n) * math.Log(2) / 4)),
+		bits:  make([]byte, uint32(math.Ceil(m/8))),
+
+		// salt:4, keyA:8, keyB:8, nameKeyA:8, nameKeyB:8, timestamp:8
+		scratch: make([]byte, 44),
 	}
 }
 
@@ -40,13 +42,15 @@ func newGroupKTBloomFilterFromMsg(prm *groupPullReplicationMsg, headerOffset int
 	salt := binary.BigEndian.Uint16(prm.header[headerOffset+16:])
 	m := -((float64(n) * math.Log(p)) / math.Pow(math.Log(2), 2))
 	return &groupKTBloomFilter{
-		n:       n,
-		p:       p,
-		salt:    uint32(salt) << 16,
-		m:       uint32(math.Ceil(m/8)) * 8,
-		kDiv4:   uint32(math.Ceil(m / float64(n) * math.Log(2) / 4)),
-		bits:    prm.body,
-		scratch: make([]byte, 28),
+		n:     n,
+		p:     p,
+		salt:  uint32(salt) << 16,
+		m:     uint32(math.Ceil(m/8)) * 8,
+		kDiv4: uint32(math.Ceil(m / float64(n) * math.Log(2) / 4)),
+		bits:  prm.body,
+
+		// salt:4, keyA:8, keyB:8, nameKeyA:8, nameKeyB:8, timestamp:8
+		scratch: make([]byte, 44),
 	}
 }
 
@@ -61,15 +65,19 @@ func (ktbf *groupKTBloomFilter) String() string {
 	return fmt.Sprintf("groupKTBloomFilter %p n=%d p=%f salt=%d m=%d k=%d bytes=%d", ktbf, ktbf.n, ktbf.p, ktbf.salt>>16, ktbf.m, ktbf.kDiv4*4, len(ktbf.bits))
 }
 
-func (ktbf *groupKTBloomFilter) add(keyA uint64, keyB uint64, timestamp uint64) {
-	// TODO: There are optimization opportunities here as keyA and keyB can be
+func (ktbf *groupKTBloomFilter) add(keyA uint64, keyB uint64, nameKeyA uint64, nameKeyB uint64, timestamp uint64) {
+	// CONSIDER: There are optimization opportunities here as the keys can be
 	// considered to already have good bit distribution and using a hashing
 	// function to mix-in timestamp, salt, and i instead of redoing the whole
 	// hash each time would be good to test and benchmark.
 	scratch := ktbf.scratch
+
 	binary.BigEndian.PutUint64(scratch[4:], keyA)
 	binary.BigEndian.PutUint64(scratch[12:], keyB)
-	binary.BigEndian.PutUint64(scratch[20:], timestamp)
+	binary.BigEndian.PutUint64(scratch[20:], nameKeyA)
+	binary.BigEndian.PutUint64(scratch[28:], nameKeyB)
+	binary.BigEndian.PutUint64(scratch[36:], timestamp)
+
 	for i := ktbf.kDiv4; i > 0; i-- {
 		binary.BigEndian.PutUint32(scratch, ktbf.salt|i)
 		h1, h2 := murmur3.Sum128(scratch)
@@ -84,11 +92,15 @@ func (ktbf *groupKTBloomFilter) add(keyA uint64, keyB uint64, timestamp uint64) 
 	}
 }
 
-func (ktbf *groupKTBloomFilter) mayHave(keyA uint64, keyB uint64, timestamp uint64) bool {
+func (ktbf *groupKTBloomFilter) mayHave(keyA uint64, keyB uint64, nameKeyA uint64, nameKeyB uint64, timestamp uint64) bool {
 	scratch := ktbf.scratch
+
 	binary.BigEndian.PutUint64(scratch[4:], keyA)
 	binary.BigEndian.PutUint64(scratch[12:], keyB)
-	binary.BigEndian.PutUint64(scratch[20:], timestamp)
+	binary.BigEndian.PutUint64(scratch[20:], nameKeyA)
+	binary.BigEndian.PutUint64(scratch[28:], nameKeyB)
+	binary.BigEndian.PutUint64(scratch[36:], timestamp)
+
 	for i := ktbf.kDiv4; i > 0; i-- {
 		binary.BigEndian.PutUint32(scratch, ktbf.salt|i)
 		h1, h2 := murmur3.Sum128(scratch)

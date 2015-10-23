@@ -8,15 +8,15 @@ import (
 
 func TestValueKTBloomFilterBasic(t *testing.T) {
 	f := newValueKTBloomFilter(10, 0.01, 0)
-	if f.mayHave(1, 2, 3) {
+	if f.mayHave(1, 2, 5) {
 		t.Fatal("")
 	}
-	f.add(1, 2, 3)
-	if !f.mayHave(1, 2, 3) {
+	f.add(1, 2, 5)
+	if !f.mayHave(1, 2, 5) {
 		t.Fatal("")
 	}
 	f.reset(0)
-	if f.mayHave(1, 2, 3) {
+	if f.mayHave(1, 2, 5) {
 		t.Fatal("")
 	}
 	s := f.String()
@@ -29,7 +29,7 @@ func TestValueKTBloomFilterBasic(t *testing.T) {
 }
 
 func TestValueKTBloomFilterLots(t *testing.T) {
-	f := newValueKTBloomFilter(100, 0.01, 0)
+	f := newValueKTBloomFilter(100, 0.001, 0)
 	for i := uint64(0); i < 100; i++ {
 		f.add(i, i, i)
 	}

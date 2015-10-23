@@ -8,15 +8,15 @@ import (
 
 func TestGroupKTBloomFilterBasic(t *testing.T) {
 	f := newGroupKTBloomFilter(10, 0.01, 0)
-	if f.mayHave(1, 2, 3) {
+	if f.mayHave(1, 2, 3, 4, 5) {
 		t.Fatal("")
 	}
-	f.add(1, 2, 3)
-	if !f.mayHave(1, 2, 3) {
+	f.add(1, 2, 3, 4, 5)
+	if !f.mayHave(1, 2, 3, 4, 5) {
 		t.Fatal("")
 	}
 	f.reset(0)
-	if f.mayHave(1, 2, 3) {
+	if f.mayHave(1, 2, 3, 4, 5) {
 		t.Fatal("")
 	}
 	s := f.String()
@@ -29,17 +29,17 @@ func TestGroupKTBloomFilterBasic(t *testing.T) {
 }
 
 func TestGroupKTBloomFilterLots(t *testing.T) {
-	f := newGroupKTBloomFilter(100, 0.01, 0)
+	f := newGroupKTBloomFilter(100, 0.001, 0)
 	for i := uint64(0); i < 100; i++ {
-		f.add(i, i, i)
+		f.add(i, i, i, i, i)
 	}
 	for i := uint64(0); i < 100; i++ {
-		if !f.mayHave(i, i, i) {
+		if !f.mayHave(i, i, i, i, i) {
 			t.Fatal(i)
 		}
 	}
 	for i := uint64(0); i < 100; i++ {
-		if f.mayHave(i, i, 101) {
+		if f.mayHave(i, i, i, i, 101) {
 			t.Fatal(i)
 		}
 	}
@@ -48,7 +48,7 @@ func TestGroupKTBloomFilterLots(t *testing.T) {
 func TestGroupKTBloomFilterPersistence(t *testing.T) {
 	f := newGroupKTBloomFilter(10, 0.01, 0)
 	for i := uint64(0); i < 100; i++ {
-		f.add(i, i, i)
+		f.add(i, i, i, i, i)
 	}
 	m := &groupPullReplicationMsg{
 		vs:     nil,
@@ -76,7 +76,7 @@ func TestGroupKTBloomFilterPersistence(t *testing.T) {
 		t.Fatal("")
 	}
 	for i := uint64(0); i < 100; i++ {
-		if !f2.mayHave(i, i, i) {
+		if !f2.mayHave(i, i, i, i, i) {
 			t.Fatal(i)
 		}
 	}

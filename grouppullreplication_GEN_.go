@@ -188,7 +188,7 @@ func (vs *DefaultGroupStore) inPullReplication() {
 		l := int64(vs.bulkSetState.msgCap)
 		callback := func(keyA uint64, keyB uint64, nameKeyA uint64, nameKeyB uint64, timestampbits uint64, length uint32) bool {
 			if timestampbits&_TSB_DELETION == 0 || timestampbits >= tombstoneCutoff {
-				if !ktbf.mayHave(keyA, keyB, timestampbits) {
+				if !ktbf.mayHave(keyA, keyB, nameKeyA, nameKeyB, timestampbits) {
 					k = append(k, keyA, keyB)
 					l -= _GROUP_BULK_SET_MSG_ENTRY_HEADER_LENGTH + int64(length)
 					if l <= 0 {
@@ -355,7 +355,7 @@ func (vs *DefaultGroupStore) outPullReplicationPass() {
 			rbThis := rb
 			ktbf.reset(vs.pullReplicationState.outIteration)
 			rb, more = vs.vlm.ScanCallback(rb, re, 0, _TSB_LOCAL_REMOVAL, cutoff, vs.pullReplicationState.bloomN, func(keyA uint64, keyB uint64, nameKeyA uint64, nameKeyB uint64, timestampbits uint64, length uint32) bool {
-				ktbf.add(keyA, keyB, timestampbits)
+				ktbf.add(keyA, keyB, nameKeyA, nameKeyB, timestampbits)
 				return true
 			})
 			if atomic.LoadUint32(&vs.pullReplicationState.outAbort) != 0 {
