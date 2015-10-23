@@ -157,8 +157,8 @@ type valueLocBlock interface {
 	close() error
 }
 
-// NewValueStore creates a DefaultValueStore for use in storing []byte values referenced
-// by 128 bit keys.
+// NewValueStore creates a DefaultValueStore for use in storing []byte values
+// referenced by 128 bit keys.
 //
 // Note that a lot of buffering, multiple cores, and background processes can
 // be in use and therefore DisableAll() and Flush() should be called prior to
@@ -259,8 +259,7 @@ func NewValueStore(c *ValueStoreConfig) (*DefaultValueStore, error) {
 	return vs, nil
 }
 
-// ValueCap returns the maximum length of a value the ValueStore can
-// accept.
+// ValueCap returns the maximum length of a value the ValueStore can accept.
 func (vs *DefaultValueStore) ValueCap() uint32 {
 	return vs.valueCap
 }
@@ -337,7 +336,8 @@ func (vs *DefaultValueStore) Flush() {
 //
 // Note that err == ErrNotFound with timestampmicro == 0 indicates keyA, keyB
 // was not known at all whereas err == ErrNotFound with timestampmicro != 0
-// indicates keyA, keyB was known and had a deletion marker (aka tombstone).
+// indicates keyA, keyB
+// was known and had a deletion marker (aka tombstone).
 func (vs *DefaultValueStore) Lookup(keyA uint64, keyB uint64) (int64, uint32, error) {
 	atomic.AddInt32(&vs.lookups, 1)
 	timestampbits, _, length, err := vs.lookup(keyA, keyB)
@@ -355,9 +355,9 @@ func (vs *DefaultValueStore) lookup(keyA uint64, keyB uint64) (uint64, uint32, u
 	return timestampbits, id, length, nil
 }
 
-// Read will return timestampmicro, value, err for keyA, keyB; if an incoming
-// value is provided, the read value will be appended to it and the whole
-// returned (useful to reuse an existing []byte).
+// Read will return timestampmicro, value, err for keyA, keyB;
+// if an incoming value is provided, the read value will be appended to it and
+// the whole returned (useful to reuse an existing []byte).
 //
 // Note that err == ErrNotFound with timestampmicro == 0 indicates keyA, keyB
 // was not known at all whereas err == ErrNotFound with timestampmicro != 0
@@ -379,10 +379,11 @@ func (vs *DefaultValueStore) read(keyA uint64, keyB uint64, value []byte) (uint6
 	return vs.locBlock(id).read(keyA, keyB, timestampbits, offset, length, value)
 }
 
-// Write stores timestampmicro, value for keyA, keyB and returns the previously
-// stored timestampmicro or returns any error; a newer timestampmicro already
-// in place is not reported as an error. Note that with a write and a delete
-// for the exact same timestampmicro, the delete wins.
+// Write stores timestampmicro, value for keyA, keyB
+// and returns the previously stored timestampmicro or returns any error; a
+// newer timestampmicro already in place is not reported as an error. Note that
+// with a write and a delete for the exact same timestampmicro, the delete
+// wins.
 func (vs *DefaultValueStore) Write(keyA uint64, keyB uint64, timestampmicro int64, value []byte) (int64, error) {
 	atomic.AddInt32(&vs.writes, 1)
 	if timestampmicro < TIMESTAMPMICRO_MIN {
@@ -420,10 +421,11 @@ func (vs *DefaultValueStore) write(keyA uint64, keyB uint64, timestampbits uint6
 	return ptimestampbits, err
 }
 
-// Delete stores timestampmicro for keyA, keyB and returns the previously
-// stored timestampmicro or returns any error; a newer timestampmicro already
-// in place is not reported as an error. Note that with a write and a delete
-// for the exact same timestampmicro, the delete wins.
+// Delete stores timestampmicro for keyA, keyB
+// and returns the previously stored timestampmicro or returns any error; a
+// newer timestampmicro already in place is not reported as an error. Note that
+// with a write and a delete for the exact same timestampmicro, the delete
+// wins.
 func (vs *DefaultValueStore) Delete(keyA uint64, keyB uint64, timestampmicro int64) (int64, error) {
 	atomic.AddInt32(&vs.deletes, 1)
 	if timestampmicro < TIMESTAMPMICRO_MIN {
@@ -434,7 +436,6 @@ func (vs *DefaultValueStore) Delete(keyA uint64, keyB uint64, timestampmicro int
 		atomic.AddInt32(&vs.deleteErrors, 1)
 		return 0, fmt.Errorf("timestamp %d > %d", timestampmicro, TIMESTAMPMICRO_MAX)
 	}
-	// TODO: Fix group part
 	ptimestampbits, err := vs.write(keyA, keyB, (uint64(timestampmicro)<<_TSB_UTIL_BITS)|_TSB_DELETION, nil, true)
 	if err != nil {
 		atomic.AddInt32(&vs.deleteErrors, 1)
@@ -494,10 +495,12 @@ func (vs *DefaultValueStore) memClearer(freeableVMChan chan *valueMem) {
 			vs.pendingTOCBlockChan <- tb
 			tb = nil
 		}
-		for vmTOCOffset := 0; vmTOCOffset < len(vm.toc); vmTOCOffset += 32 {
+		for vmTOCOffset := 0; vmTOCOffset < len(vm.toc); vmTOCOffset += _VALUE_FILE_ENTRY_SIZE {
+
 			keyA := binary.BigEndian.Uint64(vm.toc[vmTOCOffset:])
 			keyB := binary.BigEndian.Uint64(vm.toc[vmTOCOffset+8:])
 			timestampbits := binary.BigEndian.Uint64(vm.toc[vmTOCOffset+16:])
+
 			var blockID uint32
 			var offset uint32
 			var length uint32
@@ -506,11 +509,10 @@ func (vs *DefaultValueStore) memClearer(freeableVMChan chan *valueMem) {
 				offset = vm.vfOffset + binary.BigEndian.Uint32(vm.toc[vmTOCOffset+24:])
 				length = binary.BigEndian.Uint32(vm.toc[vmTOCOffset+28:])
 			}
-			// TODO: nameKey needs to go all throughout the code.
 			if vs.vlm.Set(keyA, keyB, timestampbits, blockID, offset, length, true) > timestampbits {
 				continue
 			}
-			if tb != nil && tbOffset+32 > cap(tb) {
+			if tb != nil && tbOffset+_VALUE_FILE_ENTRY_SIZE > cap(tb) {
 				vs.pendingTOCBlockChan <- tb
 				tb = nil
 			}
@@ -521,13 +523,13 @@ func (vs *DefaultValueStore) memClearer(freeableVMChan chan *valueMem) {
 				binary.BigEndian.PutUint64(tb, uint64(tbTS))
 				tbOffset = 8
 			}
-			tb = tb[:tbOffset+32]
+			tb = tb[:tbOffset+_VALUE_FILE_ENTRY_SIZE]
 			binary.BigEndian.PutUint64(tb[tbOffset:], keyA)
 			binary.BigEndian.PutUint64(tb[tbOffset+8:], keyB)
 			binary.BigEndian.PutUint64(tb[tbOffset+16:], timestampbits)
 			binary.BigEndian.PutUint32(tb[tbOffset+24:], offset)
 			binary.BigEndian.PutUint32(tb[tbOffset+28:], length)
-			tbOffset += 32
+			tbOffset += _VALUE_FILE_ENTRY_SIZE
 		}
 		vm.discardLock.Lock()
 		vm.vfID = 0
@@ -575,7 +577,7 @@ func (vs *DefaultValueStore) memWriter(pendingVWRChan chan *valueWriteReq) {
 		if alloc < vs.minValueAlloc {
 			alloc = vs.minValueAlloc
 		}
-		if vm != nil && (vmTOCOffset+32 > cap(vm.toc) || vmMemOffset+alloc > cap(vm.values)) {
+		if vm != nil && (vmTOCOffset+_VALUE_FILE_ENTRY_SIZE > cap(vm.toc) || vmMemOffset+alloc > cap(vm.values)) {
 			vs.vfVMChan <- vm
 			vm = nil
 		}
@@ -593,16 +595,17 @@ func (vs *DefaultValueStore) memWriter(pendingVWRChan chan *valueWriteReq) {
 				vm.values[i] = 0
 			}
 		}
-		// TODO: nameKey needs to go all throughout the code.
 		ptimestampbits := vs.vlm.Set(vwr.keyA, vwr.keyB, vwr.timestampbits, vm.id, uint32(vmMemOffset), uint32(length), false)
 		if ptimestampbits < vwr.timestampbits {
-			vm.toc = vm.toc[:vmTOCOffset+32]
+			vm.toc = vm.toc[:vmTOCOffset+_VALUE_FILE_ENTRY_SIZE]
+
 			binary.BigEndian.PutUint64(vm.toc[vmTOCOffset:], vwr.keyA)
 			binary.BigEndian.PutUint64(vm.toc[vmTOCOffset+8:], vwr.keyB)
 			binary.BigEndian.PutUint64(vm.toc[vmTOCOffset+16:], vwr.timestampbits)
 			binary.BigEndian.PutUint32(vm.toc[vmTOCOffset+24:], uint32(vmMemOffset))
 			binary.BigEndian.PutUint32(vm.toc[vmTOCOffset+28:], uint32(length))
-			vmTOCOffset += 32
+
+			vmTOCOffset += _VALUE_FILE_ENTRY_SIZE
 			vmMemOffset += alloc
 		} else {
 			vm.discardLock.Lock()
@@ -653,8 +656,8 @@ func (vs *DefaultValueStore) vfWriter() {
 				vs.logCritical("vfWriter: %s\n", err)
 				break
 			}
-			tocLen = 32
-			valueLen = 32
+			tocLen = _VALUE_FILE_HEADER_SIZE
+			valueLen = _VALUE_FILE_HEADER_SIZE
 		}
 		vf.write(vm)
 		tocLen += uint64(len(vm.toc))
@@ -663,9 +666,9 @@ func (vs *DefaultValueStore) vfWriter() {
 }
 
 func (vs *DefaultValueStore) tocWriter() {
-	// writerA is the current toc file while writerB is the previously active toc
-	// writerB is kept around in case a "late" key arrives to be flushed whom's value
-	// is actually in the previous values file.
+	// writerA is the current toc file while writerB is the previously active
+	// toc writerB is kept around in case a "late" key arrives to be flushed
+	// whom's value is actually in the previous value file.
 	memClearersFlushLeft := len(vs.freeableVMChans)
 	var writerA io.WriteCloser
 	var offsetA uint64
@@ -755,7 +758,7 @@ OuterLoop:
 				if _, err = writerA.Write(t[8:]); err != nil {
 					break OuterLoop
 				}
-				offsetA = 32 + uint64(len(t)-8)
+				offsetA = _VALUE_FILE_HEADER_SIZE + uint64(len(t)-8)
 			}
 		}
 		vs.freeTOCBlockChan <- t[:0]
@@ -776,8 +779,9 @@ func (vs *DefaultValueStore) recovery() error {
 	fromDiskCount := 0
 	causedChangeCount := int64(0)
 	type writeReq struct {
-		keyA          uint64
-		keyB          uint64
+		keyA uint64
+		keyB uint64
+
 		timestampbits uint64
 		blockID       uint32
 		offset        uint32
@@ -808,12 +812,10 @@ func (vs *DefaultValueStore) recovery() error {
 						wr.blockID = 0
 					}
 					if vs.logDebug != nil {
-						// TODO: nameKey needs to go all throughout the code.
 						if vs.vlm.Set(wr.keyA, wr.keyB, wr.timestampbits, wr.blockID, wr.offset, wr.length, true) < wr.timestampbits {
 							atomic.AddInt64(&causedChangeCount, 1)
 						}
 					} else {
-						// TODO: nameKey needs to go all throughout the code.
 						vs.vlm.Set(wr.keyA, wr.keyB, wr.timestampbits, wr.blockID, wr.offset, wr.length, true)
 					}
 				}
@@ -823,7 +825,7 @@ func (vs *DefaultValueStore) recovery() error {
 		}(pendingBatchChans[i], freeBatchChans[i])
 	}
 	fromDiskBuf := make([]byte, vs.checksumInterval+4)
-	fromDiskOverflow := make([]byte, 0, 32)
+	fromDiskOverflow := make([]byte, 0, _VALUE_FILE_ENTRY_SIZE)
 	batches := make([][]writeReq, len(freeBatchChans))
 	batchesPos := make([]int, len(batches))
 	fp, err := os.Open(vs.pathtoc)
@@ -877,19 +879,19 @@ func (vs *DefaultValueStore) recovery() error {
 			} else {
 				j := 0
 				if first {
-					if !bytes.Equal(fromDiskBuf[:28], []byte("VALUESTORETOC v0            ")) {
+					if !bytes.Equal(fromDiskBuf[:_VALUE_FILE_HEADER_SIZE-4], []byte("VALUESTORETOC v0            ")) {
 						vs.logError("bad header: %s\n", names[i])
 						break
 					}
-					if binary.BigEndian.Uint32(fromDiskBuf[28:]) != vs.checksumInterval {
+					if binary.BigEndian.Uint32(fromDiskBuf[_VALUE_FILE_HEADER_SIZE-4:]) != vs.checksumInterval {
 						vs.logError("bad header checksum interval: %s\n", names[i])
 						break
 					}
-					j += 32
+					j += _VALUE_FILE_HEADER_SIZE
 					first = false
 				}
 				if n < int(vs.checksumInterval) {
-					if binary.BigEndian.Uint32(fromDiskBuf[n-16:]) != 0 {
+					if binary.BigEndian.Uint32(fromDiskBuf[n-_VALUE_FILE_TRAILER_SIZE:]) != 0 {
 						vs.logError("bad terminator size marker: %s\n", names[i])
 						break
 					}
@@ -897,12 +899,12 @@ func (vs *DefaultValueStore) recovery() error {
 						vs.logError("bad terminator: %s\n", names[i])
 						break
 					}
-					n -= 16
+					n -= _VALUE_FILE_TRAILER_SIZE
 					terminated = true
 				}
 				if len(fromDiskOverflow) > 0 {
-					j += 32 - len(fromDiskOverflow)
-					fromDiskOverflow = append(fromDiskOverflow, fromDiskBuf[j-32+len(fromDiskOverflow):j]...)
+					j += _VALUE_FILE_ENTRY_SIZE - len(fromDiskOverflow)
+					fromDiskOverflow = append(fromDiskOverflow, fromDiskBuf[j-_VALUE_FILE_ENTRY_SIZE+len(fromDiskOverflow):j]...)
 					keyB := binary.BigEndian.Uint64(fromDiskOverflow[8:])
 					k := keyB % workers
 					if batches[k] == nil {
@@ -910,12 +912,14 @@ func (vs *DefaultValueStore) recovery() error {
 						batchesPos[k] = 0
 					}
 					wr := &batches[k][batchesPos[k]]
+
 					wr.keyA = binary.BigEndian.Uint64(fromDiskOverflow)
 					wr.keyB = keyB
 					wr.timestampbits = binary.BigEndian.Uint64(fromDiskOverflow[16:])
 					wr.blockID = vf.id
 					wr.offset = binary.BigEndian.Uint32(fromDiskOverflow[24:])
 					wr.length = binary.BigEndian.Uint32(fromDiskOverflow[28:])
+
 					batchesPos[k]++
 					if batchesPos[k] >= vs.recoveryBatchSize {
 						pendingBatchChans[k] <- batches[k]
@@ -924,7 +928,7 @@ func (vs *DefaultValueStore) recovery() error {
 					fromDiskCount++
 					fromDiskOverflow = fromDiskOverflow[:0]
 				}
-				for ; j+32 <= n; j += 32 {
+				for ; j+_VALUE_FILE_ENTRY_SIZE <= n; j += _VALUE_FILE_ENTRY_SIZE {
 					keyB := binary.BigEndian.Uint64(fromDiskBuf[j+8:])
 					k := keyB % workers
 					if batches[k] == nil {
@@ -932,12 +936,14 @@ func (vs *DefaultValueStore) recovery() error {
 						batchesPos[k] = 0
 					}
 					wr := &batches[k][batchesPos[k]]
+
 					wr.keyA = binary.BigEndian.Uint64(fromDiskBuf[j:])
 					wr.keyB = keyB
 					wr.timestampbits = binary.BigEndian.Uint64(fromDiskBuf[j+16:])
 					wr.blockID = vf.id
 					wr.offset = binary.BigEndian.Uint32(fromDiskBuf[j+24:])
 					wr.length = binary.BigEndian.Uint32(fromDiskBuf[j+28:])
+
 					batchesPos[k]++
 					if batchesPos[k] >= vs.recoveryBatchSize {
 						pendingBatchChans[k] <- batches[k]
