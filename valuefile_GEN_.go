@@ -13,7 +13,8 @@ import (
 	"gopkg.in/gholt/brimutil.v1"
 )
 
-// "VALUESTORE v0               ":28, checksumInterval:4
+//    "VALUESTORETOC v0            ":28, checksumInterval:4
+// or "VALUESTORE v0               ":28, checksumInterval:4
 const _VALUE_FILE_HEADER_SIZE = 32
 
 // keyA:8, keyB:8, timestamp:8, offset:4, length:4

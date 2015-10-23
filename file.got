@@ -13,7 +13,8 @@ import (
     "gopkg.in/gholt/brimutil.v1"
 )
 
-// "{{.TT}}STORE v0               ":28, checksumInterval:4
+//    "{{.TT}}STORETOC v0            ":28, checksumInterval:4
+// or "{{.TT}}STORE v0               ":28, checksumInterval:4
 const _{{.TT}}_FILE_HEADER_SIZE = 32
 {{if eq .t "value"}}
 // keyA:8, keyB:8, timestamp:8, offset:4, length:4

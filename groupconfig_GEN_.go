@@ -13,10 +13,13 @@ import (
 	"github.com/gholt/valuelocmap"
 )
 
-// GroupStoreConfig represents the set of values for configuring a GroupStore.
-// Note that changing the values (shallow changes) in this structure will have
-// no effect on existing GroupStores; but deep changes (such as reconfiguring
-// an existing Logger) will.
+// Absolute minimum: timestampnano:8 leader plus at least one TOC entry
+const _GROUP_PAGE_SIZE_MIN = 8 + _GROUP_FILE_ENTRY_SIZE
+
+// GroupStoreConfig represents the set of values for configuring a
+// GroupStore. Note that changing the values (shallow changes) in this
+// structure will have no effect on existing GroupStores; but deep changes
+// (such as reconfiguring an existing Logger) will.
 type GroupStoreConfig struct {
 	// LogCritical sets the func to use for critical messages. Defaults logging
 	// to os.Stderr.
@@ -36,15 +39,15 @@ type GroupStoreConfig struct {
 	// Rand sets the rand.Rand to use as a random data source. Defaults to a
 	// new randomizer based on the current time.
 	Rand *rand.Rand
-	// Path sets the path where values files will be written; tocvalues files
+	// Path sets the path where group files will be written; grouptoc files
 	// will also be written here unless overridden with PathTOC. Defaults to
 	// the current working directory.
 	Path string
-	// PathTOC sets the path where tocvalues files will be written. Defaults to
+	// PathTOC sets the path where grouptoc files will be written. Defaults to
 	// the Path value.
 	PathTOC string
 	// ValueCap indicates the maximum number of bytes any given value may be.
-	// Defaults to 4,194,304 bytes.
+	// Defaults to 1,048,576 bytes.
 	ValueCap int
 	// BackgroundInterval indicates the minimum number of seconds between the
 	// starts of background passes (such as discarding expired tombstones
@@ -71,9 +74,10 @@ type GroupStoreConfig struct {
 	// WritePagesPerWorker controls how many pages are created per worker for
 	// caching recently written values. Defaults to 3.
 	WritePagesPerWorker int
-	// GroupLocMap allows overriding the default GroupLocMap, an interface used
-	// by GroupStore for tracking the mappings from keys to the locations of
-	// their values. Defaults to github.com/gholt/valuelocmap.NewGroupLocMap().
+	// GroupLocMap allows overriding the default GroupLocMap, an interface
+	// used by GroupStore for tracking the mappings from keys to the locations
+	// of their values. Defaults to
+	// github.com/gholt/valuelocmap.NewGroupLocMap().
 	GroupLocMap valuelocmap.GroupLocMap
 	// MsgRing sets the ring.MsgRing to use for determining the key ranges the
 	// GroupStore is responsible for as well as providing methods to send
@@ -263,13 +267,13 @@ func resolveGroupStoreConfig(c *GroupStoreConfig) *GroupStoreConfig {
 		}
 	}
 	if cfg.ValueCap == 0 {
-		cfg.ValueCap = 4 * 1024 * 1024
+		cfg.ValueCap = 1048576
 	}
 	if cfg.ValueCap < 0 {
 		cfg.ValueCap = 0
 	}
-	if cfg.ValueCap > math.MaxUint32 {
-		cfg.ValueCap = math.MaxUint32
+	if cfg.ValueCap > 1048576 {
+		cfg.ValueCap = 1048576
 	}
 	if env := os.Getenv("GROUPSTORE_BACKGROUND_INTERVAL"); env != "" {
 		if val, err := strconv.Atoi(env); err == nil {
@@ -318,9 +322,8 @@ func resolveGroupStoreConfig(c *GroupStoreConfig) *GroupStoreConfig {
 		cfg.PageSize = cfg.ValueCap + cfg.ChecksumInterval
 	}
 	// Absolute minimum: timestampnano leader plus at least one TOC entry
-	// TODO: Make this 40 a const
-	if cfg.PageSize < 40 {
-		cfg.PageSize = 40
+	if cfg.PageSize < _GROUP_PAGE_SIZE_MIN {
+		cfg.PageSize = _GROUP_PAGE_SIZE_MIN
 	}
 	// The max is MaxUint32-1 because we use MaxUint32 to indicate push
 	// replication local removal.
@@ -330,8 +333,7 @@ func resolveGroupStoreConfig(c *GroupStoreConfig) *GroupStoreConfig {
 	// Ensure a full TOC page will have an associated data page of at least
 	// checksumInterval in size, again so that each page written will at least
 	// flush the previous page's data.
-	// TODO: Make the 32 a const
-	cfg.minValueAlloc = cfg.ChecksumInterval/(cfg.PageSize/32+1) + 1
+	cfg.minValueAlloc = cfg.ChecksumInterval/(cfg.PageSize/_GROUP_FILE_ENTRY_SIZE+1) + 1
 	if env := os.Getenv("GROUPSTORE_WRITE_PAGES_PER_WORKER"); env != "" {
 		if val, err := strconv.Atoi(env); err == nil {
 			cfg.WritePagesPerWorker = val
@@ -351,7 +353,8 @@ func resolveGroupStoreConfig(c *GroupStoreConfig) *GroupStoreConfig {
 	if cfg.MsgCap == 0 {
 		cfg.MsgCap = 16 * 1024 * 1024
 	}
-	// TODO: This minimum needs to be the max overhead.
+	// NOTE: This minimum needs to be the largest minimum size of all the
+	// message types; 1024 "should" be enough.
 	if cfg.MsgCap < 1024 {
 		cfg.MsgCap = 1024
 	}
@@ -374,9 +377,8 @@ func resolveGroupStoreConfig(c *GroupStoreConfig) *GroupStoreConfig {
 	if cfg.FileCap == 0 {
 		cfg.FileCap = math.MaxUint32
 	}
-	// TODO: Make the 40 and 8 consts
-	if cfg.FileCap < 48+cfg.ValueCap { // header value trailer
-		cfg.FileCap = 48 + cfg.ValueCap
+	if cfg.FileCap < _GROUP_FILE_HEADER_SIZE+_GROUP_FILE_TRAILER_SIZE+cfg.ValueCap { // header value trailer
+		cfg.FileCap = _GROUP_FILE_HEADER_SIZE + _GROUP_FILE_TRAILER_SIZE + cfg.ValueCap
 	}
 	if cfg.FileCap > math.MaxUint32 {
 		cfg.FileCap = math.MaxUint32
