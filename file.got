@@ -13,6 +13,18 @@ import (
     "gopkg.in/gholt/brimutil.v1"
 )
 
+// "{{.TT}}STORE v0               ":28, checksumInterval:4
+const _{{.TT}}_FILE_HEADER_SIZE = 32
+{{if eq .t "value"}}
+// keyA:8, keyB:8, timestamp:8, offset:4, length:4
+const _{{.TT}}_FILE_ENTRY_SIZE = 32
+{{else}}
+// keyA:8, keyB:8, nameKeyA:8, nameKeyB:8, timestamp:8, offset:4, length:4
+const _{{.TT}}_FILE_ENTRY_SIZE = 48
+{{end}}
+// 0:4, offsetWhereTrailerOccurs:4, "TERM":4
+const _{{.TT}}_FILE_TRAILER_SIZE = 16
+
 type {{.t}}File struct {
     vs                  *Default{{.T}}Store
     name                string
@@ -77,7 +89,7 @@ func create{{.T}}File(vs *Default{{.T}}Store, createWriteCloser func(name string
     vf.writeChan = make(chan *{{.t}}FileWriteBuf, vs.workers)
     vf.doneChan = make(chan struct{})
     vf.buf = <-vf.freeChan
-    head := []byte("VALUESTORE v0                   ")
+    head := []byte("{{.TT}}STORE v0                   ")
     binary.BigEndian.PutUint32(head[28:], vs.checksumInterval)
     vf.buf.offset = uint32(copy(vf.buf.buf, head))
     atomic.StoreUint32(&vf.atOffset, vf.buf.offset)

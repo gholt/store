@@ -13,6 +13,15 @@ import (
 	"gopkg.in/gholt/brimutil.v1"
 )
 
+// "VALUESTORE v0               ":28, checksumInterval:4
+const _VALUE_FILE_HEADER_SIZE = 32
+
+// keyA:8, keyB:8, timestamp:8, offset:4, length:4
+const _VALUE_FILE_ENTRY_SIZE = 32
+
+// 0:4, offsetWhereTrailerOccurs:4, "TERM":4
+const _VALUE_FILE_TRAILER_SIZE = 16
+
 type valueFile struct {
 	vs                  *DefaultValueStore
 	name                string

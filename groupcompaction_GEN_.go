@@ -270,7 +270,7 @@ func (vs *DefaultGroupStore) sampleTOC(name string, candidateBlockID uint32, ski
 	count := 0
 	stale := 0
 	fromDiskBuf := make([]byte, vs.checksumInterval+4)
-	fromDiskOverflow := make([]byte, 0, 32)
+	fromDiskOverflow := make([]byte, 0, _GROUP_FILE_ENTRY_SIZE)
 	fp, err := os.Open(name)
 	if err != nil {
 		vs.logError("error opening %s: %s\n", name, err)
@@ -295,19 +295,19 @@ func (vs *DefaultGroupStore) sampleTOC(name string, candidateBlockID uint32, ski
 		} else {
 			j := 0
 			if first {
-				if !bytes.Equal(fromDiskBuf[:28], []byte("VALUESTORETOC v0            ")) {
+				if !bytes.Equal(fromDiskBuf[:_GROUP_FILE_HEADER_SIZE-4], []byte("GROUPSTORETOC v0            ")) {
 					vs.logError("bad header: %s\n", name)
 					break
 				}
-				if binary.BigEndian.Uint32(fromDiskBuf[28:]) != vs.checksumInterval {
+				if binary.BigEndian.Uint32(fromDiskBuf[_GROUP_FILE_HEADER_SIZE-4:]) != vs.checksumInterval {
 					vs.logError("bad header checksum interval: %s\n", name)
 					break
 				}
-				j += 32
+				j += _GROUP_FILE_HEADER_SIZE
 				first = false
 			}
 			if n < int(vs.checksumInterval) {
-				if binary.BigEndian.Uint32(fromDiskBuf[n-16:]) != 0 {
+				if binary.BigEndian.Uint32(fromDiskBuf[n-_GROUP_FILE_TRAILER_SIZE:]) != 0 {
 					vs.logError("bad terminator size marker: %s\n", name)
 					break
 				}
@@ -315,19 +315,23 @@ func (vs *DefaultGroupStore) sampleTOC(name string, candidateBlockID uint32, ski
 					vs.logError("bad terminator: %s\n", name)
 					break
 				}
-				n -= 16
+				n -= _GROUP_FILE_TRAILER_SIZE
 				terminated = true
 			}
 			if len(fromDiskOverflow) > 0 {
-				j += 32 - len(fromDiskOverflow)
-				fromDiskOverflow = append(fromDiskOverflow, fromDiskBuf[j-32+len(fromDiskOverflow):j]...)
-				keyB := binary.BigEndian.Uint64(fromDiskOverflow[8:])
+				j += _GROUP_FILE_ENTRY_SIZE - len(fromDiskOverflow)
+				fromDiskOverflow = append(fromDiskOverflow, fromDiskBuf[j-_GROUP_FILE_ENTRY_SIZE+len(fromDiskOverflow):j]...)
+
 				keyA := binary.BigEndian.Uint64(fromDiskOverflow)
-				timestampbits := binary.BigEndian.Uint64(fromDiskOverflow[16:])
+				keyB := binary.BigEndian.Uint64(fromDiskOverflow[8:])
+				nameKeyA := binary.BigEndian.Uint64(fromDiskOverflow[16:])
+				nameKeyB := binary.BigEndian.Uint64(fromDiskOverflow[24:])
+				timestampbits := binary.BigEndian.Uint64(fromDiskOverflow[32:])
+
 				fromDiskOverflow = fromDiskOverflow[:0]
 				count++
 				if skipCounter == skipCount {
-					tsm, blockid, _, _ := vs.lookup(keyA, keyB)
+					tsm, blockid, _, _ := vs.lookup(keyA, keyB, nameKeyA, nameKeyB)
 					if tsm>>_TSB_UTIL_BITS != timestampbits>>_TSB_UTIL_BITS && blockid != candidateBlockID || tsm&_TSB_DELETION != 0 {
 						stale++
 					}
@@ -337,11 +341,15 @@ func (vs *DefaultGroupStore) sampleTOC(name string, candidateBlockID uint32, ski
 				}
 
 			}
-			for ; j+32 <= n; j += 32 {
-				keyB := binary.BigEndian.Uint64(fromDiskBuf[j+8:])
+			for ; j+_GROUP_FILE_ENTRY_SIZE <= n; j += _GROUP_FILE_ENTRY_SIZE {
+
 				keyA := binary.BigEndian.Uint64(fromDiskBuf[j:])
-				timestampbits := binary.BigEndian.Uint64(fromDiskBuf[j+16:])
-				tsm, blockid, _, _ := vs.lookup(keyA, keyB)
+				keyB := binary.BigEndian.Uint64(fromDiskBuf[j+8:])
+				nameKeyA := binary.BigEndian.Uint64(fromDiskBuf[j+16:])
+				nameKeyB := binary.BigEndian.Uint64(fromDiskBuf[j+24:])
+				timestampbits := binary.BigEndian.Uint64(fromDiskBuf[j+32:])
+
+				tsm, blockid, _, _ := vs.lookup(keyA, keyB, nameKeyA, nameKeyB)
 				count++
 				if skipCounter == skipCount {
 					if tsm>>_TSB_UTIL_BITS != timestampbits>>_TSB_UTIL_BITS && blockid != candidateBlockID || tsm&_TSB_DELETION != 0 {
@@ -383,7 +391,7 @@ type groupCompactionResult struct {
 func (vs *DefaultGroupStore) compactFile(name string, candidateBlockID uint32) (groupCompactionResult, error) {
 	var cr groupCompactionResult
 	fromDiskBuf := make([]byte, vs.checksumInterval+4)
-	fromDiskOverflow := make([]byte, 0, 32)
+	fromDiskOverflow := make([]byte, 0, _GROUP_FILE_ENTRY_SIZE)
 	fp, err := os.Open(name)
 	if err != nil {
 		return cr, fmt.Errorf("error opening %s: %s", name, err)
@@ -406,19 +414,19 @@ func (vs *DefaultGroupStore) compactFile(name string, candidateBlockID uint32) (
 		} else {
 			j := 0
 			if first {
-				if !bytes.Equal(fromDiskBuf[:28], []byte("VALUESTORETOC v0            ")) {
+				if !bytes.Equal(fromDiskBuf[:_GROUP_FILE_HEADER_SIZE-4], []byte("GROUPSTORETOC v0            ")) {
 					fp.Close()
 					return cr, fmt.Errorf("bad header %s: %s", name, err)
 				}
-				if binary.BigEndian.Uint32(fromDiskBuf[28:]) != vs.checksumInterval {
+				if binary.BigEndian.Uint32(fromDiskBuf[_GROUP_FILE_HEADER_SIZE-4:]) != vs.checksumInterval {
 					fp.Close()
 					return cr, fmt.Errorf("bad header checksum interval %s: %s", name, err)
 				}
-				j += 32
+				j += _GROUP_FILE_HEADER_SIZE
 				first = false
 			}
 			if n < int(vs.checksumInterval) {
-				if binary.BigEndian.Uint32(fromDiskBuf[n-16:]) != 0 {
+				if binary.BigEndian.Uint32(fromDiskBuf[n-_GROUP_FILE_TRAILER_SIZE:]) != 0 {
 					fp.Close()
 					return cr, fmt.Errorf("bad terminator size %s: %s", name, err)
 				}
@@ -426,30 +434,32 @@ func (vs *DefaultGroupStore) compactFile(name string, candidateBlockID uint32) (
 					fp.Close()
 					return cr, fmt.Errorf("bad terminator marker %s: %s", name, err)
 				}
-				n -= 16
+				n -= _GROUP_FILE_TRAILER_SIZE
 				terminated = true
 			}
 			if len(fromDiskOverflow) > 0 {
-				j += 32 - len(fromDiskOverflow)
-				fromDiskOverflow = append(fromDiskOverflow, fromDiskBuf[j-32+len(fromDiskOverflow):j]...)
-				keyB := binary.BigEndian.Uint64(fromDiskOverflow[8:])
+				j += _GROUP_FILE_ENTRY_SIZE - len(fromDiskOverflow)
+				fromDiskOverflow = append(fromDiskOverflow, fromDiskBuf[j-_GROUP_FILE_ENTRY_SIZE+len(fromDiskOverflow):j]...)
+
 				keyA := binary.BigEndian.Uint64(fromDiskOverflow)
-				timestampbits := binary.BigEndian.Uint64(fromDiskOverflow[16:])
+				keyB := binary.BigEndian.Uint64(fromDiskOverflow[8:])
+				nameKeyA := binary.BigEndian.Uint64(fromDiskOverflow[16:])
+				nameKeyB := binary.BigEndian.Uint64(fromDiskOverflow[24:])
+				timestampbits := binary.BigEndian.Uint64(fromDiskOverflow[32:])
+
 				fromDiskOverflow = fromDiskOverflow[:0]
-				tsm, blockid, _, _ := vs.lookup(keyA, keyB)
+				tsm, blockid, _, _ := vs.lookup(keyA, keyB, nameKeyA, nameKeyB)
 				if tsm>>_TSB_UTIL_BITS != timestampbits>>_TSB_UTIL_BITS && blockid != candidateBlockID || tsm&_TSB_DELETION != 0 {
 					cr.count++
 					cr.stale++
 				} else {
 					var value []byte
-					// TODO: nameKey needs to go all throughout the code.
-					_, value, err := vs.read(keyA, keyB, 0, 0, value)
+					_, value, err := vs.read(keyA, keyB, nameKeyA, nameKeyB, value)
 					if err != nil {
 						fp.Close()
 						return cr, fmt.Errorf("error on read for compaction rewrite: %s", err)
 					}
-					// TODO: Fix the group part
-					_, err = vs.write(keyA, keyB, 0, 0, timestampbits|_TSB_COMPACTION_REWRITE, value, true)
+					_, err = vs.write(keyA, keyB, nameKeyA, nameKeyB, timestampbits|_TSB_COMPACTION_REWRITE, value, true)
 					if err != nil {
 						fp.Close()
 						return cr, fmt.Errorf("error on write for compaction rewrite: %s", err)
@@ -458,24 +468,26 @@ func (vs *DefaultGroupStore) compactFile(name string, candidateBlockID uint32) (
 					cr.rewrote++
 				}
 			}
-			for ; j+32 <= n; j += 32 {
-				keyB := binary.BigEndian.Uint64(fromDiskBuf[j+8:])
+			for ; j+_GROUP_FILE_ENTRY_SIZE <= n; j += _GROUP_FILE_ENTRY_SIZE {
+
 				keyA := binary.BigEndian.Uint64(fromDiskBuf[j:])
-				timestampbits := binary.BigEndian.Uint64(fromDiskBuf[j+16:])
-				tsm, blockid, _, _ := vs.lookup(keyA, keyB)
+				keyB := binary.BigEndian.Uint64(fromDiskBuf[j+8:])
+				nameKeyA := binary.BigEndian.Uint64(fromDiskBuf[j+16:])
+				nameKeyB := binary.BigEndian.Uint64(fromDiskBuf[j+24:])
+				timestampbits := binary.BigEndian.Uint64(fromDiskBuf[j+32:])
+
+				tsm, blockid, _, _ := vs.lookup(keyA, keyB, nameKeyA, nameKeyB)
 				if tsm>>_TSB_UTIL_BITS != timestampbits>>_TSB_UTIL_BITS && blockid != candidateBlockID || tsm&_TSB_DELETION != 0 {
 					cr.count++
 					cr.stale++
 				} else {
 					var value []byte
-					// TODO: nameKey needs to go all throughout the code.
-					_, value, err := vs.read(keyA, keyB, 0, 0, value)
+					_, value, err := vs.read(keyA, keyB, nameKeyA, nameKeyB, value)
 					if err != nil {
 						fp.Close()
 						return cr, fmt.Errorf("error on read for compaction rewrite: %s", err)
 					}
-					// TODO: Fix group part
-					_, err = vs.write(keyA, keyB, 0, 0, timestampbits|_TSB_COMPACTION_REWRITE, value, true)
+					_, err = vs.write(keyA, keyB, nameKeyA, nameKeyB, timestampbits|_TSB_COMPACTION_REWRITE, value, true)
 					if err != nil {
 						fp.Close()
 						return cr, fmt.Errorf("error on write for compaction rewrite: %s", err)

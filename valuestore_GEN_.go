@@ -348,7 +348,6 @@ func (vs *DefaultValueStore) Lookup(keyA uint64, keyB uint64) (int64, uint32, er
 }
 
 func (vs *DefaultValueStore) lookup(keyA uint64, keyB uint64) (uint64, uint32, uint32, error) {
-	// TODO: nameKey needs to go all throughout the code.
 	timestampbits, id, _, length := vs.vlm.Get(keyA, keyB)
 	if id == 0 || timestampbits&_TSB_DELETION != 0 {
 		return timestampbits, id, 0, ErrNotFound

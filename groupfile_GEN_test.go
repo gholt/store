@@ -120,7 +120,7 @@ func TestGroupValuesFileWritingEmpty(t *testing.T) {
 	if bl != 52 {
 		t.Fatal(bl)
 	}
-	if string(buf.buf[:28]) != "VALUESTORE v0               " {
+	if string(buf.buf[:28]) != "GROUPSTORE v0               " {
 		t.Fatal(string(buf.buf[:28]))
 	}
 	if binary.BigEndian.Uint32(buf.buf[28:]) != vs.checksumInterval {
@@ -135,7 +135,7 @@ func TestGroupValuesFileWritingEmpty(t *testing.T) {
 	if string(buf.buf[bl-8:bl-4]) != "TERM" {
 		t.Fatal(string(buf.buf[bl-8 : bl-4]))
 	}
-	if binary.BigEndian.Uint32(buf.buf[bl-4:]) != 0xcd80c728 { // checksum
+	if binary.BigEndian.Uint32(buf.buf[bl-4:]) != 0xc4f7a369 { // checksum
 		t.Fatal(binary.BigEndian.Uint32(buf.buf[bl-4:]))
 	}
 }
@@ -174,7 +174,7 @@ func TestGroupValuesFileWritingEmpty2(t *testing.T) {
 	if bl != 52 {
 		t.Fatal(bl)
 	}
-	if string(buf.buf[:28]) != "VALUESTORE v0               " {
+	if string(buf.buf[:28]) != "GROUPSTORE v0               " {
 		t.Fatal(string(buf.buf[:28]))
 	}
 	if binary.BigEndian.Uint32(buf.buf[28:]) != vs.checksumInterval {
@@ -189,7 +189,7 @@ func TestGroupValuesFileWritingEmpty2(t *testing.T) {
 	if string(buf.buf[bl-8:bl-4]) != "TERM" {
 		t.Fatal(string(buf.buf[bl-8 : bl-4]))
 	}
-	if binary.BigEndian.Uint32(buf.buf[bl-4:]) != 0xcd80c728 { // checksum
+	if binary.BigEndian.Uint32(buf.buf[bl-4:]) != 0xc4f7a369 { // checksum
 		t.Fatal(binary.BigEndian.Uint32(buf.buf[bl-4:]))
 	}
 }
@@ -224,7 +224,7 @@ func TestGroupValuesFileWriting(t *testing.T) {
 	if bl != 1234+52 {
 		t.Fatal(bl)
 	}
-	if string(buf.buf[:28]) != "VALUESTORE v0               " {
+	if string(buf.buf[:28]) != "GROUPSTORE v0               " {
 		t.Fatal(string(buf.buf[:28]))
 	}
 	if binary.BigEndian.Uint32(buf.buf[28:]) != vs.checksumInterval {
@@ -242,7 +242,7 @@ func TestGroupValuesFileWriting(t *testing.T) {
 	if string(buf.buf[bl-8:bl-4]) != "TERM" {
 		t.Fatal(string(buf.buf[bl-8 : bl-4]))
 	}
-	if binary.BigEndian.Uint32(buf.buf[bl-4:]) != 0x941edfb6 { // checksum
+	if binary.BigEndian.Uint32(buf.buf[bl-4:]) != 0x584933ba { // checksum
 		t.Fatal(binary.BigEndian.Uint32(buf.buf[bl-4:]))
 	}
 }
@@ -277,7 +277,7 @@ func TestGroupValuesFileWritingMore(t *testing.T) {
 	if bl != 123456+int(123512/vs.checksumInterval*4)+52 {
 		t.Fatal(bl)
 	}
-	if string(buf.buf[:28]) != "VALUESTORE v0               " {
+	if string(buf.buf[:28]) != "GROUPSTORE v0               " {
 		t.Fatal(string(buf.buf[:28]))
 	}
 	if binary.BigEndian.Uint32(buf.buf[28:]) != vs.checksumInterval {
@@ -339,7 +339,7 @@ func TestGroupValuesFileWritingMultiple(t *testing.T) {
 	if bl != 12345+54321+int(123512/vs.checksumInterval*4)+52 {
 		t.Fatal(bl)
 	}
-	if string(buf.buf[:28]) != "VALUESTORE v0               " {
+	if string(buf.buf[:28]) != "GROUPSTORE v0               " {
 		t.Fatal(string(buf.buf[:28]))
 	}
 	if binary.BigEndian.Uint32(buf.buf[28:]) != vs.checksumInterval {

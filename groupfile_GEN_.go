@@ -13,6 +13,15 @@ import (
 	"gopkg.in/gholt/brimutil.v1"
 )
 
+// "GROUPSTORE v0               ":28, checksumInterval:4
+const _GROUP_FILE_HEADER_SIZE = 32
+
+// keyA:8, keyB:8, nameKeyA:8, nameKeyB:8, timestamp:8, offset:4, length:4
+const _GROUP_FILE_ENTRY_SIZE = 48
+
+// 0:4, offsetWhereTrailerOccurs:4, "TERM":4
+const _GROUP_FILE_TRAILER_SIZE = 16
+
 type groupFile struct {
 	vs                  *DefaultGroupStore
 	name                string
@@ -77,7 +86,7 @@ func createGroupFile(vs *DefaultGroupStore, createWriteCloser func(name string) 
 	vf.writeChan = make(chan *groupFileWriteBuf, vs.workers)
 	vf.doneChan = make(chan struct{})
 	vf.buf = <-vf.freeChan
-	head := []byte("VALUESTORE v0                   ")
+	head := []byte("GROUPSTORE v0                   ")
 	binary.BigEndian.PutUint32(head[28:], vs.checksumInterval)
 	vf.buf.offset = uint32(copy(vf.buf.buf, head))
 	atomic.StoreUint32(&vf.atOffset, vf.buf.offset)

@@ -28,7 +28,7 @@ import (
 //
 // For documentation on each of these functions, see the DefaultGroupStore.
 type GroupStore interface {
-	Lookup(keyA uint64, keyB uint64) (int64, uint32, error)
+	Lookup(keyA uint64, keyB uint64, nameKeyA uint64, nameKeyB uint64) (int64, uint32, error)
 	Read(keyA uint64, keyB uint64, nameKeyA uint64, nameKeyB uint64, value []byte) (int64, []byte, error)
 	Write(keyA uint64, keyB uint64, nameKeyA uint64, nameKeyB uint64, timestamp int64, value []byte) (int64, error)
 	Delete(keyA uint64, keyB uint64, timestamp int64) (int64, error)
@@ -341,18 +341,17 @@ func (vs *DefaultGroupStore) Flush() {
 // Note that err == ErrNotFound with timestampmicro == 0 indicates keyA, keyB
 // was not known at all whereas err == ErrNotFound with timestampmicro != 0
 // indicates keyA, keyB was known and had a deletion marker (aka tombstone).
-func (vs *DefaultGroupStore) Lookup(keyA uint64, keyB uint64) (int64, uint32, error) {
+func (vs *DefaultGroupStore) Lookup(keyA uint64, keyB uint64, nameKeyA uint64, nameKeyB uint64) (int64, uint32, error) {
 	atomic.AddInt32(&vs.lookups, 1)
-	timestampbits, _, length, err := vs.lookup(keyA, keyB)
+	timestampbits, _, length, err := vs.lookup(keyA, keyB, nameKeyA, nameKeyB)
 	if err != nil {
 		atomic.AddInt32(&vs.lookupErrors, 1)
 	}
 	return int64(timestampbits >> _TSB_UTIL_BITS), length, err
 }
 
-func (vs *DefaultGroupStore) lookup(keyA uint64, keyB uint64) (uint64, uint32, uint32, error) {
-	// TODO: nameKey needs to go all throughout the code.
-	timestampbits, id, _, length := vs.vlm.Get(keyA, keyB, 0, 0)
+func (vs *DefaultGroupStore) lookup(keyA uint64, keyB uint64, nameKeyA uint64, nameKeyB uint64) (uint64, uint32, uint32, error) {
+	timestampbits, id, _, length := vs.vlm.Get(keyA, keyB, nameKeyA, nameKeyB)
 	if id == 0 || timestampbits&_TSB_DELETION != 0 {
 		return timestampbits, id, 0, ErrNotFound
 	}

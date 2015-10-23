@@ -28,7 +28,7 @@ import (
 //
 // For documentation on each of these functions, see the Default{{.T}}Store.
 type {{.T}}Store interface {
-    Lookup(keyA uint64, keyB uint64) (int64, uint32, error)
+    Lookup(keyA uint64, keyB uint64{{if eq .t "group"}}, nameKeyA uint64, nameKeyB uint64{{end}}) (int64, uint32, error)
     Read(keyA uint64, keyB uint64{{if eq .t "group"}}, nameKeyA uint64, nameKeyB uint64{{end}}, value []byte) (int64, []byte, error)
     Write(keyA uint64, keyB uint64{{if eq .t "group"}}, nameKeyA uint64, nameKeyB uint64{{end}}, timestamp int64, value []byte) (int64, error)
     Delete(keyA uint64, keyB uint64, timestamp int64) (int64, error)
@@ -341,18 +341,17 @@ func (vs *Default{{.T}}Store) Flush() {
 // Note that err == ErrNotFound with timestampmicro == 0 indicates keyA, keyB
 // was not known at all whereas err == ErrNotFound with timestampmicro != 0
 // indicates keyA, keyB was known and had a deletion marker (aka tombstone).
-func (vs *Default{{.T}}Store) Lookup(keyA uint64, keyB uint64) (int64, uint32, error) {
+func (vs *Default{{.T}}Store) Lookup(keyA uint64, keyB uint64{{if eq .t "group"}}, nameKeyA uint64, nameKeyB uint64{{end}}) (int64, uint32, error) {
     atomic.AddInt32(&vs.lookups, 1)
-    timestampbits, _, length, err := vs.lookup(keyA, keyB)
+    timestampbits, _, length, err := vs.lookup(keyA, keyB{{if eq .t "group"}}, nameKeyA, nameKeyB{{end}})
     if err != nil {
         atomic.AddInt32(&vs.lookupErrors, 1)
     }
     return int64(timestampbits >> _TSB_UTIL_BITS), length, err
 }
 
-func (vs *Default{{.T}}Store) lookup(keyA uint64, keyB uint64) (uint64, uint32, uint32, error) {
-    // TODO: nameKey needs to go all throughout the code.
-    timestampbits, id, _, length := vs.vlm.Get(keyA, keyB{{if eq .t "group"}}, 0, 0{{end}})
+func (vs *Default{{.T}}Store) lookup(keyA uint64, keyB uint64{{if eq .t "group"}}, nameKeyA uint64, nameKeyB uint64{{end}}) (uint64, uint32, uint32, error) {
+    timestampbits, id, _, length := vs.vlm.Get(keyA, keyB{{if eq .t "group"}}, nameKeyA, nameKeyB{{end}})
     if id == 0 || timestampbits&_TSB_DELETION != 0 {
         return timestampbits, id, 0, ErrNotFound
     }
