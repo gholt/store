@@ -166,7 +166,7 @@ func (vs *DefaultValueStore) newInPullReplicationMsg(r io.Reader, l uint64) (uin
 // inPullReplication actually processes incoming pull-replication messages;
 // there may be more than one of these workers.
 func (vs *DefaultValueStore) inPullReplication() {
-	k := make([]uint64, vs.bulkSetState.msgCap/_VALUE_BULK_SET_MSG_MIN_ENTRY_LENGTH)
+	k := make([]uint64, vs.bulkSetState.msgCap/_VALUE_BULK_SET_MSG_MIN_ENTRY_LENGTH*2)
 	v := make([]byte, vs.valueCap)
 	for {
 		prm := <-vs.pullReplicationState.inMsgChan
@@ -225,7 +225,6 @@ func (vs *DefaultValueStore) inPullReplication() {
 			var t uint64
 			var err error
 			for i := 0; i < len(k); i += 2 {
-				// TODO: nameKey needs to go all throughout the code.
 				t, v, err = vs.read(k[i], k[i+1], v[:0])
 				if err == ErrNotFound {
 					if t == 0 {
@@ -235,7 +234,6 @@ func (vs *DefaultValueStore) inPullReplication() {
 					continue
 				}
 				if t&_TSB_LOCAL_REMOVAL == 0 {
-					// TODO: Fix group part
 					if !bsm.add(k[i], k[i+1], t, v) {
 						break
 					}

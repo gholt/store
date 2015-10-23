@@ -169,7 +169,7 @@ func (vs *Default{{.T}}Store) newInPullReplicationMsg(r io.Reader, l uint64) (ui
 // inPullReplication actually processes incoming pull-replication messages;
 // there may be more than one of these workers.
 func (vs *Default{{.T}}Store) inPullReplication() {
-    k := make([]uint64, vs.bulkSetState.msgCap/_{{.TT}}_BULK_SET_MSG_MIN_ENTRY_LENGTH)
+    k := make([]uint64, vs.bulkSetState.msgCap/_{{.TT}}_BULK_SET_MSG_MIN_ENTRY_LENGTH*{{if eq .t "value"}}2{{else}}4{{end}})
     v := make([]byte, vs.valueCap)
     for {
         prm := <-vs.pullReplicationState.inMsgChan
@@ -192,7 +192,7 @@ func (vs *Default{{.T}}Store) inPullReplication() {
         callback := func(keyA uint64, keyB uint64{{if eq .t "group"}}, nameKeyA uint64, nameKeyB uint64{{end}}, timestampbits uint64, length uint32) bool {
             if timestampbits&_TSB_DELETION == 0 || timestampbits >= tombstoneCutoff {
                 if !ktbf.mayHave(keyA, keyB{{if eq .t "group"}}, nameKeyA, nameKeyB{{end}}, timestampbits) {
-                    k = append(k, keyA, keyB)
+                    k = append(k, keyA, keyB{{if eq .t "group"}}, nameKeyA, nameKeyB{{end}})
                     l -= _{{.TT}}_BULK_SET_MSG_ENTRY_HEADER_LENGTH + int64(length)
                     if l <= 0 {
                         return false
@@ -227,9 +227,8 @@ func (vs *Default{{.T}}Store) inPullReplication() {
             binary.BigEndian.PutUint64(bsm.header, 0)
             var t uint64
             var err error
-            for i := 0; i < len(k); i += 2 {
-                // TODO: nameKey needs to go all throughout the code.
-                t, v, err = vs.read(k[i], k[i+1]{{if eq .t "group"}}, 0, 0{{end}}, v[:0])
+            for i := 0; i < len(k); i += {{if eq .t "value"}}2{{else}}4{{end}} {
+                t, v, err = vs.read(k[i], k[i+1]{{if eq .t "group"}}, k[i+2], k[i+3]{{end}}, v[:0])
                 if err == ErrNotFound {
                     if t == 0 {
                         continue
@@ -238,8 +237,7 @@ func (vs *Default{{.T}}Store) inPullReplication() {
                     continue
                 }
                 if t&_TSB_LOCAL_REMOVAL == 0 {
-                    // TODO: Fix group part
-                    if !bsm.add(k[i], k[i+1]{{if eq .t "group"}}, 0, 0{{end}}, t, v) {
+                    if !bsm.add(k[i], k[i+1]{{if eq .t "group"}}, k[i+2], k[i+3]{{end}}, t, v) {
                         break
                     }
                     atomic.AddInt32(&vs.outBulkSetValues, 1)

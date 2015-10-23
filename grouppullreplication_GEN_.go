@@ -166,7 +166,7 @@ func (vs *DefaultGroupStore) newInPullReplicationMsg(r io.Reader, l uint64) (uin
 // inPullReplication actually processes incoming pull-replication messages;
 // there may be more than one of these workers.
 func (vs *DefaultGroupStore) inPullReplication() {
-	k := make([]uint64, vs.bulkSetState.msgCap/_GROUP_BULK_SET_MSG_MIN_ENTRY_LENGTH)
+	k := make([]uint64, vs.bulkSetState.msgCap/_GROUP_BULK_SET_MSG_MIN_ENTRY_LENGTH*4)
 	v := make([]byte, vs.valueCap)
 	for {
 		prm := <-vs.pullReplicationState.inMsgChan
@@ -189,7 +189,7 @@ func (vs *DefaultGroupStore) inPullReplication() {
 		callback := func(keyA uint64, keyB uint64, nameKeyA uint64, nameKeyB uint64, timestampbits uint64, length uint32) bool {
 			if timestampbits&_TSB_DELETION == 0 || timestampbits >= tombstoneCutoff {
 				if !ktbf.mayHave(keyA, keyB, nameKeyA, nameKeyB, timestampbits) {
-					k = append(k, keyA, keyB)
+					k = append(k, keyA, keyB, nameKeyA, nameKeyB)
 					l -= _GROUP_BULK_SET_MSG_ENTRY_HEADER_LENGTH + int64(length)
 					if l <= 0 {
 						return false
@@ -224,9 +224,8 @@ func (vs *DefaultGroupStore) inPullReplication() {
 			binary.BigEndian.PutUint64(bsm.header, 0)
 			var t uint64
 			var err error
-			for i := 0; i < len(k); i += 2 {
-				// TODO: nameKey needs to go all throughout the code.
-				t, v, err = vs.read(k[i], k[i+1], 0, 0, v[:0])
+			for i := 0; i < len(k); i += 4 {
+				t, v, err = vs.read(k[i], k[i+1], k[i+2], k[i+3], v[:0])
 				if err == ErrNotFound {
 					if t == 0 {
 						continue
@@ -235,8 +234,7 @@ func (vs *DefaultGroupStore) inPullReplication() {
 					continue
 				}
 				if t&_TSB_LOCAL_REMOVAL == 0 {
-					// TODO: Fix group part
-					if !bsm.add(k[i], k[i+1], 0, 0, t, v) {
+					if !bsm.add(k[i], k[i+1], k[i+2], k[i+3], t, v) {
 						break
 					}
 					atomic.AddInt32(&vs.outBulkSetValues, 1)
