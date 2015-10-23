@@ -750,7 +750,7 @@ OuterLoop:
 				offsetB = offsetA
 				atomic.StoreUint64(&vs.activeTOCA, bts)
 				var fp *os.File
-				fp, err = os.Create(path.Join(vs.pathtoc, fmt.Sprintf("%d.valuestoc", bts)))
+				fp, err = os.Create(path.Join(vs.pathtoc, fmt.Sprintf("%d.grouptoc", bts)))
 				if err != nil {
 					break OuterLoop
 				}
@@ -843,11 +843,11 @@ func (vs *DefaultGroupStore) recovery() error {
 	}
 	sort.Strings(names)
 	for i := 0; i < len(names); i++ {
-		if !strings.HasSuffix(names[i], ".valuestoc") {
+		if !strings.HasSuffix(names[i], ".grouptoc") {
 			continue
 		}
 		namets := int64(0)
-		if namets, err = strconv.ParseInt(names[i][:len(names[i])-len(".valuestoc")], 10, 64); err != nil {
+		if namets, err = strconv.ParseInt(names[i][:len(names[i])-len(".grouptoc")], 10, 64); err != nil {
 			vs.logError("bad timestamp in name: %#v\n", names[i])
 			continue
 		}

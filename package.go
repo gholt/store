@@ -7,9 +7,8 @@
 // recently written data being buffered first and batched to disk later.
 //
 // This has been written with SSDs in mind, but spinning drives should work
-// also; though storing valuestoc files (Table Of Contents, key location
-// information) on a separate disk from values files is recommended in that
-// case.
+// also; though storing toc files (Table Of Contents, key location information)
+// on a separate disk from values files is recommended in that case.
 //
 // Each key is two 64bit values, known as keyA and keyB uint64 values. These
 // are usually created by a hashing function of the key name, but that duty is
@@ -52,6 +51,15 @@
 // Config.MsgRing. The responsible parties will respond to these requests with
 // acknowledgements of the data they received, allowing the requester to
 // discard the out of place data.
+//
+// Note that if the disk gets filled past a configurable threshold, any
+// external writes other than deletes will result in error. Internal writes
+// such as compaction and removing successfully push-replicated data will
+// continue.
+//
+// There is also a modified form of ValueStore called GroupStore that expands
+// the primary key to two 128 bit keys and offers a GetGroup method which
+// retrieves all matching items for the first key.
 package valuestore
 
 // got is at https://github.com/gholt/got
