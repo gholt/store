@@ -19,8 +19,9 @@ type valueTombstoneDiscardState struct {
 }
 
 type valueLocalRemovalEntry struct {
-	keyA          uint64
-	keyB          uint64
+	keyA uint64
+	keyB uint64
+
 	timestampbits uint64
 }
 
@@ -125,14 +126,13 @@ func (vs *DefaultValueStore) tombstoneDiscardPass() {
 	vs.tombstoneDiscardPassExpiredDeletions()
 }
 
-// tombstoneDiscardPassLocalRemovals removes all valuelocmap entries marked
-// with the _TSB_LOCAL_REMOVAL bit. These are entries that other routines have
-// indicated are no longer needed in memory.
+// tombstoneDiscardPassLocalRemovals removes all entries marked with the
+// _TSB_LOCAL_REMOVAL bit. These are entries that other routines have indicated
+// are no longer needed in memory.
 func (vs *DefaultValueStore) tombstoneDiscardPassLocalRemovals() {
 	// Each worker will perform a pass on a subsection of each partition's key
 	// space. Additionally, each worker will start their work on different
-	// partition. This reduces contention for a given section of the
-	// valuelocmap.
+	// partition. This reduces contention for a given section of the locmap.
 	partitionShift := uint16(0)
 	partitionMax := uint64(0)
 	if vs.msgRing != nil {
@@ -177,14 +177,13 @@ func (vs *DefaultValueStore) tombstoneDiscardPassLocalRemovals() {
 	wg.Wait()
 }
 
-// tombstoneDiscardPassExpiredDeletions scans for valuelocmap entries marked
-// with _TSB_DELETION (but not _TSB_LOCAL_REMOVAL) that are older than the
-// maximum tombstone age and marks them for _TSB_LOCAL_REMOVAL.
+// tombstoneDiscardPassExpiredDeletions scans for entries marked with
+// _TSB_DELETION (but not _TSB_LOCAL_REMOVAL) that are older than the maximum
+// tombstone age and marks them for _TSB_LOCAL_REMOVAL.
 func (vs *DefaultValueStore) tombstoneDiscardPassExpiredDeletions() {
 	// Each worker will perform a pass on a subsection of each partition's key
 	// space. Additionally, each worker will start their work on different
-	// partition. This reduces contention for a given section of the
-	// valuelocmap.
+	// partition. This reduces contention for a given section of the locmap.
 	partitionShift := uint16(0)
 	partitionMax := uint64(0)
 	if vs.msgRing != nil {
@@ -216,11 +215,11 @@ func (vs *DefaultValueStore) tombstoneDiscardPassExpiredDeletions() {
 			// Since we shouldn't try to modify what we're scanning while we're
 			// scanning (lock contention) we instead record in localRemovals
 			// what to modify after the scan.
-			// TODO: nameKey needs to go all throughout the code.
 			rangeBegin, more = vs.vlm.ScanCallback(rangeBegin, rangeEnd, _TSB_DELETION, _TSB_LOCAL_REMOVAL, cutoff, uint64(vs.tombstoneDiscardState.batchSize), func(keyA uint64, keyB uint64, timestampbits uint64, length uint32) bool {
 				e := &localRemovals[localRemovalsIndex]
 				e.keyA = keyA
 				e.keyB = keyB
+
 				e.timestampbits = timestampbits
 				localRemovalsIndex++
 				return true
@@ -228,7 +227,6 @@ func (vs *DefaultValueStore) tombstoneDiscardPassExpiredDeletions() {
 			atomic.AddInt32(&vs.expiredDeletions, int32(localRemovalsIndex))
 			for i := 0; i < localRemovalsIndex; i++ {
 				e := &localRemovals[i]
-				// TODO: Fix group part
 				// These writes go through the entire system, so they're
 				// persisted and therefore restored on restarts.
 				vs.write(e.keyA, e.keyB, e.timestampbits|_TSB_LOCAL_REMOVAL, nil, true)
