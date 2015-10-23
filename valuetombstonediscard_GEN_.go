@@ -228,6 +228,7 @@ func (vs *DefaultValueStore) tombstoneDiscardPassExpiredDeletions() {
 			atomic.AddInt32(&vs.expiredDeletions, int32(localRemovalsIndex))
 			for i := 0; i < localRemovalsIndex; i++ {
 				e := &localRemovals[i]
+				// TODO: Fix group part
 				// These writes go through the entire system, so they're
 				// persisted and therefore restored on restarts.
 				vs.write(e.keyA, e.keyB, e.timestampbits|_TSB_LOCAL_REMOVAL, nil, true)

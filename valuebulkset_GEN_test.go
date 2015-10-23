@@ -144,7 +144,7 @@ func TestValueBulkSetMsgWithoutAck(t *testing.T) {
 	defer vs.DisableAll()
 	bsm := <-vs.bulkSetState.inFreeMsgChan
 	bsm.body = bsm.body[:0]
-	if !bsm.add(1, 2, 0x300, []byte("testing")) {
+	if !bsm.add(1, 2, 0x500, []byte("testing")) {
 		t.Fatal("")
 	}
 	vs.bulkSetState.inMsgChan <- bsm
@@ -155,7 +155,7 @@ func TestValueBulkSetMsgWithoutAck(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if ts != 3 { // the bottom 8 bits are discarded for the public Read
+	if ts != 5 { // the bottom 8 bits are discarded for the public Read
 		t.Fatal(ts)
 	}
 	if string(v) != "testing" {
@@ -191,7 +191,7 @@ func TestValueBulkSetMsgWithAck(t *testing.T) {
 	bsm := <-vs.bulkSetState.inFreeMsgChan
 	binary.BigEndian.PutUint64(bsm.header, 123)
 	bsm.body = bsm.body[:0]
-	if !bsm.add(1, 2, 0x300, []byte("testing")) {
+	if !bsm.add(1, 2, 0x500, []byte("testing")) {
 		t.Fatal("")
 	}
 	vs.bulkSetState.inMsgChan <- bsm
@@ -202,7 +202,7 @@ func TestValueBulkSetMsgWithAck(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if ts != 3 { // the bottom 8 bits are discarded for the public Read
+	if ts != 5 { // the bottom 8 bits are discarded for the public Read
 		t.Fatal(ts)
 	}
 	if string(v) != "testing" {
@@ -237,7 +237,7 @@ func TestValueBulkSetMsgWithoutRing(t *testing.T) {
 	bsm := <-vs.bulkSetState.inFreeMsgChan
 	binary.BigEndian.PutUint64(bsm.header, 123)
 	bsm.body = bsm.body[:0]
-	if !bsm.add(1, 2, 0x300, []byte("testing")) {
+	if !bsm.add(1, 2, 0x500, []byte("testing")) {
 		t.Fatal("")
 	}
 	vs.bulkSetState.inMsgChan <- bsm
@@ -248,7 +248,7 @@ func TestValueBulkSetMsgWithoutRing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if ts != 3 { // the bottom 8 bits are discarded for the public Read
+	if ts != 5 { // the bottom 8 bits are discarded for the public Read
 		t.Fatal(ts)
 	}
 	if string(v) != "testing" {
@@ -290,8 +290,8 @@ func TestValueBulkSetMsgOut(t *testing.T) {
 	bsm.Free()
 	bsm = vs.newOutBulkSetMsg()
 	binary.BigEndian.PutUint64(bsm.header, 12345)
-	bsm.add(1, 2, 0x300, nil)
-	bsm.add(4, 5, 0x600, []byte("testing"))
+	bsm.add(1, 2, 0x500, nil)
+	bsm.add(6, 7, 0xa00, []byte("testing"))
 	if bsm.MsgType() != _VALUE_BULK_SET_MSG_TYPE {
 		t.Fatal(bsm.MsgType())
 	}
@@ -310,11 +310,13 @@ func TestValueBulkSetMsgOut(t *testing.T) {
 		0, 0, 0, 0, 0, 0, 48, 57, // header
 		0, 0, 0, 0, 0, 0, 0, 1, // keyA
 		0, 0, 0, 0, 0, 0, 0, 2, // keyB
-		0, 0, 0, 0, 0, 0, 3, 0, // timestamp
+
+		0, 0, 0, 0, 0, 0, 5, 0, // timestamp
 		0, 0, 0, 0, // length
-		0, 0, 0, 0, 0, 0, 0, 4, // keyA
-		0, 0, 0, 0, 0, 0, 0, 5, // keyB
-		0, 0, 0, 0, 0, 0, 6, 0, // timestamp
+		0, 0, 0, 0, 0, 0, 0, 6, // keyA
+		0, 0, 0, 0, 0, 0, 0, 7, // keyB
+
+		0, 0, 0, 0, 0, 0, 10, 0, // timestamp
 		0, 0, 0, 7, // length
 		116, 101, 115, 116, 105, 110, 103, // "testing"
 	}) {
@@ -367,10 +369,10 @@ func TestValueBulkSetMsgOutHitCap(t *testing.T) {
 		t.Fatal("")
 	}
 	bsm := vs.newOutBulkSetMsg()
-	if !bsm.add(1, 2, 0x300, []byte("1")) {
+	if !bsm.add(1, 2, 0x500, []byte("1")) {
 		t.Fatal("")
 	}
-	if bsm.add(4, 5, 0x600, []byte("12345678901234567890")) {
+	if bsm.add(6, 7, 0xa00, []byte("12345678901234567890")) {
 		t.Fatal("")
 	}
 }

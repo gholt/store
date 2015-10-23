@@ -127,7 +127,8 @@ func (vs *DefaultGroupStore) inBulkSetAck(doneChan chan struct{}) {
 			if ring != nil && !ring.Responsible(uint32(keyA>>rightwardPartitionShift)) {
 				atomic.AddInt32(&vs.inBulkSetAckWrites, 1)
 				timestampbits := binary.BigEndian.Uint64(b[o+16:]) | _TSB_LOCAL_REMOVAL
-				rtimestampbits, err := vs.write(keyA, binary.BigEndian.Uint64(b[o+8:]), timestampbits, nil, true)
+				// TODO: Fix the group part
+				rtimestampbits, err := vs.write(keyA, binary.BigEndian.Uint64(b[o+8:]), 0, 0, timestampbits, nil, true)
 				if err != nil {
 					atomic.AddInt32(&vs.inBulkSetAckWriteErrors, 1)
 				} else if rtimestampbits != timestampbits {
@@ -170,7 +171,7 @@ func (bsam *groupBulkSetAckMsg) Free() {
 	bsam.vs.bulkSetAckState.outFreeMsgChan <- bsam
 }
 
-func (bsam *groupBulkSetAckMsg) add(keyA uint64, keyB uint64, timestampbits uint64) bool {
+func (bsam *groupBulkSetAckMsg) add(keyA uint64, keyB uint64, nameKeyA uint64, nameKeyB uint64, timestampbits uint64) bool {
 	o := len(bsam.body)
 	if o+_GROUP_BULK_SET_ACK_MSG_ENTRY_LENGTH >= cap(bsam.body) {
 		return false

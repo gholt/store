@@ -127,6 +127,7 @@ func (vs *DefaultValueStore) inBulkSetAck(doneChan chan struct{}) {
 			if ring != nil && !ring.Responsible(uint32(keyA>>rightwardPartitionShift)) {
 				atomic.AddInt32(&vs.inBulkSetAckWrites, 1)
 				timestampbits := binary.BigEndian.Uint64(b[o+16:]) | _TSB_LOCAL_REMOVAL
+				// TODO: Fix the group part
 				rtimestampbits, err := vs.write(keyA, binary.BigEndian.Uint64(b[o+8:]), timestampbits, nil, true)
 				if err != nil {
 					atomic.AddInt32(&vs.inBulkSetAckWriteErrors, 1)

@@ -235,7 +235,8 @@ func (vs *DefaultGroupStore) inPullReplication() {
 					continue
 				}
 				if t&_TSB_LOCAL_REMOVAL == 0 {
-					if !bsm.add(k[i], k[i+1], t, v) {
+					// TODO: Fix group part
+					if !bsm.add(k[i], k[i+1], 0, 0, t, v) {
 						break
 					}
 					atomic.AddInt32(&vs.outBulkSetValues, 1)

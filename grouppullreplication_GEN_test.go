@@ -71,7 +71,8 @@ func TestGroupPullReplicationSimple(t *testing.T) {
 	}
 	vs.EnableAll()
 	defer vs.DisableAll()
-	_, err = vs.write(1, 2, 0x300, []byte("testing"), false)
+	// TODO: Fix group part
+	_, err = vs.write(1, 2, 0, 0, 0x300, []byte("testing"), false)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -29,8 +29,8 @@ import (
 // For documentation on each of these functions, see the DefaultGroupStore.
 type GroupStore interface {
 	Lookup(keyA uint64, keyB uint64) (int64, uint32, error)
-	Read(keyA uint64, keyB uint64, value []byte) (int64, []byte, error)
-	Write(keyA uint64, keyB uint64, timestamp int64, value []byte) (int64, error)
+	Read(keyA uint64, keyB uint64, nameKeyA uint64, nameKeyB uint64, value []byte) (int64, []byte, error)
+	Write(keyA uint64, keyB uint64, nameKeyA uint64, nameKeyB uint64, timestamp int64, value []byte) (int64, error)
 	Delete(keyA uint64, keyB uint64, timestamp int64) (int64, error)
 	EnableAll()
 	DisableAll()
@@ -137,8 +137,12 @@ type DefaultGroupStore struct {
 }
 
 type groupWriteReq struct {
-	keyA          uint64
-	keyB          uint64
+	keyA uint64
+	keyB uint64
+
+	nameKeyA uint64
+	nameKeyB uint64
+
 	timestampbits uint64
 	value         []byte
 	errChan       chan error
@@ -383,7 +387,7 @@ func (vs *DefaultGroupStore) read(keyA uint64, keyB uint64, nameKeyA uint64, nam
 // stored timestampmicro or returns any error; a newer timestampmicro already
 // in place is not reported as an error. Note that with a write and a delete
 // for the exact same timestampmicro, the delete wins.
-func (vs *DefaultGroupStore) Write(keyA uint64, keyB uint64, timestampmicro int64, value []byte) (int64, error) {
+func (vs *DefaultGroupStore) Write(keyA uint64, keyB uint64, nameKeyA uint64, nameKeyB uint64, timestampmicro int64, value []byte) (int64, error) {
 	atomic.AddInt32(&vs.writes, 1)
 	if timestampmicro < TIMESTAMPMICRO_MIN {
 		atomic.AddInt32(&vs.writeErrors, 1)
@@ -393,7 +397,7 @@ func (vs *DefaultGroupStore) Write(keyA uint64, keyB uint64, timestampmicro int6
 		atomic.AddInt32(&vs.writeErrors, 1)
 		return 0, fmt.Errorf("timestamp %d > %d", timestampmicro, TIMESTAMPMICRO_MAX)
 	}
-	timestampbits, err := vs.write(keyA, keyB, uint64(timestampmicro)<<_TSB_UTIL_BITS, value, false)
+	timestampbits, err := vs.write(keyA, keyB, nameKeyA, nameKeyB, uint64(timestampmicro)<<_TSB_UTIL_BITS, value, false)
 	if err != nil {
 		atomic.AddInt32(&vs.writeErrors, 1)
 	}
@@ -403,11 +407,15 @@ func (vs *DefaultGroupStore) Write(keyA uint64, keyB uint64, timestampmicro int6
 	return int64(timestampbits >> _TSB_UTIL_BITS), err
 }
 
-func (vs *DefaultGroupStore) write(keyA uint64, keyB uint64, timestampbits uint64, value []byte, internal bool) (uint64, error) {
+func (vs *DefaultGroupStore) write(keyA uint64, keyB uint64, nameKeyA uint64, nameKeyB uint64, timestampbits uint64, value []byte, internal bool) (uint64, error) {
 	i := int(keyA>>1) % len(vs.freeVWRChans)
 	vwr := <-vs.freeVWRChans[i]
 	vwr.keyA = keyA
 	vwr.keyB = keyB
+
+	vwr.nameKeyA = nameKeyA
+	vwr.nameKeyB = nameKeyB
+
 	vwr.timestampbits = timestampbits
 	vwr.value = value
 	vwr.internal = internal
@@ -433,7 +441,8 @@ func (vs *DefaultGroupStore) Delete(keyA uint64, keyB uint64, timestampmicro int
 		atomic.AddInt32(&vs.deleteErrors, 1)
 		return 0, fmt.Errorf("timestamp %d > %d", timestampmicro, TIMESTAMPMICRO_MAX)
 	}
-	ptimestampbits, err := vs.write(keyA, keyB, (uint64(timestampmicro)<<_TSB_UTIL_BITS)|_TSB_DELETION, nil, true)
+	// TODO: Fix group part
+	ptimestampbits, err := vs.write(keyA, keyB, 0, 0, (uint64(timestampmicro)<<_TSB_UTIL_BITS)|_TSB_DELETION, nil, true)
 	if err != nil {
 		atomic.AddInt32(&vs.deleteErrors, 1)
 	}
@@ -592,7 +601,7 @@ func (vs *DefaultGroupStore) memWriter(pendingVWRChan chan *groupWriteReq) {
 			}
 		}
 		// TODO: nameKey needs to go all throughout the code.
-		ptimestampbits := vs.vlm.Set(vwr.keyA, vwr.keyB, 0, 0, vwr.timestampbits, vm.id, uint32(vmMemOffset), uint32(length), false)
+		ptimestampbits := vs.vlm.Set(vwr.keyA, vwr.keyB, vwr.nameKeyA, vwr.nameKeyB, vwr.timestampbits, vm.id, uint32(vmMemOffset), uint32(length), false)
 		if ptimestampbits < vwr.timestampbits {
 			vm.toc = vm.toc[:vmTOCOffset+32]
 			binary.BigEndian.PutUint64(vm.toc[vmTOCOffset:], vwr.keyA)

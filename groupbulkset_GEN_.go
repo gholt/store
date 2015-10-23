@@ -8,13 +8,11 @@ import (
 )
 
 // bsm: senderNodeID:8 entries:n
-// bsm entry: keyA:8, keyB:8, timestampbits:8, length:4, value:n
-
+// bsm entry: keyA:8, keyB:8, nameKeyA:8, nameKeyB:8, timestampbits:8, length:4, value:n
 const _GROUP_BULK_SET_MSG_TYPE = 0xbe53367e1994c262
-
 const _GROUP_BULK_SET_MSG_HEADER_LENGTH = 8
-const _GROUP_BULK_SET_MSG_ENTRY_HEADER_LENGTH = 28
-const _GROUP_BULK_SET_MSG_MIN_ENTRY_LENGTH = 28
+const _GROUP_BULK_SET_MSG_ENTRY_HEADER_LENGTH = 44
+const _GROUP_BULK_SET_MSG_MIN_ENTRY_LENGTH = 44
 
 type groupBulkSetState struct {
 	msgCap               int
@@ -180,16 +178,20 @@ func (vs *DefaultGroupStore) inBulkSet(doneChan chan struct{}) {
 			}
 		}
 		for len(body) > _GROUP_BULK_SET_MSG_ENTRY_HEADER_LENGTH {
+
 			keyA := binary.BigEndian.Uint64(body)
 			keyB := binary.BigEndian.Uint64(body[8:])
-			timestampbits := binary.BigEndian.Uint64(body[16:])
-			l := binary.BigEndian.Uint32(body[24:])
+			nameKeyA := binary.BigEndian.Uint64(body[16:])
+			nameKeyB := binary.BigEndian.Uint64(body[24:])
+			timestampbits := binary.BigEndian.Uint64(body[32:])
+			l := binary.BigEndian.Uint32(body[40:])
+
 			atomic.AddInt32(&vs.inBulkSetWrites, 1)
 			// Attempt to store everything received...
 			// Note that deletions are acted upon as internal requests (work
 			// even if writes are disabled due to disk fullness) and new data
 			// writes are not.
-			rtimestampbits, err = vs.write(keyA, keyB, timestampbits, body[_GROUP_BULK_SET_MSG_ENTRY_HEADER_LENGTH:_GROUP_BULK_SET_MSG_ENTRY_HEADER_LENGTH+l], timestampbits&_TSB_DELETION != 0)
+			rtimestampbits, err = vs.write(keyA, keyB, nameKeyA, nameKeyB, timestampbits, body[_GROUP_BULK_SET_MSG_ENTRY_HEADER_LENGTH:_GROUP_BULK_SET_MSG_ENTRY_HEADER_LENGTH+l], timestampbits&_TSB_DELETION != 0)
 			if err != nil {
 				atomic.AddInt32(&vs.inBulkSetWriteErrors, 1)
 			} else if rtimestampbits != timestampbits {
@@ -198,7 +200,7 @@ func (vs *DefaultGroupStore) inBulkSet(doneChan chan struct{}) {
 			// But only ack on success, there is someone to ack to, and the
 			// local node is responsible for the data.
 			if err == nil && bsam != nil && ring != nil && ring.Responsible(uint32(keyA>>rightwardPartitionShift)) {
-				bsam.add(keyA, keyB, timestampbits)
+				bsam.add(keyA, keyB, nameKeyA, nameKeyB, timestampbits)
 			}
 			body = body[_GROUP_BULK_SET_MSG_ENTRY_HEADER_LENGTH+l:]
 		}
@@ -214,10 +216,10 @@ func (vs *DefaultGroupStore) inBulkSet(doneChan chan struct{}) {
 // newOutBulkSetMsg gives an initialized groupBulkSetMsg for filling out and
 // eventually sending using the MsgRing. The MsgRing (or someone else if the
 // message doesn't end up with the MsgRing) will call groupBulkSetMsg.Free()
-// eventually and the groupBulkSetMsg will be requeued for reuse later. There is a
-// fixed number of outgoing groupBulkSetMsg instances that can exist at any given
-// time, capping memory usage. Once the limit is reached, this method will
-// block until a groupBulkSetMsg is available to return.
+// eventually and the groupBulkSetMsg will be requeued for reuse later. There
+// is a fixed number of outgoing groupBulkSetMsg instances that can exist at
+// any given time, capping memory usage. Once the limit is reached, this method
+// will block until a groupBulkSetMsg is available to return.
 func (vs *DefaultGroupStore) newOutBulkSetMsg() *groupBulkSetMsg {
 	bsm := <-vs.bulkSetState.outFreeMsgChan
 	if vs.msgRing != nil {
@@ -256,7 +258,7 @@ func (bsm *groupBulkSetMsg) nodeID() uint64 {
 	return binary.BigEndian.Uint64(bsm.header)
 }
 
-func (bsm *groupBulkSetMsg) add(keyA uint64, keyB uint64, timestampbits uint64, value []byte) bool {
+func (bsm *groupBulkSetMsg) add(keyA uint64, keyB uint64, nameKeyA uint64, nameKeyB uint64, timestampbits uint64, value []byte) bool {
 	// CONSIDER: I'd rather not have "useless" checks every place wasting
 	// cycles when the caller should have already validated the input; but here
 	// len(value) must not exceed math.MaxUint32.
@@ -265,10 +267,14 @@ func (bsm *groupBulkSetMsg) add(keyA uint64, keyB uint64, timestampbits uint64, 
 		return false
 	}
 	bsm.body = bsm.body[:o+_GROUP_BULK_SET_MSG_ENTRY_HEADER_LENGTH+len(value)]
+
 	binary.BigEndian.PutUint64(bsm.body[o:], keyA)
 	binary.BigEndian.PutUint64(bsm.body[o+8:], keyB)
-	binary.BigEndian.PutUint64(bsm.body[o+16:], timestampbits)
-	binary.BigEndian.PutUint32(bsm.body[o+24:], uint32(len(value)))
+	binary.BigEndian.PutUint64(bsm.body[o+16:], nameKeyA)
+	binary.BigEndian.PutUint64(bsm.body[o+24:], nameKeyB)
+	binary.BigEndian.PutUint64(bsm.body[o+32:], timestampbits)
+	binary.BigEndian.PutUint32(bsm.body[o+40:], uint32(len(value)))
+
 	copy(bsm.body[o+_GROUP_BULK_SET_MSG_ENTRY_HEADER_LENGTH:], value)
 	return true
 }

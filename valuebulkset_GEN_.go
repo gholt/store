@@ -9,9 +9,7 @@ import (
 
 // bsm: senderNodeID:8 entries:n
 // bsm entry: keyA:8, keyB:8, timestampbits:8, length:4, value:n
-
 const _VALUE_BULK_SET_MSG_TYPE = 0x44f58445991a4aa1
-
 const _VALUE_BULK_SET_MSG_HEADER_LENGTH = 8
 const _VALUE_BULK_SET_MSG_ENTRY_HEADER_LENGTH = 28
 const _VALUE_BULK_SET_MSG_MIN_ENTRY_LENGTH = 28
@@ -180,10 +178,12 @@ func (vs *DefaultValueStore) inBulkSet(doneChan chan struct{}) {
 			}
 		}
 		for len(body) > _VALUE_BULK_SET_MSG_ENTRY_HEADER_LENGTH {
+
 			keyA := binary.BigEndian.Uint64(body)
 			keyB := binary.BigEndian.Uint64(body[8:])
 			timestampbits := binary.BigEndian.Uint64(body[16:])
 			l := binary.BigEndian.Uint32(body[24:])
+
 			atomic.AddInt32(&vs.inBulkSetWrites, 1)
 			// Attempt to store everything received...
 			// Note that deletions are acted upon as internal requests (work
@@ -214,10 +214,10 @@ func (vs *DefaultValueStore) inBulkSet(doneChan chan struct{}) {
 // newOutBulkSetMsg gives an initialized valueBulkSetMsg for filling out and
 // eventually sending using the MsgRing. The MsgRing (or someone else if the
 // message doesn't end up with the MsgRing) will call valueBulkSetMsg.Free()
-// eventually and the valueBulkSetMsg will be requeued for reuse later. There is a
-// fixed number of outgoing valueBulkSetMsg instances that can exist at any given
-// time, capping memory usage. Once the limit is reached, this method will
-// block until a valueBulkSetMsg is available to return.
+// eventually and the valueBulkSetMsg will be requeued for reuse later. There
+// is a fixed number of outgoing valueBulkSetMsg instances that can exist at
+// any given time, capping memory usage. Once the limit is reached, this method
+// will block until a valueBulkSetMsg is available to return.
 func (vs *DefaultValueStore) newOutBulkSetMsg() *valueBulkSetMsg {
 	bsm := <-vs.bulkSetState.outFreeMsgChan
 	if vs.msgRing != nil {
@@ -265,10 +265,12 @@ func (bsm *valueBulkSetMsg) add(keyA uint64, keyB uint64, timestampbits uint64, 
 		return false
 	}
 	bsm.body = bsm.body[:o+_VALUE_BULK_SET_MSG_ENTRY_HEADER_LENGTH+len(value)]
+
 	binary.BigEndian.PutUint64(bsm.body[o:], keyA)
 	binary.BigEndian.PutUint64(bsm.body[o+8:], keyB)
 	binary.BigEndian.PutUint64(bsm.body[o+16:], timestampbits)
 	binary.BigEndian.PutUint32(bsm.body[o+24:], uint32(len(value)))
+
 	copy(bsm.body[o+_VALUE_BULK_SET_MSG_ENTRY_HEADER_LENGTH:], value)
 	return true
 }

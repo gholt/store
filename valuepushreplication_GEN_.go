@@ -203,6 +203,7 @@ func (vs *DefaultValueStore) outPushReplicationPass() {
 				continue
 			}
 			if timestampbits&_TSB_LOCAL_REMOVAL == 0 && timestampbits < cutoff && (timestampbits&_TSB_DELETION == 0 || timestampbits >= tombstoneCutoff) {
+				// TODO: Fix group part
 				if !bsm.add(list[i], list[i+1], timestampbits, valbuf) {
 					break
 				}

@@ -448,6 +448,7 @@ func (vs *DefaultValueStore) compactFile(name string, candidateBlockID uint32) (
 						fp.Close()
 						return cr, fmt.Errorf("error on read for compaction rewrite: %s", err)
 					}
+					// TODO: Fix the group part
 					_, err = vs.write(keyA, keyB, timestampbits|_TSB_COMPACTION_REWRITE, value, true)
 					if err != nil {
 						fp.Close()
@@ -473,6 +474,7 @@ func (vs *DefaultValueStore) compactFile(name string, candidateBlockID uint32) (
 						fp.Close()
 						return cr, fmt.Errorf("error on read for compaction rewrite: %s", err)
 					}
+					// TODO: Fix group part
 					_, err = vs.write(keyA, keyB, timestampbits|_TSB_COMPACTION_REWRITE, value, true)
 					if err != nil {
 						fp.Close()

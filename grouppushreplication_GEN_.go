@@ -203,7 +203,8 @@ func (vs *DefaultGroupStore) outPushReplicationPass() {
 				continue
 			}
 			if timestampbits&_TSB_LOCAL_REMOVAL == 0 && timestampbits < cutoff && (timestampbits&_TSB_DELETION == 0 || timestampbits >= tombstoneCutoff) {
-				if !bsm.add(list[i], list[i+1], timestampbits, valbuf) {
+				// TODO: Fix group part
+				if !bsm.add(list[i], list[i+1], 0, 0, timestampbits, valbuf) {
 					break
 				}
 				atomic.AddInt32(&vs.outBulkSetPushValues, 1)

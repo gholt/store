@@ -87,6 +87,7 @@ func TestValueBulkSetAckMsgIncoming(t *testing.T) {
 	}
 	vs.EnableAll()
 	defer vs.DisableAll()
+	// TODO: Fix group part
 	ts, err := vs.write(1, 2, 0x300, []byte("testing"), true)
 	if err != nil {
 		t.Fatal(err)
@@ -107,6 +108,7 @@ func TestValueBulkSetAckMsgIncoming(t *testing.T) {
 	}
 	bsam := <-vs.bulkSetAckState.inFreeMsgChan
 	bsam.body = bsam.body[:0]
+	// TODO: Fix group part
 	if !bsam.add(1, 2, 0x300) {
 		t.Fatal("")
 	}
@@ -139,6 +141,7 @@ func TestValueBulkSetAckMsgIncomingNoRing(t *testing.T) {
 	}
 	vs.EnableAll()
 	defer vs.DisableAll()
+	// TODO: Fix group part
 	ts, err := vs.write(1, 2, 0x300, []byte("testing"), true)
 	if err != nil {
 		t.Fatal(err)
@@ -159,6 +162,7 @@ func TestValueBulkSetAckMsgIncomingNoRing(t *testing.T) {
 	}
 	bsam := <-vs.bulkSetAckState.inFreeMsgChan
 	bsam.body = bsam.body[:0]
+	// TODO: Fix group part
 	if !bsam.add(1, 2, 0x300) {
 		t.Fatal("")
 	}
@@ -207,6 +211,7 @@ func TestValueBulkSetAckMsgOut(t *testing.T) {
 	}
 	bsam.Free()
 	bsam = vs.newOutBulkSetAckMsg()
+	// TODO: Fix group part
 	bsam.add(1, 2, 0x300)
 	bsam.add(4, 5, 0x600)
 	if bsam.MsgType() != _VALUE_BULK_SET_ACK_MSG_TYPE {
@@ -244,6 +249,7 @@ func TestValueBulkSetAckMsgOutWriteError(t *testing.T) {
 		t.Fatal("")
 	}
 	bsam := vs.newOutBulkSetAckMsg()
+	// TODO: Fix group part
 	bsam.add(1, 2, 0x300)
 	_, err = bsam.WriteContent(&testErrorWriter{})
 	if err == nil {
@@ -261,6 +267,7 @@ func TestValueBulkSetAckMsgOutHitCap(t *testing.T) {
 		t.Fatal("")
 	}
 	bsam := vs.newOutBulkSetAckMsg()
+	// TODO: Fix group part
 	if !bsam.add(1, 2, 0x300) {
 		t.Fatal("")
 	}

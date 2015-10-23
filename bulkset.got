@@ -7,16 +7,21 @@ import (
     "time"
 )
 
+{{if eq .t "value"}}
 // bsm: senderNodeID:8 entries:n
 // bsm entry: keyA:8, keyB:8, timestampbits:8, length:4, value:n
-{{if eq .t "value"}}
 const _{{.TT}}_BULK_SET_MSG_TYPE = 0x44f58445991a4aa1
-{{else}}
-const _{{.TT}}_BULK_SET_MSG_TYPE = 0xbe53367e1994c262
-{{end}}
 const _{{.TT}}_BULK_SET_MSG_HEADER_LENGTH = 8
 const _{{.TT}}_BULK_SET_MSG_ENTRY_HEADER_LENGTH = 28
 const _{{.TT}}_BULK_SET_MSG_MIN_ENTRY_LENGTH = 28
+{{else}}
+// bsm: senderNodeID:8 entries:n
+// bsm entry: keyA:8, keyB:8, nameKeyA:8, nameKeyB:8, timestampbits:8, length:4, value:n
+const _{{.TT}}_BULK_SET_MSG_TYPE = 0xbe53367e1994c262
+const _{{.TT}}_BULK_SET_MSG_HEADER_LENGTH = 8
+const _{{.TT}}_BULK_SET_MSG_ENTRY_HEADER_LENGTH = 44
+const _{{.TT}}_BULK_SET_MSG_MIN_ENTRY_LENGTH = 44
+{{end}}
 
 type {{.t}}BulkSetState struct {
     msgCap               int
@@ -182,16 +187,25 @@ func (vs *Default{{.T}}Store) inBulkSet(doneChan chan struct{}) {
             }
         }
         for len(body) > _{{.TT}}_BULK_SET_MSG_ENTRY_HEADER_LENGTH {
+            {{if eq .t "value"}}
             keyA := binary.BigEndian.Uint64(body)
             keyB := binary.BigEndian.Uint64(body[8:])
             timestampbits := binary.BigEndian.Uint64(body[16:])
             l := binary.BigEndian.Uint32(body[24:])
+            {{else}}
+            keyA := binary.BigEndian.Uint64(body)
+            keyB := binary.BigEndian.Uint64(body[8:])
+            nameKeyA := binary.BigEndian.Uint64(body[16:])
+            nameKeyB := binary.BigEndian.Uint64(body[24:])
+            timestampbits := binary.BigEndian.Uint64(body[32:])
+            l := binary.BigEndian.Uint32(body[40:])
+            {{end}}
             atomic.AddInt32(&vs.inBulkSetWrites, 1)
             // Attempt to store everything received...
             // Note that deletions are acted upon as internal requests (work
             // even if writes are disabled due to disk fullness) and new data
             // writes are not.
-            rtimestampbits, err = vs.write(keyA, keyB, timestampbits, body[_{{.TT}}_BULK_SET_MSG_ENTRY_HEADER_LENGTH:_{{.TT}}_BULK_SET_MSG_ENTRY_HEADER_LENGTH+l], timestampbits&_TSB_DELETION != 0)
+            rtimestampbits, err = vs.write(keyA, keyB{{if eq .t "group"}}, nameKeyA, nameKeyB{{end}}, timestampbits, body[_{{.TT}}_BULK_SET_MSG_ENTRY_HEADER_LENGTH:_{{.TT}}_BULK_SET_MSG_ENTRY_HEADER_LENGTH+l], timestampbits&_TSB_DELETION != 0)
             if err != nil {
                 atomic.AddInt32(&vs.inBulkSetWriteErrors, 1)
             } else if rtimestampbits != timestampbits {
@@ -200,7 +214,7 @@ func (vs *Default{{.T}}Store) inBulkSet(doneChan chan struct{}) {
             // But only ack on success, there is someone to ack to, and the
             // local node is responsible for the data.
             if err == nil && bsam != nil && ring != nil && ring.Responsible(uint32(keyA>>rightwardPartitionShift)) {
-                bsam.add(keyA, keyB, timestampbits)
+                bsam.add(keyA, keyB{{if eq .t "group"}}, nameKeyA, nameKeyB{{end}}, timestampbits)
             }
             body = body[_{{.TT}}_BULK_SET_MSG_ENTRY_HEADER_LENGTH+l:]
         }
@@ -216,10 +230,10 @@ func (vs *Default{{.T}}Store) inBulkSet(doneChan chan struct{}) {
 // newOutBulkSetMsg gives an initialized {{.t}}BulkSetMsg for filling out and
 // eventually sending using the MsgRing. The MsgRing (or someone else if the
 // message doesn't end up with the MsgRing) will call {{.t}}BulkSetMsg.Free()
-// eventually and the {{.t}}BulkSetMsg will be requeued for reuse later. There is a
-// fixed number of outgoing {{.t}}BulkSetMsg instances that can exist at any given
-// time, capping memory usage. Once the limit is reached, this method will
-// block until a {{.t}}BulkSetMsg is available to return.
+// eventually and the {{.t}}BulkSetMsg will be requeued for reuse later. There
+// is a fixed number of outgoing {{.t}}BulkSetMsg instances that can exist at
+// any given time, capping memory usage. Once the limit is reached, this method
+// will block until a {{.t}}BulkSetMsg is available to return.
 func (vs *Default{{.T}}Store) newOutBulkSetMsg() *{{.t}}BulkSetMsg {
     bsm := <-vs.bulkSetState.outFreeMsgChan
     if vs.msgRing != nil {
@@ -258,7 +272,7 @@ func (bsm *{{.t}}BulkSetMsg) nodeID() uint64 {
     return binary.BigEndian.Uint64(bsm.header)
 }
 
-func (bsm *{{.t}}BulkSetMsg) add(keyA uint64, keyB uint64, timestampbits uint64, value []byte) bool {
+func (bsm *{{.t}}BulkSetMsg) add(keyA uint64, keyB uint64{{if eq .t "group"}}, nameKeyA uint64, nameKeyB uint64{{end}}, timestampbits uint64, value []byte) bool {
     // CONSIDER: I'd rather not have "useless" checks every place wasting
     // cycles when the caller should have already validated the input; but here
     // len(value) must not exceed math.MaxUint32.
@@ -267,10 +281,19 @@ func (bsm *{{.t}}BulkSetMsg) add(keyA uint64, keyB uint64, timestampbits uint64,
         return false
     }
     bsm.body = bsm.body[:o+_{{.TT}}_BULK_SET_MSG_ENTRY_HEADER_LENGTH+len(value)]
+    {{if eq .t "value"}}
     binary.BigEndian.PutUint64(bsm.body[o:], keyA)
     binary.BigEndian.PutUint64(bsm.body[o+8:], keyB)
     binary.BigEndian.PutUint64(bsm.body[o+16:], timestampbits)
     binary.BigEndian.PutUint32(bsm.body[o+24:], uint32(len(value)))
+    {{else}}
+    binary.BigEndian.PutUint64(bsm.body[o:], keyA)
+    binary.BigEndian.PutUint64(bsm.body[o+8:], keyB)
+    binary.BigEndian.PutUint64(bsm.body[o+16:], nameKeyA)
+    binary.BigEndian.PutUint64(bsm.body[o+24:], nameKeyB)
+    binary.BigEndian.PutUint64(bsm.body[o+32:], timestampbits)
+    binary.BigEndian.PutUint32(bsm.body[o+40:], uint32(len(value)))
+    {{end}}
     copy(bsm.body[o+_{{.TT}}_BULK_SET_MSG_ENTRY_HEADER_LENGTH:], value)
     return true
 }

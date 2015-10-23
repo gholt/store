@@ -235,6 +235,7 @@ func (vs *DefaultValueStore) inPullReplication() {
 					continue
 				}
 				if t&_TSB_LOCAL_REMOVAL == 0 {
+					// TODO: Fix group part
 					if !bsm.add(k[i], k[i+1], t, v) {
 						break
 					}

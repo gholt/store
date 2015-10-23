@@ -87,7 +87,8 @@ func TestGroupBulkSetAckMsgIncoming(t *testing.T) {
 	}
 	vs.EnableAll()
 	defer vs.DisableAll()
-	ts, err := vs.write(1, 2, 0x300, []byte("testing"), true)
+	// TODO: Fix group part
+	ts, err := vs.write(1, 2, 0, 0, 0x300, []byte("testing"), true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -107,7 +108,8 @@ func TestGroupBulkSetAckMsgIncoming(t *testing.T) {
 	}
 	bsam := <-vs.bulkSetAckState.inFreeMsgChan
 	bsam.body = bsam.body[:0]
-	if !bsam.add(1, 2, 0x300) {
+	// TODO: Fix group part
+	if !bsam.add(1, 2, 0, 0, 0x300) {
 		t.Fatal("")
 	}
 	vs.bulkSetAckState.inMsgChan <- bsam
@@ -139,7 +141,8 @@ func TestGroupBulkSetAckMsgIncomingNoRing(t *testing.T) {
 	}
 	vs.EnableAll()
 	defer vs.DisableAll()
-	ts, err := vs.write(1, 2, 0x300, []byte("testing"), true)
+	// TODO: Fix group part
+	ts, err := vs.write(1, 2, 0, 0, 0x300, []byte("testing"), true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -159,7 +162,8 @@ func TestGroupBulkSetAckMsgIncomingNoRing(t *testing.T) {
 	}
 	bsam := <-vs.bulkSetAckState.inFreeMsgChan
 	bsam.body = bsam.body[:0]
-	if !bsam.add(1, 2, 0x300) {
+	// TODO: Fix group part
+	if !bsam.add(1, 2, 0, 0, 0x300) {
 		t.Fatal("")
 	}
 	vs.bulkSetAckState.inMsgChan <- bsam
@@ -207,8 +211,9 @@ func TestGroupBulkSetAckMsgOut(t *testing.T) {
 	}
 	bsam.Free()
 	bsam = vs.newOutBulkSetAckMsg()
-	bsam.add(1, 2, 0x300)
-	bsam.add(4, 5, 0x600)
+	// TODO: Fix group part
+	bsam.add(1, 2, 0, 0, 0x300)
+	bsam.add(4, 5, 0, 0, 0x600)
 	if bsam.MsgType() != _GROUP_BULK_SET_ACK_MSG_TYPE {
 		t.Fatal(bsam.MsgType())
 	}
@@ -244,7 +249,8 @@ func TestGroupBulkSetAckMsgOutWriteError(t *testing.T) {
 		t.Fatal("")
 	}
 	bsam := vs.newOutBulkSetAckMsg()
-	bsam.add(1, 2, 0x300)
+	// TODO: Fix group part
+	bsam.add(1, 2, 0, 0, 0x300)
 	_, err = bsam.WriteContent(&testErrorWriter{})
 	if err == nil {
 		t.Fatal(err)
@@ -261,10 +267,11 @@ func TestGroupBulkSetAckMsgOutHitCap(t *testing.T) {
 		t.Fatal("")
 	}
 	bsam := vs.newOutBulkSetAckMsg()
-	if !bsam.add(1, 2, 0x300) {
+	// TODO: Fix group part
+	if !bsam.add(1, 2, 0, 0, 0x300) {
 		t.Fatal("")
 	}
-	if bsam.add(4, 5, 0x600) {
+	if bsam.add(4, 5, 0, 0, 0x600) {
 		t.Fatal("")
 	}
 }

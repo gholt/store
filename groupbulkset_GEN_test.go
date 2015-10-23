@@ -144,18 +144,18 @@ func TestGroupBulkSetMsgWithoutAck(t *testing.T) {
 	defer vs.DisableAll()
 	bsm := <-vs.bulkSetState.inFreeMsgChan
 	bsm.body = bsm.body[:0]
-	if !bsm.add(1, 2, 0x300, []byte("testing")) {
+	if !bsm.add(1, 2, 3, 4, 0x500, []byte("testing")) {
 		t.Fatal("")
 	}
 	vs.bulkSetState.inMsgChan <- bsm
 	// only one of these, so if we get it back we know the previous data was
 	// processed
 	<-vs.bulkSetState.inFreeMsgChan
-	ts, v, err := vs.Read(1, 2, 0, 0, nil)
+	ts, v, err := vs.Read(1, 2, 3, 4, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if ts != 3 { // the bottom 8 bits are discarded for the public Read
+	if ts != 5 { // the bottom 8 bits are discarded for the public Read
 		t.Fatal(ts)
 	}
 	if string(v) != "testing" {
@@ -191,18 +191,18 @@ func TestGroupBulkSetMsgWithAck(t *testing.T) {
 	bsm := <-vs.bulkSetState.inFreeMsgChan
 	binary.BigEndian.PutUint64(bsm.header, 123)
 	bsm.body = bsm.body[:0]
-	if !bsm.add(1, 2, 0x300, []byte("testing")) {
+	if !bsm.add(1, 2, 3, 4, 0x500, []byte("testing")) {
 		t.Fatal("")
 	}
 	vs.bulkSetState.inMsgChan <- bsm
 	// only one of these, so if we get it back we know the previous data was
 	// processed
 	<-vs.bulkSetState.inFreeMsgChan
-	ts, v, err := vs.Read(1, 2, 0, 0, nil)
+	ts, v, err := vs.Read(1, 2, 3, 4, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if ts != 3 { // the bottom 8 bits are discarded for the public Read
+	if ts != 5 { // the bottom 8 bits are discarded for the public Read
 		t.Fatal(ts)
 	}
 	if string(v) != "testing" {
@@ -237,18 +237,18 @@ func TestGroupBulkSetMsgWithoutRing(t *testing.T) {
 	bsm := <-vs.bulkSetState.inFreeMsgChan
 	binary.BigEndian.PutUint64(bsm.header, 123)
 	bsm.body = bsm.body[:0]
-	if !bsm.add(1, 2, 0x300, []byte("testing")) {
+	if !bsm.add(1, 2, 3, 4, 0x500, []byte("testing")) {
 		t.Fatal("")
 	}
 	vs.bulkSetState.inMsgChan <- bsm
 	// only one of these, so if we get it back we know the previous data was
 	// processed
 	<-vs.bulkSetState.inFreeMsgChan
-	ts, v, err := vs.Read(1, 2, 0, 0, nil)
+	ts, v, err := vs.Read(1, 2, 3, 4, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if ts != 3 { // the bottom 8 bits are discarded for the public Read
+	if ts != 5 { // the bottom 8 bits are discarded for the public Read
 		t.Fatal(ts)
 	}
 	if string(v) != "testing" {
@@ -290,8 +290,8 @@ func TestGroupBulkSetMsgOut(t *testing.T) {
 	bsm.Free()
 	bsm = vs.newOutBulkSetMsg()
 	binary.BigEndian.PutUint64(bsm.header, 12345)
-	bsm.add(1, 2, 0x300, nil)
-	bsm.add(4, 5, 0x600, []byte("testing"))
+	bsm.add(1, 2, 3, 4, 0x500, nil)
+	bsm.add(6, 7, 8, 9, 0xa00, []byte("testing"))
 	if bsm.MsgType() != _GROUP_BULK_SET_MSG_TYPE {
 		t.Fatal(bsm.MsgType())
 	}
@@ -310,11 +310,19 @@ func TestGroupBulkSetMsgOut(t *testing.T) {
 		0, 0, 0, 0, 0, 0, 48, 57, // header
 		0, 0, 0, 0, 0, 0, 0, 1, // keyA
 		0, 0, 0, 0, 0, 0, 0, 2, // keyB
-		0, 0, 0, 0, 0, 0, 3, 0, // timestamp
+
+		0, 0, 0, 0, 0, 0, 0, 3, // nameKeyA
+		0, 0, 0, 0, 0, 0, 0, 4, // nameKeyB
+
+		0, 0, 0, 0, 0, 0, 5, 0, // timestamp
 		0, 0, 0, 0, // length
-		0, 0, 0, 0, 0, 0, 0, 4, // keyA
-		0, 0, 0, 0, 0, 0, 0, 5, // keyB
-		0, 0, 0, 0, 0, 0, 6, 0, // timestamp
+		0, 0, 0, 0, 0, 0, 0, 6, // keyA
+		0, 0, 0, 0, 0, 0, 0, 7, // keyB
+
+		0, 0, 0, 0, 0, 0, 0, 8, // nameKeyA
+		0, 0, 0, 0, 0, 0, 0, 9, // nameKeyB
+
+		0, 0, 0, 0, 0, 0, 10, 0, // timestamp
 		0, 0, 0, 7, // length
 		116, 101, 115, 116, 105, 110, 103, // "testing"
 	}) {
@@ -367,10 +375,10 @@ func TestGroupBulkSetMsgOutHitCap(t *testing.T) {
 		t.Fatal("")
 	}
 	bsm := vs.newOutBulkSetMsg()
-	if !bsm.add(1, 2, 0x300, []byte("1")) {
+	if !bsm.add(1, 2, 3, 4, 0x500, []byte("1")) {
 		t.Fatal("")
 	}
-	if bsm.add(4, 5, 0x600, []byte("12345678901234567890")) {
+	if bsm.add(6, 7, 8, 9, 0xa00, []byte("12345678901234567890")) {
 		t.Fatal("")
 	}
 }

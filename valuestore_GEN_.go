@@ -137,8 +137,9 @@ type DefaultValueStore struct {
 }
 
 type valueWriteReq struct {
-	keyA          uint64
-	keyB          uint64
+	keyA uint64
+	keyB uint64
+
 	timestampbits uint64
 	value         []byte
 	errChan       chan error
@@ -408,6 +409,7 @@ func (vs *DefaultValueStore) write(keyA uint64, keyB uint64, timestampbits uint6
 	vwr := <-vs.freeVWRChans[i]
 	vwr.keyA = keyA
 	vwr.keyB = keyB
+
 	vwr.timestampbits = timestampbits
 	vwr.value = value
 	vwr.internal = internal
@@ -433,6 +435,7 @@ func (vs *DefaultValueStore) Delete(keyA uint64, keyB uint64, timestampmicro int
 		atomic.AddInt32(&vs.deleteErrors, 1)
 		return 0, fmt.Errorf("timestamp %d > %d", timestampmicro, TIMESTAMPMICRO_MAX)
 	}
+	// TODO: Fix group part
 	ptimestampbits, err := vs.write(keyA, keyB, (uint64(timestampmicro)<<_TSB_UTIL_BITS)|_TSB_DELETION, nil, true)
 	if err != nil {
 		atomic.AddInt32(&vs.deleteErrors, 1)
