@@ -160,12 +160,12 @@ func (vs *DefaultValueStore) compactionPass() {
 // compaction and also returns the extracted namets.
 // TODO: This doesn't need to be its own func anymore
 func (vs *DefaultValueStore) compactionCandidate(name string) (int64, bool) {
-	if !strings.HasSuffix(name, ".valuestoc") {
+	if !strings.HasSuffix(name, ".valuetoc") {
 		return 0, false
 	}
 	var namets int64
 	_, n := path.Split(name)
-	namets, err := strconv.ParseInt(n[:len(n)-len(".valuestoc")], 10, 64)
+	namets, err := strconv.ParseInt(n[:len(n)-len(".valuetoc")], 10, 64)
 	if err != nil {
 		vs.logError("bad timestamp in name: %#v\n", name)
 		return 0, false
@@ -207,7 +207,7 @@ func (vs *DefaultValueStore) compactionWorker(jobChan chan *valueCompactionJob, 
 				}
 				err = os.Remove(c.name[:len(c.name)-len("toc")])
 				if err != nil {
-					vs.logCritical("Unable to remove %s values %s\n", c.name, err)
+					vs.logCritical("Unable to remove %s %s\n", c.name[:len(c.name)-len("toc")], err)
 					continue
 				}
 				err = vs.closeLocBlock(c.candidateBlockID)
@@ -249,7 +249,7 @@ func (vs *DefaultValueStore) compactionWorker(jobChan chan *valueCompactionJob, 
 					}
 					err = os.Remove(c.name[:len(c.name)-len("toc")])
 					if err != nil {
-						vs.logCritical("Unable to remove %s values %s\n", c.name, err)
+						vs.logCritical("Unable to remove %s %s\n", c.name[:len(c.name)-len("toc")], err)
 						continue
 					}
 					err = vs.closeLocBlock(c.candidateBlockID)
