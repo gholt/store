@@ -137,7 +137,7 @@ func (vs *DefaultValueStore) outPushReplicationPass() {
 	// To avoid memory churn, the scratchpad areas are allocated just once and
 	// passed in to the workers.
 	for len(vs.pushReplicationState.outLists) < int(workerMax+1) {
-		vs.pushReplicationState.outLists = append(vs.pushReplicationState.outLists, make([]uint64, vs.bulkSetState.msgCap/_VALUE_BULK_SET_MSG_MIN_ENTRY_LENGTH))
+		vs.pushReplicationState.outLists = append(vs.pushReplicationState.outLists, make([]uint64, vs.bulkSetState.msgCap/_VALUE_BULK_SET_MSG_MIN_ENTRY_LENGTH*2))
 	}
 	for len(vs.pushReplicationState.outValBufs) < int(workerMax+1) {
 		vs.pushReplicationState.outValBufs = append(vs.pushReplicationState.outValBufs, make([]byte, vs.valueCap))
@@ -190,7 +190,6 @@ func (vs *DefaultValueStore) outPushReplicationPass() {
 		var timestampbits uint64
 		var err error
 		for i := 0; i < len(list); i += 2 {
-			// TODO: nameKey needs to go all throughout the code.
 			timestampbits, valbuf, err = vs.read(list[i], list[i+1], valbuf[:0])
 			// This might mean we need to send a deletion or it might mean the
 			// key has been completely removed from our records
@@ -203,7 +202,6 @@ func (vs *DefaultValueStore) outPushReplicationPass() {
 				continue
 			}
 			if timestampbits&_TSB_LOCAL_REMOVAL == 0 && timestampbits < cutoff && (timestampbits&_TSB_DELETION == 0 || timestampbits >= tombstoneCutoff) {
-				// TODO: Fix group part
 				if !bsm.add(list[i], list[i+1], timestampbits, valbuf) {
 					break
 				}
