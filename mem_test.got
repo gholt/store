@@ -6,7 +6,7 @@ import (
 )
 
 func Test{{.T}}ValuesMemRead(t *testing.T) {
-    vs, err := New{{.T}}Store(nil)
+    vs, err := New{{.T}}Store(lowMem{{.T}}StoreConfig())
     if err != nil {
         t.Fatal("")
     }

@@ -9,7 +9,9 @@ import (
 )
 
 func Test{{.T}}BulkSetAckRead(t *testing.T) {
-    vs, err := New{{.T}}Store(&{{.T}}StoreConfig{MsgRing: &msgRingPlaceholder{}})
+    cfg := lowMem{{.T}}StoreConfig()
+    cfg.MsgRing = &msgRingPlaceholder{}
+    vs, err := New{{.T}}Store(cfg)
     if err != nil {
         t.Fatal("")
     }
@@ -43,7 +45,10 @@ func Test{{.T}}BulkSetAckRead(t *testing.T) {
 }
 
 func Test{{.T}}BulkSetAckReadLowSendCap(t *testing.T) {
-    vs, err := New{{.T}}Store(&{{.T}}StoreConfig{MsgRing: &msgRingPlaceholder{}, BulkSetAckMsgCap: 1})
+    cfg := lowMem{{.T}}StoreConfig()
+    cfg.MsgRing = &msgRingPlaceholder{}
+    cfg.BulkSetAckMsgCap = 1
+    vs, err := New{{.T}}Store(cfg)
     if err != nil {
         t.Fatal("")
     }
@@ -72,11 +77,11 @@ func Test{{.T}}BulkSetAckMsgIncoming(t *testing.T) {
     r := b.Ring()
     r.SetLocalNode(n.ID() + 1) // so we're not responsible for anything
     m := &msgRingPlaceholder{ring: r}
-    vs, err := New{{.T}}Store(&{{.T}}StoreConfig{
-        MsgRing:             m,
-        InBulkSetAckWorkers: 1,
-        InBulkSetAckMsgs:    1,
-    })
+    cfg := lowMem{{.T}}StoreConfig()
+    cfg.MsgRing = m
+    cfg.InBulkSetAckWorkers = 1
+    cfg.InBulkSetAckMsgs = 1
+    vs, err := New{{.T}}Store(cfg)
     if err != nil {
         t.Fatal("")
     }
@@ -124,11 +129,11 @@ func Test{{.T}}BulkSetAckMsgIncoming(t *testing.T) {
 
 func Test{{.T}}BulkSetAckMsgIncomingNoRing(t *testing.T) {
     m := &msgRingPlaceholder{}
-    vs, err := New{{.T}}Store(&{{.T}}StoreConfig{
-        MsgRing:             m,
-        InBulkSetAckWorkers: 1,
-        InBulkSetAckMsgs:    1,
-    })
+    cfg := lowMem{{.T}}StoreConfig()
+    cfg.MsgRing = m
+    cfg.InBulkSetAckWorkers = 1
+    cfg.InBulkSetAckMsgs = 1
+    vs, err := New{{.T}}Store(cfg)
     if err != nil {
         t.Fatal("")
     }
@@ -176,7 +181,9 @@ func Test{{.T}}BulkSetAckMsgIncomingNoRing(t *testing.T) {
 }
 
 func Test{{.T}}BulkSetAckMsgOut(t *testing.T) {
-    vs, err := New{{.T}}Store(&{{.T}}StoreConfig{MsgRing: &msgRingPlaceholder{}})
+    cfg := lowMem{{.T}}StoreConfig()
+    cfg.MsgRing = &msgRingPlaceholder{}
+    vs, err := New{{.T}}Store(cfg)
     if err != nil {
         t.Fatal("")
     }
@@ -230,7 +237,9 @@ func Test{{.T}}BulkSetAckMsgOut(t *testing.T) {
 }
 
 func Test{{.T}}BulkSetAckMsgOutWriteError(t *testing.T) {
-    vs, err := New{{.T}}Store(&{{.T}}StoreConfig{MsgRing: &msgRingPlaceholder{}})
+    cfg := lowMem{{.T}}StoreConfig()
+    cfg.MsgRing = &msgRingPlaceholder{}
+    vs, err := New{{.T}}Store(cfg)
     if err != nil {
         t.Fatal("")
     }
@@ -244,7 +253,10 @@ func Test{{.T}}BulkSetAckMsgOutWriteError(t *testing.T) {
 }
 
 func Test{{.T}}BulkSetAckMsgOutHitCap(t *testing.T) {
-    vs, err := New{{.T}}Store(&{{.T}}StoreConfig{MsgRing: &msgRingPlaceholder{}, BulkSetAckMsgCap: _{{.TT}}_BULK_SET_ACK_MSG_ENTRY_LENGTH + 3})
+    cfg := lowMem{{.T}}StoreConfig()
+    cfg.MsgRing = &msgRingPlaceholder{}
+    cfg.BulkSetAckMsgCap = _{{.TT}}_BULK_SET_ACK_MSG_ENTRY_LENGTH + 3
+    vs, err := New{{.T}}Store(cfg)
     if err != nil {
         t.Fatal("")
     }

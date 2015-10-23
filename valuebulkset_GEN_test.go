@@ -11,7 +11,9 @@ import (
 )
 
 func TestValueBulkSetReadObviouslyTooShort(t *testing.T) {
-	vs, err := NewValueStore(&ValueStoreConfig{MsgRing: &msgRingPlaceholder{}})
+	cfg := lowMemValueStoreConfig()
+	cfg.MsgRing = &msgRingPlaceholder{}
+	vs, err := NewValueStore(cfg)
 	if err != nil {
 		t.Fatal("")
 	}
@@ -46,7 +48,9 @@ func TestValueBulkSetReadObviouslyTooShort(t *testing.T) {
 }
 
 func TestValueBulkSetRead(t *testing.T) {
-	vs, err := NewValueStore(&ValueStoreConfig{MsgRing: &msgRingPlaceholder{}})
+	cfg := lowMemValueStoreConfig()
+	cfg.MsgRing = &msgRingPlaceholder{}
+	vs, err := NewValueStore(cfg)
 	if err != nil {
 		t.Fatal("")
 	}
@@ -93,7 +97,10 @@ func TestValueBulkSetRead(t *testing.T) {
 }
 
 func TestValueBulkSetReadLowSendCap(t *testing.T) {
-	vs, err := NewValueStore(&ValueStoreConfig{MsgRing: &msgRingPlaceholder{}, BulkSetMsgCap: _VALUE_BULK_SET_MSG_HEADER_LENGTH + 1})
+	cfg := lowMemValueStoreConfig()
+	cfg.MsgRing = &msgRingPlaceholder{}
+	cfg.BulkSetMsgCap = _VALUE_BULK_SET_MSG_HEADER_LENGTH + 1
+	vs, err := NewValueStore(cfg)
 	if err != nil {
 		t.Fatal("")
 	}
@@ -125,11 +132,11 @@ func TestValueBulkSetMsgWithoutAck(t *testing.T) {
 	r := b.Ring()
 	r.SetLocalNode(n.ID())
 	m := &msgRingPlaceholder{ring: r}
-	vs, err := NewValueStore(&ValueStoreConfig{
-		MsgRing:          m,
-		InBulkSetWorkers: 1,
-		InBulkSetMsgs:    1,
-	})
+	cfg := lowMemValueStoreConfig()
+	cfg.MsgRing = m
+	cfg.InBulkSetWorkers = 1
+	cfg.InBulkSetMsgs = 1
+	vs, err := NewValueStore(cfg)
 	if err != nil {
 		t.Fatal("")
 	}
@@ -171,11 +178,11 @@ func TestValueBulkSetMsgWithAck(t *testing.T) {
 	r := b.Ring()
 	r.SetLocalNode(n.ID())
 	m := &msgRingPlaceholder{ring: r}
-	vs, err := NewValueStore(&ValueStoreConfig{
-		MsgRing:          m,
-		InBulkSetWorkers: 1,
-		InBulkSetMsgs:    1,
-	})
+	cfg := lowMemValueStoreConfig()
+	cfg.MsgRing = m
+	cfg.InBulkSetWorkers = 1
+	cfg.InBulkSetMsgs = 1
+	vs, err := NewValueStore(cfg)
 	if err != nil {
 		t.Fatal("")
 	}
@@ -217,11 +224,11 @@ func TestValueBulkSetMsgWithAck(t *testing.T) {
 
 func TestValueBulkSetMsgWithoutRing(t *testing.T) {
 	m := &msgRingPlaceholder{}
-	vs, err := NewValueStore(&ValueStoreConfig{
-		MsgRing:          m,
-		InBulkSetWorkers: 1,
-		InBulkSetMsgs:    1,
-	})
+	cfg := lowMemValueStoreConfig()
+	cfg.MsgRing = m
+	cfg.InBulkSetWorkers = 1
+	cfg.InBulkSetMsgs = 1
+	vs, err := NewValueStore(cfg)
 	if err != nil {
 		t.Fatal("")
 	}
@@ -256,7 +263,9 @@ func TestValueBulkSetMsgWithoutRing(t *testing.T) {
 }
 
 func TestValueBulkSetMsgOut(t *testing.T) {
-	vs, err := NewValueStore(&ValueStoreConfig{MsgRing: &msgRingPlaceholder{}})
+	cfg := lowMemValueStoreConfig()
+	cfg.MsgRing = &msgRingPlaceholder{}
+	vs, err := NewValueStore(cfg)
 	if err != nil {
 		t.Fatal("")
 	}
@@ -322,7 +331,9 @@ func TestValueBulkSetMsgOutDefaultsToFromLocalNode(t *testing.T) {
 	}
 	r := b.Ring()
 	r.SetLocalNode(n.ID())
-	vs, err := NewValueStore(&ValueStoreConfig{MsgRing: &msgRingPlaceholder{ring: r}})
+	cfg := lowMemValueStoreConfig()
+	cfg.MsgRing = &msgRingPlaceholder{ring: r}
+	vs, err := NewValueStore(cfg)
 	if err != nil {
 		t.Fatal("")
 	}
@@ -333,7 +344,9 @@ func TestValueBulkSetMsgOutDefaultsToFromLocalNode(t *testing.T) {
 }
 
 func TestValueBulkSetMsgOutWriteError(t *testing.T) {
-	vs, err := NewValueStore(&ValueStoreConfig{MsgRing: &msgRingPlaceholder{}})
+	cfg := lowMemValueStoreConfig()
+	cfg.MsgRing = &msgRingPlaceholder{}
+	vs, err := NewValueStore(cfg)
 	if err != nil {
 		t.Fatal("")
 	}
@@ -346,7 +359,10 @@ func TestValueBulkSetMsgOutWriteError(t *testing.T) {
 }
 
 func TestValueBulkSetMsgOutHitCap(t *testing.T) {
-	vs, err := NewValueStore(&ValueStoreConfig{MsgRing: &msgRingPlaceholder{}, BulkSetMsgCap: _VALUE_BULK_SET_MSG_HEADER_LENGTH + _VALUE_BULK_SET_MSG_ENTRY_HEADER_LENGTH + 3})
+	cfg := lowMemValueStoreConfig()
+	cfg.MsgRing = &msgRingPlaceholder{}
+	cfg.BulkSetMsgCap = _VALUE_BULK_SET_MSG_HEADER_LENGTH + _VALUE_BULK_SET_MSG_ENTRY_HEADER_LENGTH + 3
+	vs, err := NewValueStore(cfg)
 	if err != nil {
 		t.Fatal("")
 	}

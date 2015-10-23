@@ -6,7 +6,7 @@ import (
 )
 
 func TestGroupValuesMemRead(t *testing.T) {
-	vs, err := NewGroupStore(nil)
+	vs, err := NewGroupStore(lowMemGroupStoreConfig())
 	if err != nil {
 		t.Fatal("")
 	}

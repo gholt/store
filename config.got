@@ -352,8 +352,8 @@ func resolve{{.T}}StoreConfig(c *{{.T}}StoreConfig) *{{.T}}StoreConfig {
         cfg.MsgCap = 16 * 1024 * 1024
     }
     // TODO: This minimum needs to be the max overhead.
-    if cfg.MsgCap < 1 {
-        cfg.MsgCap = 1
+    if cfg.MsgCap < 1024 {
+        cfg.MsgCap = 1024
     }
     if env := os.Getenv("{{.TT}}STORE_MSG_TIMEOUT"); env != "" {
         if val, err := strconv.Atoi(env); err == nil {

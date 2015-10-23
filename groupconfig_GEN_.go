@@ -352,8 +352,8 @@ func resolveGroupStoreConfig(c *GroupStoreConfig) *GroupStoreConfig {
 		cfg.MsgCap = 16 * 1024 * 1024
 	}
 	// TODO: This minimum needs to be the max overhead.
-	if cfg.MsgCap < 1 {
-		cfg.MsgCap = 1
+	if cfg.MsgCap < 1024 {
+		cfg.MsgCap = 1024
 	}
 	if env := os.Getenv("GROUPSTORE_MSG_TIMEOUT"); env != "" {
 		if val, err := strconv.Atoi(env); err == nil {

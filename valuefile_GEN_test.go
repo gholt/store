@@ -8,7 +8,7 @@ import (
 )
 
 func TestValueValuesFileReading(t *testing.T) {
-	vs, err := NewValueStore(nil)
+	vs, err := NewValueStore(lowMemValueStoreConfig())
 	if err != nil {
 		t.Fatal("")
 	}
@@ -95,7 +95,9 @@ func TestValueValuesFileReading(t *testing.T) {
 }
 
 func TestValueValuesFileWritingEmpty(t *testing.T) {
-	vs, err := NewValueStore(nil)
+	cfg := lowMemValueStoreConfig()
+	cfg.ChecksumInterval = 64*1024 - 4
+	vs, err := NewValueStore(cfg)
 	if err != nil {
 		t.Fatal("")
 	}
@@ -139,7 +141,9 @@ func TestValueValuesFileWritingEmpty(t *testing.T) {
 }
 
 func TestValueValuesFileWritingEmpty2(t *testing.T) {
-	vs, err := NewValueStore(nil)
+	cfg := lowMemValueStoreConfig()
+	cfg.ChecksumInterval = 64*1024 - 4
+	vs, err := NewValueStore(cfg)
 	if err != nil {
 		t.Fatal("")
 	}
@@ -191,7 +195,9 @@ func TestValueValuesFileWritingEmpty2(t *testing.T) {
 }
 
 func TestValueValuesFileWriting(t *testing.T) {
-	vs, err := NewValueStore(nil)
+	cfg := lowMemValueStoreConfig()
+	cfg.ChecksumInterval = 64*1024 - 4
+	vs, err := NewValueStore(cfg)
 	if err != nil {
 		t.Fatal("")
 	}
@@ -242,7 +248,9 @@ func TestValueValuesFileWriting(t *testing.T) {
 }
 
 func TestValueValuesFileWritingMore(t *testing.T) {
-	vs, err := NewValueStore(nil)
+	cfg := lowMemValueStoreConfig()
+	cfg.ChecksumInterval = 64*1024 - 4
+	vs, err := NewValueStore(cfg)
 	if err != nil {
 		t.Fatal("")
 	}
@@ -290,7 +298,9 @@ func TestValueValuesFileWritingMore(t *testing.T) {
 }
 
 func TestValueValuesFileWritingMultiple(t *testing.T) {
-	vs, err := NewValueStore(nil)
+	cfg := lowMemValueStoreConfig()
+	cfg.ChecksumInterval = 64*1024 - 4
+	vs, err := NewValueStore(cfg)
 	if err != nil {
 		t.Fatal("")
 	}

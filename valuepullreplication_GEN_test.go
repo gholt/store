@@ -63,7 +63,9 @@ func TestValuePullReplicationSimple(t *testing.T) {
 	r := b.Ring()
 	r.SetLocalNode(n.ID())
 	m := &msgRingValuePullReplicationTester{ring: r}
-	vs, err := NewValueStore(&ValueStoreConfig{MsgRing: m})
+	cfg := lowMemValueStoreConfig()
+	cfg.MsgRing = m
+	vs, err := NewValueStore(cfg)
 	if err != nil {
 		t.Fatal("")
 	}

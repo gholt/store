@@ -9,7 +9,9 @@ import (
 )
 
 func TestGroupBulkSetAckRead(t *testing.T) {
-	vs, err := NewGroupStore(&GroupStoreConfig{MsgRing: &msgRingPlaceholder{}})
+	cfg := lowMemGroupStoreConfig()
+	cfg.MsgRing = &msgRingPlaceholder{}
+	vs, err := NewGroupStore(cfg)
 	if err != nil {
 		t.Fatal("")
 	}
@@ -43,7 +45,10 @@ func TestGroupBulkSetAckRead(t *testing.T) {
 }
 
 func TestGroupBulkSetAckReadLowSendCap(t *testing.T) {
-	vs, err := NewGroupStore(&GroupStoreConfig{MsgRing: &msgRingPlaceholder{}, BulkSetAckMsgCap: 1})
+	cfg := lowMemGroupStoreConfig()
+	cfg.MsgRing = &msgRingPlaceholder{}
+	cfg.BulkSetAckMsgCap = 1
+	vs, err := NewGroupStore(cfg)
 	if err != nil {
 		t.Fatal("")
 	}
@@ -72,11 +77,11 @@ func TestGroupBulkSetAckMsgIncoming(t *testing.T) {
 	r := b.Ring()
 	r.SetLocalNode(n.ID() + 1) // so we're not responsible for anything
 	m := &msgRingPlaceholder{ring: r}
-	vs, err := NewGroupStore(&GroupStoreConfig{
-		MsgRing:             m,
-		InBulkSetAckWorkers: 1,
-		InBulkSetAckMsgs:    1,
-	})
+	cfg := lowMemGroupStoreConfig()
+	cfg.MsgRing = m
+	cfg.InBulkSetAckWorkers = 1
+	cfg.InBulkSetAckMsgs = 1
+	vs, err := NewGroupStore(cfg)
 	if err != nil {
 		t.Fatal("")
 	}
@@ -124,11 +129,11 @@ func TestGroupBulkSetAckMsgIncoming(t *testing.T) {
 
 func TestGroupBulkSetAckMsgIncomingNoRing(t *testing.T) {
 	m := &msgRingPlaceholder{}
-	vs, err := NewGroupStore(&GroupStoreConfig{
-		MsgRing:             m,
-		InBulkSetAckWorkers: 1,
-		InBulkSetAckMsgs:    1,
-	})
+	cfg := lowMemGroupStoreConfig()
+	cfg.MsgRing = m
+	cfg.InBulkSetAckWorkers = 1
+	cfg.InBulkSetAckMsgs = 1
+	vs, err := NewGroupStore(cfg)
 	if err != nil {
 		t.Fatal("")
 	}
@@ -176,7 +181,9 @@ func TestGroupBulkSetAckMsgIncomingNoRing(t *testing.T) {
 }
 
 func TestGroupBulkSetAckMsgOut(t *testing.T) {
-	vs, err := NewGroupStore(&GroupStoreConfig{MsgRing: &msgRingPlaceholder{}})
+	cfg := lowMemGroupStoreConfig()
+	cfg.MsgRing = &msgRingPlaceholder{}
+	vs, err := NewGroupStore(cfg)
 	if err != nil {
 		t.Fatal("")
 	}
@@ -230,7 +237,9 @@ func TestGroupBulkSetAckMsgOut(t *testing.T) {
 }
 
 func TestGroupBulkSetAckMsgOutWriteError(t *testing.T) {
-	vs, err := NewGroupStore(&GroupStoreConfig{MsgRing: &msgRingPlaceholder{}})
+	cfg := lowMemGroupStoreConfig()
+	cfg.MsgRing = &msgRingPlaceholder{}
+	vs, err := NewGroupStore(cfg)
 	if err != nil {
 		t.Fatal("")
 	}
@@ -244,7 +253,10 @@ func TestGroupBulkSetAckMsgOutWriteError(t *testing.T) {
 }
 
 func TestGroupBulkSetAckMsgOutHitCap(t *testing.T) {
-	vs, err := NewGroupStore(&GroupStoreConfig{MsgRing: &msgRingPlaceholder{}, BulkSetAckMsgCap: _GROUP_BULK_SET_ACK_MSG_ENTRY_LENGTH + 3})
+	cfg := lowMemGroupStoreConfig()
+	cfg.MsgRing = &msgRingPlaceholder{}
+	cfg.BulkSetAckMsgCap = _GROUP_BULK_SET_ACK_MSG_ENTRY_LENGTH + 3
+	vs, err := NewGroupStore(cfg)
 	if err != nil {
 		t.Fatal("")
 	}
