@@ -30,6 +30,7 @@ import (
 type ValueStore interface {
 	Lookup(keyA uint64, keyB uint64) (int64, uint32, error)
 	Read(keyA uint64, keyB uint64, value []byte) (int64, []byte, error)
+
 	Write(keyA uint64, keyB uint64, timestamp int64, value []byte) (int64, error)
 	Delete(keyA uint64, keyB uint64, timestamp int64) (int64, error)
 	EnableAll()
@@ -104,6 +105,8 @@ type DefaultValueStore struct {
 	lookupErrors                 int32
 	reads                        int32
 	readErrors                   int32
+	readGroups                   int32
+	readGroupItems               int32
 	writes                       int32
 	writeErrors                  int32
 	writesOverridden             int32

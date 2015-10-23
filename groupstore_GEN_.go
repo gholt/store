@@ -30,6 +30,9 @@ import (
 type GroupStore interface {
 	Lookup(keyA uint64, keyB uint64, nameKeyA uint64, nameKeyB uint64) (int64, uint32, error)
 	Read(keyA uint64, keyB uint64, nameKeyA uint64, nameKeyB uint64, value []byte) (int64, []byte, error)
+
+	ReadGroup(keyA uint64, keyB uint64) (int, chan *ReadGroupItem)
+
 	Write(keyA uint64, keyB uint64, nameKeyA uint64, nameKeyB uint64, timestamp int64, value []byte) (int64, error)
 	Delete(keyA uint64, keyB uint64, nameKeyA uint64, nameKeyB uint64, timestamp int64) (int64, error)
 	EnableAll()
@@ -104,6 +107,8 @@ type DefaultGroupStore struct {
 	lookupErrors                 int32
 	reads                        int32
 	readErrors                   int32
+	readGroups                   int32
+	readGroupItems               int32
 	writes                       int32
 	writeErrors                  int32
 	writesOverridden             int32
@@ -380,6 +385,44 @@ func (vs *DefaultGroupStore) read(keyA uint64, keyB uint64, nameKeyA uint64, nam
 		return timestampbits, value, ErrNotFound
 	}
 	return vs.locBlock(id).read(keyA, keyB, nameKeyA, nameKeyB, timestampbits, offset, length, value)
+}
+
+type ReadGroupItem struct {
+	Error          error
+	NameKeyA       uint64
+	NameKeyB       uint64
+	TimestampMicro uint64
+	Value          []byte
+}
+
+func (vs *DefaultGroupStore) ReadGroup(keyA uint64, keyB uint64) (int, chan *ReadGroupItem) {
+	atomic.AddInt32(&vs.readGroups, 1)
+	items := vs.vlm.GetGroup(keyA, keyB)
+	c := make(chan *ReadGroupItem, vs.workers)
+	if len(items) == 0 {
+		close(c)
+		return 0, c
+	}
+	atomic.AddInt32(&vs.readGroupItems, int32(len(items)))
+	go func() {
+		for _, item := range items {
+			t, v, err := vs.read(keyA, keyB, item.NameKeyA, item.NameKeyB, nil)
+			if err != nil {
+				if err != ErrNotFound {
+					c <- &ReadGroupItem{Error: err}
+					break
+				}
+			}
+			c <- &ReadGroupItem{
+				NameKeyA:       item.NameKeyA,
+				NameKeyB:       item.NameKeyB,
+				TimestampMicro: t,
+				Value:          v,
+			}
+		}
+		close(c)
+	}()
+	return len(items), c
 }
 
 // Write stores timestampmicro, value for keyA, keyB, nameKeyA, nameKeyB

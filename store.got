@@ -30,6 +30,9 @@ import (
 type {{.T}}Store interface {
     Lookup(keyA uint64, keyB uint64{{if eq .t "group"}}, nameKeyA uint64, nameKeyB uint64{{end}}) (int64, uint32, error)
     Read(keyA uint64, keyB uint64{{if eq .t "group"}}, nameKeyA uint64, nameKeyB uint64{{end}}, value []byte) (int64, []byte, error)
+    {{if eq .t "group"}}
+    ReadGroup(keyA uint64, keyB uint64) (int, chan *ReadGroupItem)
+    {{end}}
     Write(keyA uint64, keyB uint64{{if eq .t "group"}}, nameKeyA uint64, nameKeyB uint64{{end}}, timestamp int64, value []byte) (int64, error)
     Delete(keyA uint64, keyB uint64{{if eq .t "group"}}, nameKeyA uint64, nameKeyB uint64{{end}}, timestamp int64) (int64, error)
     EnableAll()
@@ -104,6 +107,8 @@ type Default{{.T}}Store struct {
     lookupErrors                 int32
     reads                        int32
     readErrors                   int32
+    readGroups                   int32
+    readGroupItems               int32
     writes                       int32
     writeErrors                  int32
     writesOverridden             int32
@@ -381,6 +386,46 @@ func (vs *Default{{.T}}Store) read(keyA uint64, keyB uint64{{if eq .t "group"}},
     }
     return vs.locBlock(id).read(keyA, keyB{{if eq .t "group"}}, nameKeyA, nameKeyB{{end}}, timestampbits, offset, length, value)
 }
+
+{{if eq .t "group"}}
+type ReadGroupItem struct {
+    Error           error
+    NameKeyA        uint64
+    NameKeyB        uint64
+    TimestampMicro  uint64
+    Value           []byte
+}
+
+func (vs *Default{{.T}}Store) ReadGroup(keyA uint64, keyB uint64) (int, chan *ReadGroupItem) {
+    atomic.AddInt32(&vs.readGroups, 1)
+    items := vs.vlm.GetGroup(keyA, keyB)
+    c := make(chan *ReadGroupItem, vs.workers)
+    if len(items) == 0 {
+        close(c)
+        return 0, c
+    }
+    atomic.AddInt32(&vs.readGroupItems, int32(len(items)))
+    go func() {
+        for _, item := range items {
+            t, v, err := vs.read(keyA, keyB, item.NameKeyA, item.NameKeyB, nil)
+            if err != nil {
+                if err != ErrNotFound {
+                    c <- &ReadGroupItem{Error: err}
+                    break
+                }
+            }
+            c <- &ReadGroupItem{
+                NameKeyA:       item.NameKeyA,
+                NameKeyB:       item.NameKeyB,
+                TimestampMicro: t,
+                Value:          v,
+            }
+        }
+        close(c)
+    }()
+    return len(items), c
+}
+{{end}}
 
 // Write stores timestampmicro, value for keyA, keyB{{if eq .t "group"}}, nameKeyA, nameKeyB{{end}}
 // and returns the previously stored timestampmicro or returns any error; a

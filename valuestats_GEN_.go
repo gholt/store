@@ -21,6 +21,10 @@ type ValueStoreStats struct {
 	Reads int32
 	// ReadErrors is the number of errors returned by Read.
 	ReadErrors int32
+	// ReadGroups is the number of calls to ReadGroup.
+	ReadGroups int32
+	// ReadGroupItems is the number of items ReadGroup has encountered.
+	ReadGroupItems int32
 	// Writes is the number of calls to Write.
 	Writes int32
 	// WriteErrors is the number of errors returned by Write.
@@ -187,6 +191,8 @@ func (vs *DefaultValueStore) Stats(debug bool) fmt.Stringer {
 		LookupErrors:                 atomic.LoadInt32(&vs.lookupErrors),
 		Reads:                        atomic.LoadInt32(&vs.reads),
 		ReadErrors:                   atomic.LoadInt32(&vs.readErrors),
+		ReadGroups:                   atomic.LoadInt32(&vs.readGroups),
+		ReadGroupItems:               atomic.LoadInt32(&vs.readGroupItems),
 		Writes:                       atomic.LoadInt32(&vs.writes),
 		WriteErrors:                  atomic.LoadInt32(&vs.writeErrors),
 		WritesOverridden:             atomic.LoadInt32(&vs.writesOverridden),
@@ -228,6 +234,8 @@ func (vs *DefaultValueStore) Stats(debug bool) fmt.Stringer {
 	atomic.AddInt32(&vs.lookupErrors, -stats.LookupErrors)
 	atomic.AddInt32(&vs.reads, -stats.Reads)
 	atomic.AddInt32(&vs.readErrors, -stats.ReadErrors)
+	atomic.AddInt32(&vs.readGroups, -stats.ReadGroups)
+	atomic.AddInt32(&vs.readGroupItems, -stats.ReadGroupItems)
 	atomic.AddInt32(&vs.writes, -stats.Writes)
 	atomic.AddInt32(&vs.writeErrors, -stats.WriteErrors)
 	atomic.AddInt32(&vs.writesOverridden, -stats.WritesOverridden)
@@ -322,6 +330,8 @@ func (stats *ValueStoreStats) String() string {
 		{"LookupErrors", fmt.Sprintf("%d", stats.LookupErrors)},
 		{"Reads", fmt.Sprintf("%d", stats.Reads)},
 		{"ReadErrors", fmt.Sprintf("%d", stats.ReadErrors)},
+		{"ReadGroups", fmt.Sprintf("%d", stats.ReadGroups)},
+		{"ReadGroupItems", fmt.Sprintf("%d", stats.ReadGroupItems)},
 		{"Writes", fmt.Sprintf("%d", stats.Writes)},
 		{"WriteErrors", fmt.Sprintf("%d", stats.WriteErrors)},
 		{"WritesOverridden", fmt.Sprintf("%d", stats.WritesOverridden)},
