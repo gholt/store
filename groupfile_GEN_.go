@@ -50,7 +50,7 @@ type groupFileWriteBuf struct {
 
 func newGroupFile(vs *DefaultGroupStore, bts int64, openReadSeeker func(name string) (io.ReadSeeker, error)) (*groupFile, error) {
 	vf := &groupFile{vs: vs, bts: bts}
-	vf.name = path.Join(vs.path, fmt.Sprintf("%019d.values", vf.bts))
+	vf.name = path.Join(vs.path, fmt.Sprintf("%019d.group", vf.bts))
 	vf.readerFPs = make([]brimutil.ChecksummedReader, vs.fileReaders)
 	vf.readerLocks = make([]sync.Mutex, len(vf.readerFPs))
 	vf.readerLens = make([][]byte, len(vf.readerFPs))
@@ -73,7 +73,7 @@ func newGroupFile(vs *DefaultGroupStore, bts int64, openReadSeeker func(name str
 
 func createGroupFile(vs *DefaultGroupStore, createWriteCloser func(name string) (io.WriteCloser, error), openReadSeeker func(name string) (io.ReadSeeker, error)) (*groupFile, error) {
 	vf := &groupFile{vs: vs, bts: time.Now().UnixNano()}
-	vf.name = path.Join(vs.path, fmt.Sprintf("%019d.values", vf.bts))
+	vf.name = path.Join(vs.path, fmt.Sprintf("%019d.group", vf.bts))
 	fp, err := createWriteCloser(vf.name)
 	if err != nil {
 		return nil, err
@@ -121,7 +121,6 @@ func (vf *groupFile) timestampnano() int64 {
 	return vf.bts
 }
 
-// TODO: nameKey needs to go all throughout the code.
 func (vf *groupFile) read(keyA uint64, keyB uint64, nameKeyA uint64, nameKeyB uint64, timestampbits uint64, offset uint32, length uint32, value []byte) (uint64, []byte, error) {
 	// TODO: Add calling Verify occasionally on the readerFPs, maybe randomly
 	// inside here or maybe randomly requested by the caller.

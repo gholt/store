@@ -50,7 +50,7 @@ type valueFileWriteBuf struct {
 
 func newValueFile(vs *DefaultValueStore, bts int64, openReadSeeker func(name string) (io.ReadSeeker, error)) (*valueFile, error) {
 	vf := &valueFile{vs: vs, bts: bts}
-	vf.name = path.Join(vs.path, fmt.Sprintf("%019d.values", vf.bts))
+	vf.name = path.Join(vs.path, fmt.Sprintf("%019d.value", vf.bts))
 	vf.readerFPs = make([]brimutil.ChecksummedReader, vs.fileReaders)
 	vf.readerLocks = make([]sync.Mutex, len(vf.readerFPs))
 	vf.readerLens = make([][]byte, len(vf.readerFPs))
@@ -73,7 +73,7 @@ func newValueFile(vs *DefaultValueStore, bts int64, openReadSeeker func(name str
 
 func createValueFile(vs *DefaultValueStore, createWriteCloser func(name string) (io.WriteCloser, error), openReadSeeker func(name string) (io.ReadSeeker, error)) (*valueFile, error) {
 	vf := &valueFile{vs: vs, bts: time.Now().UnixNano()}
-	vf.name = path.Join(vs.path, fmt.Sprintf("%019d.values", vf.bts))
+	vf.name = path.Join(vs.path, fmt.Sprintf("%019d.value", vf.bts))
 	fp, err := createWriteCloser(vf.name)
 	if err != nil {
 		return nil, err
@@ -121,7 +121,6 @@ func (vf *valueFile) timestampnano() int64 {
 	return vf.bts
 }
 
-// TODO: nameKey needs to go all throughout the code.
 func (vf *valueFile) read(keyA uint64, keyB uint64, timestampbits uint64, offset uint32, length uint32, value []byte) (uint64, []byte, error) {
 	// TODO: Add calling Verify occasionally on the readerFPs, maybe randomly
 	// inside here or maybe randomly requested by the caller.
