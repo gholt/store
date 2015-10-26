@@ -79,7 +79,7 @@ type DefaultValueStore struct {
 	locBlockIDer            uint64
 	path                    string
 	pathtoc                 string
-	vlm                     valuelocmap.ValueLocMap
+	locmap                  valuelocmap.ValueLocMap
 	workers                 int
 	recoveryBatchSize       int
 	valueCap                uint32
@@ -172,11 +172,11 @@ type valueLocBlock interface {
 // flushed.
 func NewValueStore(c *ValueStoreConfig) (*DefaultValueStore, error) {
 	cfg := resolveValueStoreConfig(c)
-	vlm := cfg.ValueLocMap
-	if vlm == nil {
-		vlm = valuelocmap.NewValueLocMap(nil)
+	locmap := cfg.ValueLocMap
+	if locmap == nil {
+		locmap = valuelocmap.NewValueLocMap(nil)
 	}
-	vlm.SetInactiveMask(_TSB_INACTIVE)
+	locmap.SetInactiveMask(_TSB_INACTIVE)
 	store := &DefaultValueStore{
 		logCritical:             cfg.LogCritical,
 		logError:                cfg.LogError,
@@ -187,7 +187,7 @@ func NewValueStore(c *ValueStoreConfig) (*DefaultValueStore, error) {
 		locBlocks:               make([]valueLocBlock, math.MaxUint16),
 		path:                    cfg.Path,
 		pathtoc:                 cfg.PathTOC,
-		vlm:                     vlm,
+		locmap:                  locmap,
 		workers:                 cfg.Workers,
 		recoveryBatchSize:       cfg.RecoveryBatchSize,
 		replicationIgnoreRecent: (uint64(cfg.ReplicationIgnoreRecent) * uint64(time.Second) / 1000) << _TSB_UTIL_BITS,
@@ -354,7 +354,7 @@ func (store *DefaultValueStore) Lookup(keyA uint64, keyB uint64) (int64, uint32,
 }
 
 func (store *DefaultValueStore) lookup(keyA uint64, keyB uint64) (uint64, uint32, uint32, error) {
-	timestampbits, id, _, length := store.vlm.Get(keyA, keyB)
+	timestampbits, id, _, length := store.locmap.Get(keyA, keyB)
 	if id == 0 || timestampbits&_TSB_DELETION != 0 {
 		return timestampbits, id, 0, ErrNotFound
 	}
@@ -378,7 +378,7 @@ func (store *DefaultValueStore) Read(keyA uint64, keyB uint64, value []byte) (in
 }
 
 func (store *DefaultValueStore) read(keyA uint64, keyB uint64, value []byte) (uint64, []byte, error) {
-	timestampbits, id, offset, length := store.vlm.Get(keyA, keyB)
+	timestampbits, id, offset, length := store.locmap.Get(keyA, keyB)
 	if id == 0 || timestampbits&_TSB_DELETION != 0 || timestampbits&_TSB_LOCAL_REMOVAL != 0 {
 		return timestampbits, value, ErrNotFound
 	}
@@ -515,7 +515,7 @@ func (store *DefaultValueStore) memClearer(freeableVMChan chan *valueMem) {
 				offset = vm.vfOffset + binary.BigEndian.Uint32(vm.toc[vmTOCOffset+24:])
 				length = binary.BigEndian.Uint32(vm.toc[vmTOCOffset+28:])
 			}
-			if store.vlm.Set(keyA, keyB, timestampbits, blockID, offset, length, true) > timestampbits {
+			if store.locmap.Set(keyA, keyB, timestampbits, blockID, offset, length, true) > timestampbits {
 				continue
 			}
 			if tb != nil && tbOffset+_VALUE_FILE_ENTRY_SIZE > cap(tb) {
@@ -601,7 +601,7 @@ func (store *DefaultValueStore) memWriter(pendingVWRChan chan *valueWriteReq) {
 				vm.values[i] = 0
 			}
 		}
-		ptimestampbits := store.vlm.Set(vwr.keyA, vwr.keyB, vwr.timestampbits, vm.id, uint32(vmMemOffset), uint32(length), false)
+		ptimestampbits := store.locmap.Set(vwr.keyA, vwr.keyB, vwr.timestampbits, vm.id, uint32(vmMemOffset), uint32(length), false)
 		if ptimestampbits < vwr.timestampbits {
 			vm.toc = vm.toc[:vmTOCOffset+_VALUE_FILE_ENTRY_SIZE]
 
@@ -818,11 +818,11 @@ func (store *DefaultValueStore) recovery() error {
 						wr.blockID = 0
 					}
 					if store.logDebug != nil {
-						if store.vlm.Set(wr.keyA, wr.keyB, wr.timestampbits, wr.blockID, wr.offset, wr.length, true) < wr.timestampbits {
+						if store.locmap.Set(wr.keyA, wr.keyB, wr.timestampbits, wr.blockID, wr.offset, wr.length, true) < wr.timestampbits {
 							atomic.AddInt64(&causedChangeCount, 1)
 						}
 					} else {
-						store.vlm.Set(wr.keyA, wr.keyB, wr.timestampbits, wr.blockID, wr.offset, wr.length, true)
+						store.locmap.Set(wr.keyA, wr.keyB, wr.timestampbits, wr.blockID, wr.offset, wr.length, true)
 					}
 				}
 				freeBatchChan <- batch

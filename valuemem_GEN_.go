@@ -21,7 +21,7 @@ func (vm *valueMem) timestampnano() int64 {
 
 func (vm *valueMem) read(keyA uint64, keyB uint64, timestampbits uint64, offset uint32, length uint32, value []byte) (uint64, []byte, error) {
 	vm.discardLock.RLock()
-	timestampbits, id, offset, length := vm.store.vlm.Get(keyA, keyB)
+	timestampbits, id, offset, length := vm.store.locmap.Get(keyA, keyB)
 	if id == 0 || timestampbits&_TSB_DELETION != 0 {
 		vm.discardLock.RUnlock()
 		return timestampbits, value, ErrNotFound

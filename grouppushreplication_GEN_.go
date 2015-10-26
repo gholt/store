@@ -167,7 +167,7 @@ func (store *DefaultGroupStore) outPushReplicationPass() {
 		// batch, those keys will have been removed and the first matching
 		// batch will start with any remaining keys.
 		// First we gather the matching keys to send.
-		store.vlm.ScanCallback(rangeBegin, rangeEnd, 0, _TSB_LOCAL_REMOVAL, cutoff, math.MaxUint64, func(keyA uint64, keyB uint64, nameKeyA uint64, nameKeyB uint64, timestampbits uint64, length uint32) bool {
+		store.locmap.ScanCallback(rangeBegin, rangeEnd, 0, _TSB_LOCAL_REMOVAL, cutoff, math.MaxUint64, func(keyA uint64, keyB uint64, nameKeyA uint64, nameKeyB uint64, timestampbits uint64, length uint32) bool {
 			inMsgLength := _GROUP_BULK_SET_MSG_ENTRY_HEADER_LENGTH + int64(length)
 			if timestampbits&_TSB_DELETION == 0 || timestampbits >= tombstoneCutoff {
 				list = append(list, keyA, keyB, nameKeyA, nameKeyB)

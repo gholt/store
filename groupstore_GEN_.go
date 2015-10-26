@@ -83,7 +83,7 @@ type DefaultGroupStore struct {
 	locBlockIDer            uint64
 	path                    string
 	pathtoc                 string
-	vlm                     valuelocmap.GroupLocMap
+	locmap                  valuelocmap.GroupLocMap
 	workers                 int
 	recoveryBatchSize       int
 	valueCap                uint32
@@ -179,11 +179,11 @@ type groupLocBlock interface {
 // flushed.
 func NewGroupStore(c *GroupStoreConfig) (*DefaultGroupStore, error) {
 	cfg := resolveGroupStoreConfig(c)
-	vlm := cfg.GroupLocMap
-	if vlm == nil {
-		vlm = valuelocmap.NewGroupLocMap(nil)
+	locmap := cfg.GroupLocMap
+	if locmap == nil {
+		locmap = valuelocmap.NewGroupLocMap(nil)
 	}
-	vlm.SetInactiveMask(_TSB_INACTIVE)
+	locmap.SetInactiveMask(_TSB_INACTIVE)
 	store := &DefaultGroupStore{
 		logCritical:             cfg.LogCritical,
 		logError:                cfg.LogError,
@@ -194,7 +194,7 @@ func NewGroupStore(c *GroupStoreConfig) (*DefaultGroupStore, error) {
 		locBlocks:               make([]groupLocBlock, math.MaxUint16),
 		path:                    cfg.Path,
 		pathtoc:                 cfg.PathTOC,
-		vlm:                     vlm,
+		locmap:                  locmap,
 		workers:                 cfg.Workers,
 		recoveryBatchSize:       cfg.RecoveryBatchSize,
 		replicationIgnoreRecent: (uint64(cfg.ReplicationIgnoreRecent) * uint64(time.Second) / 1000) << _TSB_UTIL_BITS,
@@ -361,7 +361,7 @@ func (store *DefaultGroupStore) Lookup(keyA uint64, keyB uint64, nameKeyA uint64
 }
 
 func (store *DefaultGroupStore) lookup(keyA uint64, keyB uint64, nameKeyA uint64, nameKeyB uint64) (uint64, uint32, uint32, error) {
-	timestampbits, id, _, length := store.vlm.Get(keyA, keyB, nameKeyA, nameKeyB)
+	timestampbits, id, _, length := store.locmap.Get(keyA, keyB, nameKeyA, nameKeyB)
 	if id == 0 || timestampbits&_TSB_DELETION != 0 {
 		return timestampbits, id, 0, ErrNotFound
 	}
@@ -378,7 +378,7 @@ type LookupGroupItem struct {
 // matching under keyA, keyB.
 func (store *DefaultGroupStore) LookupGroup(keyA uint64, keyB uint64) []LookupGroupItem {
 	atomic.AddInt32(&store.lookupGroups, 1)
-	items := store.vlm.GetGroup(keyA, keyB)
+	items := store.locmap.GetGroup(keyA, keyB)
 	if len(items) == 0 {
 		return nil
 	}
@@ -409,7 +409,7 @@ func (store *DefaultGroupStore) Read(keyA uint64, keyB uint64, nameKeyA uint64, 
 }
 
 func (store *DefaultGroupStore) read(keyA uint64, keyB uint64, nameKeyA uint64, nameKeyB uint64, value []byte) (uint64, []byte, error) {
-	timestampbits, id, offset, length := store.vlm.Get(keyA, keyB, nameKeyA, nameKeyB)
+	timestampbits, id, offset, length := store.locmap.Get(keyA, keyB, nameKeyA, nameKeyB)
 	if id == 0 || timestampbits&_TSB_DELETION != 0 || timestampbits&_TSB_LOCAL_REMOVAL != 0 {
 		return timestampbits, value, ErrNotFound
 	}
@@ -430,7 +430,7 @@ type ReadGroupItem struct {
 // may be returned.
 func (store *DefaultGroupStore) ReadGroup(keyA uint64, keyB uint64) (int, chan *ReadGroupItem) {
 	atomic.AddInt32(&store.readGroups, 1)
-	items := store.vlm.GetGroup(keyA, keyB)
+	items := store.locmap.GetGroup(keyA, keyB)
 	c := make(chan *ReadGroupItem, store.workers)
 	if len(items) == 0 {
 		close(c)
@@ -593,7 +593,7 @@ func (store *DefaultGroupStore) memClearer(freeableVMChan chan *groupMem) {
 				offset = vm.vfOffset + binary.BigEndian.Uint32(vm.toc[vmTOCOffset+24:])
 				length = binary.BigEndian.Uint32(vm.toc[vmTOCOffset+28:])
 			}
-			if store.vlm.Set(keyA, keyB, nameKeyA, nameKeyB, timestampbits, blockID, offset, length, true) > timestampbits {
+			if store.locmap.Set(keyA, keyB, nameKeyA, nameKeyB, timestampbits, blockID, offset, length, true) > timestampbits {
 				continue
 			}
 			if tb != nil && tbOffset+_GROUP_FILE_ENTRY_SIZE > cap(tb) {
@@ -679,7 +679,7 @@ func (store *DefaultGroupStore) memWriter(pendingVWRChan chan *groupWriteReq) {
 				vm.values[i] = 0
 			}
 		}
-		ptimestampbits := store.vlm.Set(vwr.keyA, vwr.keyB, vwr.nameKeyA, vwr.nameKeyB, vwr.timestampbits, vm.id, uint32(vmMemOffset), uint32(length), false)
+		ptimestampbits := store.locmap.Set(vwr.keyA, vwr.keyB, vwr.nameKeyA, vwr.nameKeyB, vwr.timestampbits, vm.id, uint32(vmMemOffset), uint32(length), false)
 		if ptimestampbits < vwr.timestampbits {
 			vm.toc = vm.toc[:vmTOCOffset+_GROUP_FILE_ENTRY_SIZE]
 
@@ -901,11 +901,11 @@ func (store *DefaultGroupStore) recovery() error {
 						wr.blockID = 0
 					}
 					if store.logDebug != nil {
-						if store.vlm.Set(wr.keyA, wr.keyB, wr.nameKeyA, wr.nameKeyB, wr.timestampbits, wr.blockID, wr.offset, wr.length, true) < wr.timestampbits {
+						if store.locmap.Set(wr.keyA, wr.keyB, wr.nameKeyA, wr.nameKeyB, wr.timestampbits, wr.blockID, wr.offset, wr.length, true) < wr.timestampbits {
 							atomic.AddInt64(&causedChangeCount, 1)
 						}
 					} else {
-						store.vlm.Set(wr.keyA, wr.keyB, wr.nameKeyA, wr.nameKeyB, wr.timestampbits, wr.blockID, wr.offset, wr.length, true)
+						store.locmap.Set(wr.keyA, wr.keyB, wr.nameKeyA, wr.nameKeyB, wr.timestampbits, wr.blockID, wr.offset, wr.length, true)
 					}
 				}
 				freeBatchChan <- batch

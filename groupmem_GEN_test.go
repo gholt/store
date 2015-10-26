@@ -21,10 +21,10 @@ func TestGroupValuesMemRead(t *testing.T) {
 	if err != ErrNotFound {
 		t.Fatal(err)
 	}
-	vm1.store.vlm.Set(1, 2, 0, 0, 0x100, vm1.id, 5, 6, false)
+	vm1.store.locmap.Set(1, 2, 0, 0, 0x100, vm1.id, 5, 6, false)
 	ts, v, err = vm1.read(1, 2, 0, 0, 0x100, 5, 6, nil)
 	if err != nil {
-		a, b, c, d := vm1.store.vlm.Get(1, 2, 0, 0)
+		a, b, c, d := vm1.store.locmap.Get(1, 2, 0, 0)
 		t.Fatal(err, a, b, c, d)
 	}
 	if ts != 0x100 {
@@ -33,12 +33,12 @@ func TestGroupValuesMemRead(t *testing.T) {
 	if string(v) != "56789a" {
 		t.Fatal(string(v))
 	}
-	vm1.store.vlm.Set(1, 2, 0, 0, 0x100|_TSB_DELETION, vm1.id, 5, 6, false)
+	vm1.store.locmap.Set(1, 2, 0, 0, 0x100|_TSB_DELETION, vm1.id, 5, 6, false)
 	ts, v, err = vm1.read(1, 2, 0, 0, 0x100, 5, 6, nil)
 	if err != ErrNotFound {
 		t.Fatal(err)
 	}
-	vm1.store.vlm.Set(1, 2, 0, 0, 0x200, vm2.id, 5, 6, false)
+	vm1.store.locmap.Set(1, 2, 0, 0, 0x200, vm2.id, 5, 6, false)
 	ts, v, err = vm1.read(1, 2, 0, 0, 0x100, 5, 6, nil)
 	if err != nil {
 		t.Fatal(err)

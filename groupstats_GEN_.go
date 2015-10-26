@@ -168,7 +168,7 @@ type GroupStoreStats struct {
 	fileReaders                int
 	checksumInterval           uint32
 	replicationIgnoreRecent    int
-	vlmDebugInfo               fmt.Stringer
+	locmapDebugInfo            fmt.Stringer
 }
 
 // Stats returns overall information about the state of the GroupStore. Note
@@ -276,10 +276,10 @@ func (store *DefaultGroupStore) Stats(debug bool) fmt.Stringer {
 	atomic.AddInt32(&store.smallFileCompactions, -stats.SmallFileCompactions)
 	store.statsLock.Unlock()
 	if !debug {
-		vlmStats := store.vlm.Stats(false)
-		stats.Values = vlmStats.ActiveCount
-		stats.ValueBytes = vlmStats.ActiveBytes
-		stats.vlmDebugInfo = vlmStats
+		locmapStats := store.locmap.Stats(false)
+		stats.Values = locmapStats.ActiveCount
+		stats.ValueBytes = locmapStats.ActiveBytes
+		stats.locmapDebugInfo = locmapStats
 	} else {
 		stats.debug = debug
 		for i := 0; i < len(store.freeableVMChans); i++ {
@@ -322,10 +322,10 @@ func (store *DefaultGroupStore) Stats(debug bool) fmt.Stringer {
 		stats.fileReaders = store.fileReaders
 		stats.checksumInterval = store.checksumInterval
 		stats.replicationIgnoreRecent = int(store.replicationIgnoreRecent / uint64(time.Second))
-		vlmStats := store.vlm.Stats(true)
-		stats.Values = vlmStats.ActiveCount
-		stats.ValueBytes = vlmStats.ActiveBytes
-		stats.vlmDebugInfo = vlmStats
+		locmapStats := store.locmap.Stats(true)
+		stats.Values = locmapStats.ActiveCount
+		stats.ValueBytes = locmapStats.ActiveBytes
+		stats.locmapDebugInfo = locmapStats
 	}
 	return stats
 }
@@ -416,7 +416,7 @@ func (stats *GroupStoreStats) String() string {
 			{"fileReaders", fmt.Sprintf("%d", stats.fileReaders)},
 			{"checksumInterval", fmt.Sprintf("%d", stats.checksumInterval)},
 			{"replicationIgnoreRecent", fmt.Sprintf("%d", stats.replicationIgnoreRecent)},
-			{"vlmDebugInfo", stats.vlmDebugInfo.String()},
+			{"locmapDebugInfo", stats.locmapDebugInfo.String()},
 		}...)
 	}
 	return brimtext.Align(report, nil)

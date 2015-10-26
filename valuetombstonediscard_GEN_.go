@@ -157,7 +157,7 @@ func (store *DefaultValueStore) tombstoneDiscardPassLocalRemovals() {
 				rangeEnd = math.MaxUint64
 			}
 		}
-		store.vlm.Discard(rangeBegin, rangeEnd, _TSB_LOCAL_REMOVAL)
+		store.locmap.Discard(rangeBegin, rangeEnd, _TSB_LOCAL_REMOVAL)
 	}
 	wg := &sync.WaitGroup{}
 	wg.Add(int(workerMax + 1))
@@ -215,7 +215,7 @@ func (store *DefaultValueStore) tombstoneDiscardPassExpiredDeletions() {
 			// Since we shouldn't try to modify what we're scanning while we're
 			// scanning (lock contention) we instead record in localRemovals
 			// what to modify after the scan.
-			rangeBegin, more = store.vlm.ScanCallback(rangeBegin, rangeEnd, _TSB_DELETION, _TSB_LOCAL_REMOVAL, cutoff, uint64(store.tombstoneDiscardState.batchSize), func(keyA uint64, keyB uint64, timestampbits uint64, length uint32) bool {
+			rangeBegin, more = store.locmap.ScanCallback(rangeBegin, rangeEnd, _TSB_DELETION, _TSB_LOCAL_REMOVAL, cutoff, uint64(store.tombstoneDiscardState.batchSize), func(keyA uint64, keyB uint64, timestampbits uint64, length uint32) bool {
 				e := &localRemovals[localRemovalsIndex]
 				e.keyA = keyA
 				e.keyB = keyB

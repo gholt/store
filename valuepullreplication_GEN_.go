@@ -207,11 +207,11 @@ func (store *DefaultValueStore) inPullReplication() {
 		// items if there is a lot of data to be sent.
 		scanStart := prm.rangeStart() + (prm.rangeStop()-prm.rangeStart())/uint64(ring.ReplicaCount())*uint64(ring.ResponsibleReplica(uint32(prm.rangeStart()>>(64-ring.PartitionBitCount()))))
 		scanStop := prm.rangeStop()
-		store.vlm.ScanCallback(scanStart, scanStop, 0, _TSB_LOCAL_REMOVAL, cutoff, math.MaxUint64, callback)
+		store.locmap.ScanCallback(scanStart, scanStop, 0, _TSB_LOCAL_REMOVAL, cutoff, math.MaxUint64, callback)
 		if l > 0 {
 			scanStop = scanStart - 1
 			scanStart = prm.rangeStart()
-			store.vlm.ScanCallback(scanStart, scanStop, 0, _TSB_LOCAL_REMOVAL, cutoff, math.MaxUint64, callback)
+			store.locmap.ScanCallback(scanStart, scanStop, 0, _TSB_LOCAL_REMOVAL, cutoff, math.MaxUint64, callback)
 		}
 		nodeID := prm.nodeID()
 		store.pullReplicationState.inFreeMsgChan <- prm
@@ -352,7 +352,7 @@ func (store *DefaultValueStore) outPullReplicationPass() {
 		for {
 			rbThis := rb
 			ktbf.reset(store.pullReplicationState.outIteration)
-			rb, more = store.vlm.ScanCallback(rb, re, 0, _TSB_LOCAL_REMOVAL, cutoff, store.pullReplicationState.bloomN, func(keyA uint64, keyB uint64, timestampbits uint64, length uint32) bool {
+			rb, more = store.locmap.ScanCallback(rb, re, 0, _TSB_LOCAL_REMOVAL, cutoff, store.pullReplicationState.bloomN, func(keyA uint64, keyB uint64, timestampbits uint64, length uint32) bool {
 				ktbf.add(keyA, keyB, timestampbits)
 				return true
 			})
