@@ -71,8 +71,8 @@ type DefaultGroupStore struct {
 	rand                    *rand.Rand
 	freeableMemBlockChans   []chan *groupMemBlock
 	freeMemBlockChan        chan *groupMemBlock
-	freeVWRChans            []chan *groupWriteReq
-	pendingVWRChans         []chan *groupWriteReq
+	freeWriteReqChans       []chan *groupWriteReq
+	pendingWriteReqChans    []chan *groupWriteReq
 	fileMemBlockChan        chan *groupMemBlock
 	freeTOCBlockChan        chan []byte
 	pendingTOCBlockChan     chan []byte
@@ -212,8 +212,8 @@ func NewGroupStore(c *GroupStoreConfig) (*DefaultGroupStore, error) {
 		store.freeableMemBlockChans[i] = make(chan *groupMemBlock, store.workers)
 	}
 	store.freeMemBlockChan = make(chan *groupMemBlock, store.workers*store.writePagesPerWorker)
-	store.freeVWRChans = make([]chan *groupWriteReq, store.workers)
-	store.pendingVWRChans = make([]chan *groupWriteReq, store.workers)
+	store.freeWriteReqChans = make([]chan *groupWriteReq, store.workers)
+	store.pendingWriteReqChans = make([]chan *groupWriteReq, store.workers)
 	store.fileMemBlockChan = make(chan *groupMemBlock, store.workers)
 	store.freeTOCBlockChan = make(chan []byte, store.workers*2)
 	store.pendingTOCBlockChan = make(chan []byte, store.workers)
@@ -231,14 +231,14 @@ func NewGroupStore(c *GroupStoreConfig) (*DefaultGroupStore, error) {
 		}
 		store.freeMemBlockChan <- memBlock
 	}
-	for i := 0; i < len(store.freeVWRChans); i++ {
-		store.freeVWRChans[i] = make(chan *groupWriteReq, store.workers*2)
+	for i := 0; i < len(store.freeWriteReqChans); i++ {
+		store.freeWriteReqChans[i] = make(chan *groupWriteReq, store.workers*2)
 		for j := 0; j < store.workers*2; j++ {
-			store.freeVWRChans[i] <- &groupWriteReq{errChan: make(chan error, 1)}
+			store.freeWriteReqChans[i] <- &groupWriteReq{errChan: make(chan error, 1)}
 		}
 	}
-	for i := 0; i < len(store.pendingVWRChans); i++ {
-		store.pendingVWRChans[i] = make(chan *groupWriteReq)
+	for i := 0; i < len(store.pendingWriteReqChans); i++ {
+		store.pendingWriteReqChans[i] = make(chan *groupWriteReq)
 	}
 	for i := 0; i < cap(store.freeTOCBlockChan); i++ {
 		store.freeTOCBlockChan <- make([]byte, 0, store.pageSize)
@@ -248,8 +248,8 @@ func NewGroupStore(c *GroupStoreConfig) (*DefaultGroupStore, error) {
 	for i := 0; i < len(store.freeableMemBlockChans); i++ {
 		go store.memClearer(store.freeableMemBlockChans[i])
 	}
-	for i := 0; i < len(store.pendingVWRChans); i++ {
-		go store.memWriter(store.pendingVWRChans[i])
+	for i := 0; i < len(store.pendingWriteReqChans); i++ {
+		go store.memWriter(store.pendingWriteReqChans[i])
 	}
 	err := store.recovery()
 	if err != nil {
@@ -314,7 +314,7 @@ func (store *DefaultGroupStore) disableWrites(userCall bool) {
 	if userCall {
 		store.userDisabled = true
 	}
-	for _, c := range store.pendingVWRChans {
+	for _, c := range store.pendingWriteReqChans {
 		c <- disableGroupWriteReq
 	}
 	store.disableEnableWritesLock.Unlock()
@@ -329,7 +329,7 @@ func (store *DefaultGroupStore) enableWrites(userCall bool) {
 	store.disableEnableWritesLock.Lock()
 	if userCall || !store.userDisabled {
 		store.userDisabled = false
-		for _, c := range store.pendingVWRChans {
+		for _, c := range store.pendingWriteReqChans {
 			c <- enableGroupWriteReq
 		}
 	}
@@ -339,7 +339,7 @@ func (store *DefaultGroupStore) enableWrites(userCall bool) {
 // Flush will ensure buffered data (at the time of the call) is written to
 // disk.
 func (store *DefaultGroupStore) Flush() {
-	for _, c := range store.pendingVWRChans {
+	for _, c := range store.pendingWriteReqChans {
 		c <- flushGroupWriteReq
 	}
 	<-store.flushedChan
@@ -484,22 +484,22 @@ func (store *DefaultGroupStore) Write(keyA uint64, keyB uint64, nameKeyA uint64,
 }
 
 func (store *DefaultGroupStore) write(keyA uint64, keyB uint64, nameKeyA uint64, nameKeyB uint64, timestampbits uint64, value []byte, internal bool) (uint64, error) {
-	i := int(keyA>>1) % len(store.freeVWRChans)
-	vwr := <-store.freeVWRChans[i]
-	vwr.keyA = keyA
-	vwr.keyB = keyB
+	i := int(keyA>>1) % len(store.freeWriteReqChans)
+	writeReq := <-store.freeWriteReqChans[i]
+	writeReq.keyA = keyA
+	writeReq.keyB = keyB
 
-	vwr.nameKeyA = nameKeyA
-	vwr.nameKeyB = nameKeyB
+	writeReq.nameKeyA = nameKeyA
+	writeReq.nameKeyB = nameKeyB
 
-	vwr.timestampbits = timestampbits
-	vwr.value = value
-	vwr.internal = internal
-	store.pendingVWRChans[i] <- vwr
-	err := <-vwr.errChan
-	ptimestampbits := vwr.timestampbits
-	vwr.value = nil
-	store.freeVWRChans[i] <- vwr
+	writeReq.timestampbits = timestampbits
+	writeReq.value = value
+	writeReq.internal = internal
+	store.pendingWriteReqChans[i] <- writeReq
+	err := <-writeReq.errChan
+	ptimestampbits := writeReq.timestampbits
+	writeReq.value = nil
+	store.freeWriteReqChans[i] <- writeReq
 	return ptimestampbits, err
 }
 
@@ -625,22 +625,22 @@ func (store *DefaultGroupStore) memClearer(freeableMemBlockChan chan *groupMemBl
 	}
 }
 
-func (store *DefaultGroupStore) memWriter(pendingVWRChan chan *groupWriteReq) {
+func (store *DefaultGroupStore) memWriter(pendingWriteReqChan chan *groupWriteReq) {
 	var enabled bool
 	var memBlock *groupMemBlock
 	var memBlockTOCOffset int
 	var memBlockMemOffset int
 	for {
-		vwr := <-pendingVWRChan
-		if vwr == enableGroupWriteReq {
+		writeReq := <-pendingWriteReqChan
+		if writeReq == enableGroupWriteReq {
 			enabled = true
 			continue
 		}
-		if vwr == disableGroupWriteReq {
+		if writeReq == disableGroupWriteReq {
 			enabled = false
 			continue
 		}
-		if vwr == flushGroupWriteReq {
+		if writeReq == flushGroupWriteReq {
 			if memBlock != nil && len(memBlock.toc) > 0 {
 				store.fileMemBlockChan <- memBlock
 				memBlock = nil
@@ -648,13 +648,13 @@ func (store *DefaultGroupStore) memWriter(pendingVWRChan chan *groupWriteReq) {
 			store.fileMemBlockChan <- flushGroupMemBlock
 			continue
 		}
-		if !enabled && !vwr.internal {
-			vwr.errChan <- ErrDisabled
+		if !enabled && !writeReq.internal {
+			writeReq.errChan <- ErrDisabled
 			continue
 		}
-		length := len(vwr.value)
+		length := len(writeReq.value)
 		if length > int(store.valueCap) {
-			vwr.errChan <- fmt.Errorf("value length of %d > %d", length, store.valueCap)
+			writeReq.errChan <- fmt.Errorf("value length of %d > %d", length, store.valueCap)
 			continue
 		}
 		alloc := length
@@ -673,21 +673,21 @@ func (store *DefaultGroupStore) memWriter(pendingVWRChan chan *groupWriteReq) {
 		memBlock.discardLock.Lock()
 		memBlock.values = memBlock.values[:memBlockMemOffset+alloc]
 		memBlock.discardLock.Unlock()
-		copy(memBlock.values[memBlockMemOffset:], vwr.value)
+		copy(memBlock.values[memBlockMemOffset:], writeReq.value)
 		if alloc > length {
 			for i, j := memBlockMemOffset+length, memBlockMemOffset+alloc; i < j; i++ {
 				memBlock.values[i] = 0
 			}
 		}
-		ptimestampbits := store.locmap.Set(vwr.keyA, vwr.keyB, vwr.nameKeyA, vwr.nameKeyB, vwr.timestampbits, memBlock.id, uint32(memBlockMemOffset), uint32(length), false)
-		if ptimestampbits < vwr.timestampbits {
+		ptimestampbits := store.locmap.Set(writeReq.keyA, writeReq.keyB, writeReq.nameKeyA, writeReq.nameKeyB, writeReq.timestampbits, memBlock.id, uint32(memBlockMemOffset), uint32(length), false)
+		if ptimestampbits < writeReq.timestampbits {
 			memBlock.toc = memBlock.toc[:memBlockTOCOffset+_GROUP_FILE_ENTRY_SIZE]
 
-			binary.BigEndian.PutUint64(memBlock.toc[memBlockTOCOffset:], vwr.keyA)
-			binary.BigEndian.PutUint64(memBlock.toc[memBlockTOCOffset+8:], vwr.keyB)
-			binary.BigEndian.PutUint64(memBlock.toc[memBlockTOCOffset+16:], vwr.nameKeyA)
-			binary.BigEndian.PutUint64(memBlock.toc[memBlockTOCOffset+24:], vwr.nameKeyB)
-			binary.BigEndian.PutUint64(memBlock.toc[memBlockTOCOffset+32:], vwr.timestampbits)
+			binary.BigEndian.PutUint64(memBlock.toc[memBlockTOCOffset:], writeReq.keyA)
+			binary.BigEndian.PutUint64(memBlock.toc[memBlockTOCOffset+8:], writeReq.keyB)
+			binary.BigEndian.PutUint64(memBlock.toc[memBlockTOCOffset+16:], writeReq.nameKeyA)
+			binary.BigEndian.PutUint64(memBlock.toc[memBlockTOCOffset+24:], writeReq.nameKeyB)
+			binary.BigEndian.PutUint64(memBlock.toc[memBlockTOCOffset+32:], writeReq.timestampbits)
 			binary.BigEndian.PutUint32(memBlock.toc[memBlockTOCOffset+40:], uint32(memBlockMemOffset))
 			binary.BigEndian.PutUint32(memBlock.toc[memBlockTOCOffset+44:], uint32(length))
 
@@ -698,14 +698,14 @@ func (store *DefaultGroupStore) memWriter(pendingVWRChan chan *groupWriteReq) {
 			memBlock.values = memBlock.values[:memBlockMemOffset]
 			memBlock.discardLock.Unlock()
 		}
-		vwr.timestampbits = ptimestampbits
-		vwr.errChan <- nil
+		writeReq.timestampbits = ptimestampbits
+		writeReq.errChan <- nil
 	}
 }
 
 func (store *DefaultGroupStore) fileWriter() {
 	var fl *groupFile
-	memWritersFlushLeft := len(store.pendingVWRChans)
+	memWritersFlushLeft := len(store.pendingWriteReqChans)
 	var tocLen uint64
 	var valueLen uint64
 	for {
@@ -725,7 +725,7 @@ func (store *DefaultGroupStore) fileWriter() {
 			for i := 0; i < len(store.freeableMemBlockChans); i++ {
 				store.freeableMemBlockChans[i] <- flushGroupMemBlock
 			}
-			memWritersFlushLeft = len(store.pendingVWRChans)
+			memWritersFlushLeft = len(store.pendingWriteReqChans)
 			continue
 		}
 		if fl != nil && (tocLen+uint64(len(memBlock.toc)) >= uint64(store.fileCap) || valueLen+uint64(len(memBlock.values)) > uint64(store.fileCap)) {

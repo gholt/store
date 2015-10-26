@@ -138,12 +138,12 @@ type {{.T}}StoreStats struct {
     freeableMemBlockChansIn     int
     freeMemBlockChanCap         int
     freeMemBlockChanIn          int
-    freeVWRChans                int
-    freeVWRChansCap             int
-    freeVWRChansIn              int
-    pendingVWRChans             int
-    pendingVWRChansCap          int
-    pendingVWRChansIn           int
+    freeWriteReqChans           int
+    freeWriteReqChansCap        int
+    freeWriteReqChansIn         int
+    pendingWriteReqChans        int
+    pendingWriteReqChansCap     int
+    pendingWriteReqChansIn      int
     fileMemBlockChanCap         int
     fileMemBlockChanIn          int
     freeTOCBlockChanCap         int
@@ -288,15 +288,15 @@ func (store *Default{{.T}}Store) Stats(debug bool) fmt.Stringer {
         }
         stats.freeMemBlockChanCap = cap(store.freeMemBlockChan)
         stats.freeMemBlockChanIn = len(store.freeMemBlockChan)
-        stats.freeVWRChans = len(store.freeVWRChans)
-        for i := 0; i < len(store.freeVWRChans); i++ {
-            stats.freeVWRChansCap += cap(store.freeVWRChans[i])
-            stats.freeVWRChansIn += len(store.freeVWRChans[i])
+        stats.freeWriteReqChans = len(store.freeWriteReqChans)
+        for i := 0; i < len(store.freeWriteReqChans); i++ {
+            stats.freeWriteReqChansCap += cap(store.freeWriteReqChans[i])
+            stats.freeWriteReqChansIn += len(store.freeWriteReqChans[i])
         }
-        stats.pendingVWRChans = len(store.pendingVWRChans)
-        for i := 0; i < len(store.pendingVWRChans); i++ {
-            stats.pendingVWRChansCap += cap(store.pendingVWRChans[i])
-            stats.pendingVWRChansIn += len(store.pendingVWRChans[i])
+        stats.pendingWriteReqChans = len(store.pendingWriteReqChans)
+        for i := 0; i < len(store.pendingWriteReqChans); i++ {
+            stats.pendingWriteReqChansCap += cap(store.pendingWriteReqChans[i])
+            stats.pendingWriteReqChansIn += len(store.pendingWriteReqChans[i])
         }
         stats.fileMemBlockChanCap = cap(store.fileMemBlockChan)
         stats.fileMemBlockChanIn = len(store.fileMemBlockChan)
@@ -386,12 +386,12 @@ func (stats *{{.T}}StoreStats) String() string {
             {"freeableMemBlockChansIn", fmt.Sprintf("%d", stats.freeableMemBlockChansIn)},
             {"freeMemBlockChanCap", fmt.Sprintf("%d", stats.freeMemBlockChanCap)},
             {"freeMemBlockChanIn", fmt.Sprintf("%d", stats.freeMemBlockChanIn)},
-            {"freeVWRChans", fmt.Sprintf("%d", stats.freeVWRChans)},
-            {"freeVWRChansCap", fmt.Sprintf("%d", stats.freeVWRChansCap)},
-            {"freeVWRChansIn", fmt.Sprintf("%d", stats.freeVWRChansIn)},
-            {"pendingVWRChans", fmt.Sprintf("%d", stats.pendingVWRChans)},
-            {"pendingVWRChansCap", fmt.Sprintf("%d", stats.pendingVWRChansCap)},
-            {"pendingVWRChansIn", fmt.Sprintf("%d", stats.pendingVWRChansIn)},
+            {"freeWriteReqChans", fmt.Sprintf("%d", stats.freeWriteReqChans)},
+            {"freeWriteReqChansCap", fmt.Sprintf("%d", stats.freeWriteReqChansCap)},
+            {"freeWriteReqChansIn", fmt.Sprintf("%d", stats.freeWriteReqChansIn)},
+            {"pendingWriteReqChans", fmt.Sprintf("%d", stats.pendingWriteReqChans)},
+            {"pendingWriteReqChansCap", fmt.Sprintf("%d", stats.pendingWriteReqChansCap)},
+            {"pendingWriteReqChansIn", fmt.Sprintf("%d", stats.pendingWriteReqChansIn)},
             {"fileMemBlockChanCap", fmt.Sprintf("%d", stats.fileMemBlockChanCap)},
             {"fileMemBlockChanIn", fmt.Sprintf("%d", stats.fileMemBlockChanIn)},
             {"freeTOCBlockChanCap", fmt.Sprintf("%d", stats.freeTOCBlockChanCap)},
