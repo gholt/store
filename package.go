@@ -69,10 +69,10 @@ package valuestore
 //go:generate got store_test.got groupstore_GEN_test.go TT=GROUP T=Group t=group
 //go:generate got config.got valueconfig_GEN_.go TT=VALUE T=Value t=value
 //go:generate got config.got groupconfig_GEN_.go TT=GROUP T=Group t=group
-//go:generate got mem.got valuemem_GEN_.go TT=VALUE T=Value t=value
-//go:generate got mem.got groupmem_GEN_.go TT=GROUP T=Group t=group
-//go:generate got mem_test.got valuemem_GEN_test.go TT=VALUE T=Value t=value
-//go:generate got mem_test.got groupmem_GEN_test.go TT=GROUP T=Group t=group
+//go:generate got memblock.got valuememblock_GEN_.go TT=VALUE T=Value t=value
+//go:generate got memblock.got groupmemblock_GEN_.go TT=GROUP T=Group t=group
+//go:generate got memblock_test.got valuememblock_GEN_test.go TT=VALUE T=Value t=value
+//go:generate got memblock_test.got groupmemblock_GEN_test.go TT=GROUP T=Group t=group
 //go:generate got file.got valuefile_GEN_.go TT=VALUE T=Value t=value
 //go:generate got file.got groupfile_GEN_.go TT=GROUP T=Group t=group
 //go:generate got file_test.got valuefile_GEN_test.go TT=VALUE T=Value t=value
