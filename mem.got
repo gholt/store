@@ -5,36 +5,36 @@ import (
     "sync"
 )
 
-type {{.t}}Mem struct {
+type {{.t}}MemBlock struct {
     store       *Default{{.T}}Store
     id          uint32
-    vfID        uint32
-    vfOffset    uint32
+    fileID      uint32
+    fileOffset  uint32
     toc         []byte
     values      []byte
     discardLock sync.RWMutex
 }
 
-func (vm *{{.t}}Mem) timestampnano() int64 {
+func (memBlock *{{.t}}MemBlock) timestampnano() int64 {
     return math.MaxInt64
 }
 
-func (vm *{{.t}}Mem) read(keyA uint64, keyB uint64{{if eq .t "group"}}, nameKeyA uint64, nameKeyB uint64{{end}}, timestampbits uint64, offset uint32, length uint32, value []byte) (uint64, []byte, error) {
-    vm.discardLock.RLock()
-    timestampbits, id, offset, length := vm.store.locmap.Get(keyA, keyB{{if eq .t "group"}}, nameKeyA, nameKeyB{{end}})
+func (memBlock *{{.t}}MemBlock) read(keyA uint64, keyB uint64{{if eq .t "group"}}, nameKeyA uint64, nameKeyB uint64{{end}}, timestampbits uint64, offset uint32, length uint32, value []byte) (uint64, []byte, error) {
+    memBlock.discardLock.RLock()
+    timestampbits, id, offset, length := memBlock.store.locmap.Get(keyA, keyB{{if eq .t "group"}}, nameKeyA, nameKeyB{{end}})
     if id == 0 || timestampbits&_TSB_DELETION != 0 {
-        vm.discardLock.RUnlock()
+        memBlock.discardLock.RUnlock()
         return timestampbits, value, ErrNotFound
     }
-    if id != vm.id {
-        vm.discardLock.RUnlock()
-        return vm.store.locBlock(id).read(keyA, keyB{{if eq .t "group"}}, nameKeyA, nameKeyB{{end}}, timestampbits, offset, length, value)
+    if id != memBlock.id {
+        memBlock.discardLock.RUnlock()
+        return memBlock.store.locBlock(id).read(keyA, keyB{{if eq .t "group"}}, nameKeyA, nameKeyB{{end}}, timestampbits, offset, length, value)
     }
-    value = append(value, vm.values[offset:offset+length]...)
-    vm.discardLock.RUnlock()
+    value = append(value, memBlock.values[offset:offset+length]...)
+    memBlock.discardLock.RUnlock()
     return timestampbits, value, nil
 }
 
-func (vm *{{.t}}Mem) close() error {
+func (memBlock *{{.t}}MemBlock) close() error {
     return nil
 }

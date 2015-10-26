@@ -134,18 +134,18 @@ type GroupStoreStats struct {
 	SizeTOC uint64
 
 	debug                      bool
-	freeableVMChansCap         int
-	freeableVMChansIn          int
-	freeVMChanCap              int
-	freeVMChanIn               int
+	freeableMemBlockChansCap   int
+	freeableMemBlockChansIn    int
+	freeMemBlockChanCap        int
+	freeMemBlockChanIn         int
 	freeVWRChans               int
 	freeVWRChansCap            int
 	freeVWRChansIn             int
 	pendingVWRChans            int
 	pendingVWRChansCap         int
 	pendingVWRChansIn          int
-	vfVMChanCap                int
-	vfVMChanIn                 int
+	fileMemBlockChanCap        int
+	fileMemBlockChanIn         int
 	freeTOCBlockChanCap        int
 	freeTOCBlockChanIn         int
 	pendingTOCBlockChanCap     int
@@ -282,12 +282,12 @@ func (store *DefaultGroupStore) Stats(debug bool) fmt.Stringer {
 		stats.locmapDebugInfo = locmapStats
 	} else {
 		stats.debug = debug
-		for i := 0; i < len(store.freeableVMChans); i++ {
-			stats.freeableVMChansCap += cap(store.freeableVMChans[i])
-			stats.freeableVMChansIn += len(store.freeableVMChans[i])
+		for i := 0; i < len(store.freeableMemBlockChans); i++ {
+			stats.freeableMemBlockChansCap += cap(store.freeableMemBlockChans[i])
+			stats.freeableMemBlockChansIn += len(store.freeableMemBlockChans[i])
 		}
-		stats.freeVMChanCap = cap(store.freeVMChan)
-		stats.freeVMChanIn = len(store.freeVMChan)
+		stats.freeMemBlockChanCap = cap(store.freeMemBlockChan)
+		stats.freeMemBlockChanIn = len(store.freeMemBlockChan)
 		stats.freeVWRChans = len(store.freeVWRChans)
 		for i := 0; i < len(store.freeVWRChans); i++ {
 			stats.freeVWRChansCap += cap(store.freeVWRChans[i])
@@ -298,8 +298,8 @@ func (store *DefaultGroupStore) Stats(debug bool) fmt.Stringer {
 			stats.pendingVWRChansCap += cap(store.pendingVWRChans[i])
 			stats.pendingVWRChansIn += len(store.pendingVWRChans[i])
 		}
-		stats.vfVMChanCap = cap(store.vfVMChan)
-		stats.vfVMChanIn = len(store.vfVMChan)
+		stats.fileMemBlockChanCap = cap(store.fileMemBlockChan)
+		stats.fileMemBlockChanIn = len(store.fileMemBlockChan)
 		stats.freeTOCBlockChanCap = cap(store.freeTOCBlockChan)
 		stats.freeTOCBlockChanIn = len(store.freeTOCBlockChan)
 		stats.pendingTOCBlockChanCap = cap(store.pendingTOCBlockChan)
@@ -382,18 +382,18 @@ func (stats *GroupStoreStats) String() string {
 	if stats.debug {
 		report = append(report, [][]string{
 			nil,
-			{"freeableVMChansCap", fmt.Sprintf("%d", stats.freeableVMChansCap)},
-			{"freeableVMChansIn", fmt.Sprintf("%d", stats.freeableVMChansIn)},
-			{"freeVMChanCap", fmt.Sprintf("%d", stats.freeVMChanCap)},
-			{"freeVMChanIn", fmt.Sprintf("%d", stats.freeVMChanIn)},
+			{"freeableMemBlockChansCap", fmt.Sprintf("%d", stats.freeableMemBlockChansCap)},
+			{"freeableMemBlockChansIn", fmt.Sprintf("%d", stats.freeableMemBlockChansIn)},
+			{"freeMemBlockChanCap", fmt.Sprintf("%d", stats.freeMemBlockChanCap)},
+			{"freeMemBlockChanIn", fmt.Sprintf("%d", stats.freeMemBlockChanIn)},
 			{"freeVWRChans", fmt.Sprintf("%d", stats.freeVWRChans)},
 			{"freeVWRChansCap", fmt.Sprintf("%d", stats.freeVWRChansCap)},
 			{"freeVWRChansIn", fmt.Sprintf("%d", stats.freeVWRChansIn)},
 			{"pendingVWRChans", fmt.Sprintf("%d", stats.pendingVWRChans)},
 			{"pendingVWRChansCap", fmt.Sprintf("%d", stats.pendingVWRChansCap)},
 			{"pendingVWRChansIn", fmt.Sprintf("%d", stats.pendingVWRChansIn)},
-			{"vfVMChanCap", fmt.Sprintf("%d", stats.vfVMChanCap)},
-			{"vfVMChanIn", fmt.Sprintf("%d", stats.vfVMChanIn)},
+			{"fileMemBlockChanCap", fmt.Sprintf("%d", stats.fileMemBlockChanCap)},
+			{"fileMemBlockChanIn", fmt.Sprintf("%d", stats.fileMemBlockChanIn)},
 			{"freeTOCBlockChanCap", fmt.Sprintf("%d", stats.freeTOCBlockChanCap)},
 			{"freeTOCBlockChanIn", fmt.Sprintf("%d", stats.freeTOCBlockChanIn)},
 			{"pendingTOCBlockChanCap", fmt.Sprintf("%d", stats.pendingTOCBlockChanCap)},

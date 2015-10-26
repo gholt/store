@@ -65,11 +65,11 @@ type DefaultValueStore struct {
 	logDebug                LogFunc
 	randMutex               sync.Mutex
 	rand                    *rand.Rand
-	freeableVMChans         []chan *valueMem
-	freeVMChan              chan *valueMem
+	freeableMemBlockChans   []chan *valueMemBlock
+	freeMemBlockChan        chan *valueMemBlock
 	freeVWRChans            []chan *valueWriteReq
 	pendingVWRChans         []chan *valueWriteReq
-	vfVMChan                chan *valueMem
+	fileMemBlockChan        chan *valueMemBlock
 	freeTOCBlockChan        chan []byte
 	pendingTOCBlockChan     chan []byte
 	activeTOCA              uint64
@@ -155,7 +155,7 @@ type valueWriteReq struct {
 var enableValueWriteReq *valueWriteReq = &valueWriteReq{}
 var disableValueWriteReq *valueWriteReq = &valueWriteReq{}
 var flushValueWriteReq *valueWriteReq = &valueWriteReq{}
-var flushValueMem *valueMem = &valueMem{}
+var flushValueMemBlock *valueMemBlock = &valueMemBlock{}
 
 type valueLocBlock interface {
 	timestampnano() int64
@@ -200,29 +200,29 @@ func NewValueStore(c *ValueStoreConfig) (*DefaultValueStore, error) {
 		checksumInterval:        uint32(cfg.ChecksumInterval),
 		msgRing:                 cfg.MsgRing,
 	}
-	store.freeableVMChans = make([]chan *valueMem, store.workers)
-	for i := 0; i < cap(store.freeableVMChans); i++ {
-		store.freeableVMChans[i] = make(chan *valueMem, store.workers)
+	store.freeableMemBlockChans = make([]chan *valueMemBlock, store.workers)
+	for i := 0; i < cap(store.freeableMemBlockChans); i++ {
+		store.freeableMemBlockChans[i] = make(chan *valueMemBlock, store.workers)
 	}
-	store.freeVMChan = make(chan *valueMem, store.workers*store.writePagesPerWorker)
+	store.freeMemBlockChan = make(chan *valueMemBlock, store.workers*store.writePagesPerWorker)
 	store.freeVWRChans = make([]chan *valueWriteReq, store.workers)
 	store.pendingVWRChans = make([]chan *valueWriteReq, store.workers)
-	store.vfVMChan = make(chan *valueMem, store.workers)
+	store.fileMemBlockChan = make(chan *valueMemBlock, store.workers)
 	store.freeTOCBlockChan = make(chan []byte, store.workers*2)
 	store.pendingTOCBlockChan = make(chan []byte, store.workers)
 	store.flushedChan = make(chan struct{}, 1)
-	for i := 0; i < cap(store.freeVMChan); i++ {
-		vm := &valueMem{
+	for i := 0; i < cap(store.freeMemBlockChan); i++ {
+		memBlock := &valueMemBlock{
 			store:  store,
 			toc:    make([]byte, 0, store.pageSize),
 			values: make([]byte, 0, store.pageSize),
 		}
 		var err error
-		vm.id, err = store.addLocBlock(vm)
+		memBlock.id, err = store.addLocBlock(memBlock)
 		if err != nil {
 			return nil, err
 		}
-		store.freeVMChan <- vm
+		store.freeMemBlockChan <- memBlock
 	}
 	for i := 0; i < len(store.freeVWRChans); i++ {
 		store.freeVWRChans[i] = make(chan *valueWriteReq, store.workers*2)
@@ -237,9 +237,9 @@ func NewValueStore(c *ValueStoreConfig) (*DefaultValueStore, error) {
 		store.freeTOCBlockChan <- make([]byte, 0, store.pageSize)
 	}
 	go store.tocWriter()
-	go store.vfWriter()
-	for i := 0; i < len(store.freeableVMChans); i++ {
-		go store.memClearer(store.freeableVMChans[i])
+	go store.fileWriter()
+	for i := 0; i < len(store.freeableMemBlockChans); i++ {
+		go store.memClearer(store.freeableMemBlockChans[i])
 	}
 	for i := 0; i < len(store.pendingVWRChans); i++ {
 		go store.memWriter(store.pendingVWRChans[i])
@@ -482,13 +482,13 @@ func (store *DefaultValueStore) closeLocBlock(locBlockID uint32) error {
 	return store.locBlocks[locBlockID].close()
 }
 
-func (store *DefaultValueStore) memClearer(freeableVMChan chan *valueMem) {
+func (store *DefaultValueStore) memClearer(freeableMemBlockChan chan *valueMemBlock) {
 	var tb []byte
 	var tbTS int64
 	var tbOffset int
 	for {
-		vm := <-freeableVMChan
-		if vm == flushValueMem {
+		memBlock := <-freeableMemBlockChan
+		if memBlock == flushValueMemBlock {
 			if tb != nil {
 				store.pendingTOCBlockChan <- tb
 				tb = nil
@@ -496,24 +496,24 @@ func (store *DefaultValueStore) memClearer(freeableVMChan chan *valueMem) {
 			store.pendingTOCBlockChan <- nil
 			continue
 		}
-		vf := store.locBlock(vm.vfID)
-		if tb != nil && tbTS != vf.timestampnano() {
+		fl := store.locBlock(memBlock.fileID)
+		if tb != nil && tbTS != fl.timestampnano() {
 			store.pendingTOCBlockChan <- tb
 			tb = nil
 		}
-		for vmTOCOffset := 0; vmTOCOffset < len(vm.toc); vmTOCOffset += _VALUE_FILE_ENTRY_SIZE {
+		for memBlockTOCOffset := 0; memBlockTOCOffset < len(memBlock.toc); memBlockTOCOffset += _VALUE_FILE_ENTRY_SIZE {
 
-			keyA := binary.BigEndian.Uint64(vm.toc[vmTOCOffset:])
-			keyB := binary.BigEndian.Uint64(vm.toc[vmTOCOffset+8:])
-			timestampbits := binary.BigEndian.Uint64(vm.toc[vmTOCOffset+16:])
+			keyA := binary.BigEndian.Uint64(memBlock.toc[memBlockTOCOffset:])
+			keyB := binary.BigEndian.Uint64(memBlock.toc[memBlockTOCOffset+8:])
+			timestampbits := binary.BigEndian.Uint64(memBlock.toc[memBlockTOCOffset+16:])
 
 			var blockID uint32
 			var offset uint32
 			var length uint32
 			if timestampbits&_TSB_LOCAL_REMOVAL == 0 {
-				blockID = vm.vfID
-				offset = vm.vfOffset + binary.BigEndian.Uint32(vm.toc[vmTOCOffset+24:])
-				length = binary.BigEndian.Uint32(vm.toc[vmTOCOffset+28:])
+				blockID = memBlock.fileID
+				offset = memBlock.fileOffset + binary.BigEndian.Uint32(memBlock.toc[memBlockTOCOffset+24:])
+				length = binary.BigEndian.Uint32(memBlock.toc[memBlockTOCOffset+28:])
 			}
 			if store.locmap.Set(keyA, keyB, timestampbits, blockID, offset, length, true) > timestampbits {
 				continue
@@ -524,7 +524,7 @@ func (store *DefaultValueStore) memClearer(freeableVMChan chan *valueMem) {
 			}
 			if tb == nil {
 				tb = <-store.freeTOCBlockChan
-				tbTS = vf.timestampnano()
+				tbTS = fl.timestampnano()
 				tb = tb[:8]
 				binary.BigEndian.PutUint64(tb, uint64(tbTS))
 				tbOffset = 8
@@ -537,21 +537,21 @@ func (store *DefaultValueStore) memClearer(freeableVMChan chan *valueMem) {
 			binary.BigEndian.PutUint32(tb[tbOffset+28:], length)
 			tbOffset += _VALUE_FILE_ENTRY_SIZE
 		}
-		vm.discardLock.Lock()
-		vm.vfID = 0
-		vm.vfOffset = 0
-		vm.toc = vm.toc[:0]
-		vm.values = vm.values[:0]
-		vm.discardLock.Unlock()
-		store.freeVMChan <- vm
+		memBlock.discardLock.Lock()
+		memBlock.fileID = 0
+		memBlock.fileOffset = 0
+		memBlock.toc = memBlock.toc[:0]
+		memBlock.values = memBlock.values[:0]
+		memBlock.discardLock.Unlock()
+		store.freeMemBlockChan <- memBlock
 	}
 }
 
 func (store *DefaultValueStore) memWriter(pendingVWRChan chan *valueWriteReq) {
 	var enabled bool
-	var vm *valueMem
-	var vmTOCOffset int
-	var vmMemOffset int
+	var memBlock *valueMemBlock
+	var memBlockTOCOffset int
+	var memBlockMemOffset int
 	for {
 		vwr := <-pendingVWRChan
 		if vwr == enableValueWriteReq {
@@ -563,11 +563,11 @@ func (store *DefaultValueStore) memWriter(pendingVWRChan chan *valueWriteReq) {
 			continue
 		}
 		if vwr == flushValueWriteReq {
-			if vm != nil && len(vm.toc) > 0 {
-				store.vfVMChan <- vm
-				vm = nil
+			if memBlock != nil && len(memBlock.toc) > 0 {
+				store.fileMemBlockChan <- memBlock
+				memBlock = nil
 			}
-			store.vfVMChan <- flushValueMem
+			store.fileMemBlockChan <- flushValueMemBlock
 			continue
 		}
 		if !enabled && !vwr.internal {
@@ -583,91 +583,91 @@ func (store *DefaultValueStore) memWriter(pendingVWRChan chan *valueWriteReq) {
 		if alloc < store.minValueAlloc {
 			alloc = store.minValueAlloc
 		}
-		if vm != nil && (vmTOCOffset+_VALUE_FILE_ENTRY_SIZE > cap(vm.toc) || vmMemOffset+alloc > cap(vm.values)) {
-			store.vfVMChan <- vm
-			vm = nil
+		if memBlock != nil && (memBlockTOCOffset+_VALUE_FILE_ENTRY_SIZE > cap(memBlock.toc) || memBlockMemOffset+alloc > cap(memBlock.values)) {
+			store.fileMemBlockChan <- memBlock
+			memBlock = nil
 		}
-		if vm == nil {
-			vm = <-store.freeVMChan
-			vmTOCOffset = 0
-			vmMemOffset = 0
+		if memBlock == nil {
+			memBlock = <-store.freeMemBlockChan
+			memBlockTOCOffset = 0
+			memBlockMemOffset = 0
 		}
-		vm.discardLock.Lock()
-		vm.values = vm.values[:vmMemOffset+alloc]
-		vm.discardLock.Unlock()
-		copy(vm.values[vmMemOffset:], vwr.value)
+		memBlock.discardLock.Lock()
+		memBlock.values = memBlock.values[:memBlockMemOffset+alloc]
+		memBlock.discardLock.Unlock()
+		copy(memBlock.values[memBlockMemOffset:], vwr.value)
 		if alloc > length {
-			for i, j := vmMemOffset+length, vmMemOffset+alloc; i < j; i++ {
-				vm.values[i] = 0
+			for i, j := memBlockMemOffset+length, memBlockMemOffset+alloc; i < j; i++ {
+				memBlock.values[i] = 0
 			}
 		}
-		ptimestampbits := store.locmap.Set(vwr.keyA, vwr.keyB, vwr.timestampbits, vm.id, uint32(vmMemOffset), uint32(length), false)
+		ptimestampbits := store.locmap.Set(vwr.keyA, vwr.keyB, vwr.timestampbits, memBlock.id, uint32(memBlockMemOffset), uint32(length), false)
 		if ptimestampbits < vwr.timestampbits {
-			vm.toc = vm.toc[:vmTOCOffset+_VALUE_FILE_ENTRY_SIZE]
+			memBlock.toc = memBlock.toc[:memBlockTOCOffset+_VALUE_FILE_ENTRY_SIZE]
 
-			binary.BigEndian.PutUint64(vm.toc[vmTOCOffset:], vwr.keyA)
-			binary.BigEndian.PutUint64(vm.toc[vmTOCOffset+8:], vwr.keyB)
-			binary.BigEndian.PutUint64(vm.toc[vmTOCOffset+16:], vwr.timestampbits)
-			binary.BigEndian.PutUint32(vm.toc[vmTOCOffset+24:], uint32(vmMemOffset))
-			binary.BigEndian.PutUint32(vm.toc[vmTOCOffset+28:], uint32(length))
+			binary.BigEndian.PutUint64(memBlock.toc[memBlockTOCOffset:], vwr.keyA)
+			binary.BigEndian.PutUint64(memBlock.toc[memBlockTOCOffset+8:], vwr.keyB)
+			binary.BigEndian.PutUint64(memBlock.toc[memBlockTOCOffset+16:], vwr.timestampbits)
+			binary.BigEndian.PutUint32(memBlock.toc[memBlockTOCOffset+24:], uint32(memBlockMemOffset))
+			binary.BigEndian.PutUint32(memBlock.toc[memBlockTOCOffset+28:], uint32(length))
 
-			vmTOCOffset += _VALUE_FILE_ENTRY_SIZE
-			vmMemOffset += alloc
+			memBlockTOCOffset += _VALUE_FILE_ENTRY_SIZE
+			memBlockMemOffset += alloc
 		} else {
-			vm.discardLock.Lock()
-			vm.values = vm.values[:vmMemOffset]
-			vm.discardLock.Unlock()
+			memBlock.discardLock.Lock()
+			memBlock.values = memBlock.values[:memBlockMemOffset]
+			memBlock.discardLock.Unlock()
 		}
 		vwr.timestampbits = ptimestampbits
 		vwr.errChan <- nil
 	}
 }
 
-func (store *DefaultValueStore) vfWriter() {
-	var vf *valueFile
+func (store *DefaultValueStore) fileWriter() {
+	var fl *valueFile
 	memWritersFlushLeft := len(store.pendingVWRChans)
 	var tocLen uint64
 	var valueLen uint64
 	for {
-		vm := <-store.vfVMChan
-		if vm == flushValueMem {
+		memBlock := <-store.fileMemBlockChan
+		if memBlock == flushValueMemBlock {
 			memWritersFlushLeft--
 			if memWritersFlushLeft > 0 {
 				continue
 			}
-			if vf != nil {
-				err := vf.close()
+			if fl != nil {
+				err := fl.close()
 				if err != nil {
-					store.logCritical("error closing %s: %s\n", vf.name, err)
+					store.logCritical("error closing %s: %s\n", fl.name, err)
 				}
-				vf = nil
+				fl = nil
 			}
-			for i := 0; i < len(store.freeableVMChans); i++ {
-				store.freeableVMChans[i] <- flushValueMem
+			for i := 0; i < len(store.freeableMemBlockChans); i++ {
+				store.freeableMemBlockChans[i] <- flushValueMemBlock
 			}
 			memWritersFlushLeft = len(store.pendingVWRChans)
 			continue
 		}
-		if vf != nil && (tocLen+uint64(len(vm.toc)) >= uint64(store.fileCap) || valueLen+uint64(len(vm.values)) > uint64(store.fileCap)) {
-			err := vf.close()
+		if fl != nil && (tocLen+uint64(len(memBlock.toc)) >= uint64(store.fileCap) || valueLen+uint64(len(memBlock.values)) > uint64(store.fileCap)) {
+			err := fl.close()
 			if err != nil {
-				store.logCritical("error closing %s: %s\n", vf.name, err)
+				store.logCritical("error closing %s: %s\n", fl.name, err)
 			}
-			vf = nil
+			fl = nil
 		}
-		if vf == nil {
+		if fl == nil {
 			var err error
-			vf, err = createValueFile(store, osCreateWriteCloser, osOpenReadSeeker)
+			fl, err = createValueFile(store, osCreateWriteCloser, osOpenReadSeeker)
 			if err != nil {
-				store.logCritical("vfWriter: %s\n", err)
+				store.logCritical("fileWriter: %s\n", err)
 				break
 			}
 			tocLen = _VALUE_FILE_HEADER_SIZE
 			valueLen = _VALUE_FILE_HEADER_SIZE
 		}
-		vf.write(vm)
-		tocLen += uint64(len(vm.toc))
-		valueLen += uint64(len(vm.values))
+		fl.write(memBlock)
+		tocLen += uint64(len(memBlock.toc))
+		valueLen += uint64(len(memBlock.values))
 	}
 }
 
@@ -675,7 +675,7 @@ func (store *DefaultValueStore) tocWriter() {
 	// writerA is the current toc file while writerB is the previously active
 	// toc writerB is kept around in case a "late" key arrives to be flushed
 	// whom's value is actually in the previous value file.
-	memClearersFlushLeft := len(store.freeableVMChans)
+	memClearersFlushLeft := len(store.freeableMemBlockChans)
 	var writerA io.WriteCloser
 	var offsetA uint64
 	var writerB io.WriteCloser
@@ -718,7 +718,7 @@ OuterLoop:
 				offsetA = 0
 			}
 			store.flushedChan <- struct{}{}
-			memClearersFlushLeft = len(store.freeableVMChans)
+			memClearersFlushLeft = len(store.freeableMemBlockChans)
 			continue
 		}
 		if len(t) > 8 {
@@ -857,7 +857,7 @@ func (store *DefaultValueStore) recovery() error {
 			store.logError("bad timestamp in name: %#v\n", names[i])
 			continue
 		}
-		vf, err := newValueFile(store, namets, osOpenReadSeeker)
+		fl, err := newValueFile(store, namets, osOpenReadSeeker)
 		if err != nil {
 			store.logError("error opening %s: %s\n", names[i], err)
 			continue
@@ -922,7 +922,7 @@ func (store *DefaultValueStore) recovery() error {
 					wr.keyA = binary.BigEndian.Uint64(fromDiskOverflow)
 					wr.keyB = keyB
 					wr.timestampbits = binary.BigEndian.Uint64(fromDiskOverflow[16:])
-					wr.blockID = vf.id
+					wr.blockID = fl.id
 					wr.offset = binary.BigEndian.Uint32(fromDiskOverflow[24:])
 					wr.length = binary.BigEndian.Uint32(fromDiskOverflow[28:])
 
@@ -946,7 +946,7 @@ func (store *DefaultValueStore) recovery() error {
 					wr.keyA = binary.BigEndian.Uint64(fromDiskBuf[j:])
 					wr.keyB = keyB
 					wr.timestampbits = binary.BigEndian.Uint64(fromDiskBuf[j+16:])
-					wr.blockID = vf.id
+					wr.blockID = fl.id
 					wr.offset = binary.BigEndian.Uint32(fromDiskBuf[j+24:])
 					wr.length = binary.BigEndian.Uint32(fromDiskBuf[j+28:])
 

@@ -10,21 +10,21 @@ func TestValueValuesMemRead(t *testing.T) {
 	if err != nil {
 		t.Fatal("")
 	}
-	vm1 := &valueMem{id: 1, store: store, values: []byte("0123456789abcdef")}
-	vm2 := &valueMem{id: 2, store: store, values: []byte("fedcba9876543210")}
-	store.locBlocks = []valueLocBlock{nil, vm1, vm2}
-	tsn := vm1.timestampnano()
+	memBlock1 := &valueMemBlock{id: 1, store: store, values: []byte("0123456789abcdef")}
+	memBlock2 := &valueMemBlock{id: 2, store: store, values: []byte("fedcba9876543210")}
+	store.locBlocks = []valueLocBlock{nil, memBlock1, memBlock2}
+	tsn := memBlock1.timestampnano()
 	if tsn != math.MaxInt64 {
 		t.Fatal(tsn)
 	}
-	ts, v, err := vm1.read(1, 2, 0x100, 5, 6, nil)
+	ts, v, err := memBlock1.read(1, 2, 0x100, 5, 6, nil)
 	if err != ErrNotFound {
 		t.Fatal(err)
 	}
-	vm1.store.locmap.Set(1, 2, 0x100, vm1.id, 5, 6, false)
-	ts, v, err = vm1.read(1, 2, 0x100, 5, 6, nil)
+	memBlock1.store.locmap.Set(1, 2, 0x100, memBlock1.id, 5, 6, false)
+	ts, v, err = memBlock1.read(1, 2, 0x100, 5, 6, nil)
 	if err != nil {
-		a, b, c, d := vm1.store.locmap.Get(1, 2)
+		a, b, c, d := memBlock1.store.locmap.Get(1, 2)
 		t.Fatal(err, a, b, c, d)
 	}
 	if ts != 0x100 {
@@ -33,13 +33,13 @@ func TestValueValuesMemRead(t *testing.T) {
 	if string(v) != "56789a" {
 		t.Fatal(string(v))
 	}
-	vm1.store.locmap.Set(1, 2, 0x100|_TSB_DELETION, vm1.id, 5, 6, false)
-	ts, v, err = vm1.read(1, 2, 0x100, 5, 6, nil)
+	memBlock1.store.locmap.Set(1, 2, 0x100|_TSB_DELETION, memBlock1.id, 5, 6, false)
+	ts, v, err = memBlock1.read(1, 2, 0x100, 5, 6, nil)
 	if err != ErrNotFound {
 		t.Fatal(err)
 	}
-	vm1.store.locmap.Set(1, 2, 0x200, vm2.id, 5, 6, false)
-	ts, v, err = vm1.read(1, 2, 0x100, 5, 6, nil)
+	memBlock1.store.locmap.Set(1, 2, 0x200, memBlock2.id, 5, 6, false)
+	ts, v, err = memBlock1.read(1, 2, 0x100, 5, 6, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
