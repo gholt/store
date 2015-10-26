@@ -369,12 +369,13 @@ func (vs *DefaultGroupStore) lookup(keyA uint64, keyB uint64, nameKeyA uint64, n
 }
 
 type LookupGroupItem struct {
-	NameKeyA uint64
-	NameKeyB uint64
+	NameKeyA       uint64
+	NameKeyB       uint64
+	TimestampMicro uint64
 }
 
-// LookupGroup returns all the nameKeyA, nameKeyB pairs matching under keyA,
-// keyB.
+// LookupGroup returns all the nameKeyA, nameKeyB, TimestampMicro items
+// matching under keyA, keyB.
 func (vs *DefaultGroupStore) LookupGroup(keyA uint64, keyB uint64) []LookupGroupItem {
 	atomic.AddInt32(&vs.lookupGroups, 1)
 	items := vs.vlm.GetGroup(keyA, keyB)
@@ -386,6 +387,7 @@ func (vs *DefaultGroupStore) LookupGroup(keyA uint64, keyB uint64) []LookupGroup
 	for i, item := range items {
 		rv[i].NameKeyA = item.NameKeyA
 		rv[i].NameKeyB = item.NameKeyB
+		rv[i].TimestampMicro = item.Timestamp >> _TSB_UTIL_BITS
 	}
 	return rv
 }
