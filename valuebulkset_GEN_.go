@@ -24,52 +24,52 @@ type valueBulkSetState struct {
 }
 
 type valueBulkSetMsg struct {
-	vs     *DefaultValueStore
+	store  *DefaultValueStore
 	header []byte
 	body   []byte
 }
 
-func (vs *DefaultValueStore) bulkSetConfig(cfg *ValueStoreConfig) {
-	if vs.msgRing != nil {
-		vs.msgRing.SetMsgHandler(_VALUE_BULK_SET_MSG_TYPE, vs.newInBulkSetMsg)
-		vs.bulkSetState.inMsgChan = make(chan *valueBulkSetMsg, cfg.InBulkSetMsgs)
-		vs.bulkSetState.inFreeMsgChan = make(chan *valueBulkSetMsg, cfg.InBulkSetMsgs)
-		for i := 0; i < cap(vs.bulkSetState.inFreeMsgChan); i++ {
-			vs.bulkSetState.inFreeMsgChan <- &valueBulkSetMsg{
-				vs:     vs,
+func (store *DefaultValueStore) bulkSetConfig(cfg *ValueStoreConfig) {
+	if store.msgRing != nil {
+		store.msgRing.SetMsgHandler(_VALUE_BULK_SET_MSG_TYPE, store.newInBulkSetMsg)
+		store.bulkSetState.inMsgChan = make(chan *valueBulkSetMsg, cfg.InBulkSetMsgs)
+		store.bulkSetState.inFreeMsgChan = make(chan *valueBulkSetMsg, cfg.InBulkSetMsgs)
+		for i := 0; i < cap(store.bulkSetState.inFreeMsgChan); i++ {
+			store.bulkSetState.inFreeMsgChan <- &valueBulkSetMsg{
+				store:  store,
 				header: make([]byte, _VALUE_BULK_SET_MSG_HEADER_LENGTH),
 				body:   make([]byte, cfg.BulkSetMsgCap),
 			}
 		}
-		vs.bulkSetState.inBulkSetDoneChans = make([]chan struct{}, cfg.InBulkSetWorkers)
-		for i := 0; i < len(vs.bulkSetState.inBulkSetDoneChans); i++ {
-			vs.bulkSetState.inBulkSetDoneChans[i] = make(chan struct{}, 1)
+		store.bulkSetState.inBulkSetDoneChans = make([]chan struct{}, cfg.InBulkSetWorkers)
+		for i := 0; i < len(store.bulkSetState.inBulkSetDoneChans); i++ {
+			store.bulkSetState.inBulkSetDoneChans[i] = make(chan struct{}, 1)
 		}
-		vs.bulkSetState.msgCap = cfg.BulkSetMsgCap
-		vs.bulkSetState.outFreeMsgChan = make(chan *valueBulkSetMsg, cfg.OutBulkSetMsgs)
-		for i := 0; i < cap(vs.bulkSetState.outFreeMsgChan); i++ {
-			vs.bulkSetState.outFreeMsgChan <- &valueBulkSetMsg{
-				vs:     vs,
+		store.bulkSetState.msgCap = cfg.BulkSetMsgCap
+		store.bulkSetState.outFreeMsgChan = make(chan *valueBulkSetMsg, cfg.OutBulkSetMsgs)
+		for i := 0; i < cap(store.bulkSetState.outFreeMsgChan); i++ {
+			store.bulkSetState.outFreeMsgChan <- &valueBulkSetMsg{
+				store:  store,
 				header: make([]byte, _VALUE_BULK_SET_MSG_HEADER_LENGTH),
 				body:   make([]byte, cfg.BulkSetMsgCap),
 			}
 		}
-		vs.bulkSetState.inResponseMsgTimeout = time.Duration(cfg.InBulkSetResponseMsgTimeout) * time.Millisecond
+		store.bulkSetState.inResponseMsgTimeout = time.Duration(cfg.InBulkSetResponseMsgTimeout) * time.Millisecond
 	}
 }
 
-func (vs *DefaultValueStore) bulkSetLaunch() {
-	for i := 0; i < len(vs.bulkSetState.inBulkSetDoneChans); i++ {
-		go vs.inBulkSet(vs.bulkSetState.inBulkSetDoneChans[i])
+func (store *DefaultValueStore) bulkSetLaunch() {
+	for i := 0; i < len(store.bulkSetState.inBulkSetDoneChans); i++ {
+		go store.inBulkSet(store.bulkSetState.inBulkSetDoneChans[i])
 	}
 }
 
 // newInBulkSetMsg reads bulk-set messages from the MsgRing and puts them on
 // the inMsgChan for the inBulkSet workers to work on.
-func (vs *DefaultValueStore) newInBulkSetMsg(r io.Reader, l uint64) (uint64, error) {
+func (store *DefaultValueStore) newInBulkSetMsg(r io.Reader, l uint64) (uint64, error) {
 	var bsm *valueBulkSetMsg
 	select {
-	case bsm = <-vs.bulkSetState.inFreeMsgChan:
+	case bsm = <-store.bulkSetState.inFreeMsgChan:
 	default:
 		// If there isn't a free valueBulkSetMsg, just read and discard the incoming
 		// bulk-set message.
@@ -84,16 +84,16 @@ func (vs *DefaultValueStore) newInBulkSetMsg(r io.Reader, l uint64) (uint64, err
 			sn, err = r.Read(t)
 			left -= uint64(sn)
 			if err != nil {
-				atomic.AddInt32(&vs.inBulkSetInvalids, 1)
+				atomic.AddInt32(&store.inBulkSetInvalids, 1)
 				return l - left, err
 			}
 		}
-		atomic.AddInt32(&vs.inBulkSetDrops, 1)
+		atomic.AddInt32(&store.inBulkSetDrops, 1)
 		return l, nil
 	}
 	// If the message is obviously too short, just throw it away.
 	if l < _VALUE_BULK_SET_MSG_HEADER_LENGTH+_VALUE_BULK_SET_MSG_MIN_ENTRY_LENGTH {
-		vs.bulkSetState.inFreeMsgChan <- bsm
+		store.bulkSetState.inFreeMsgChan <- bsm
 		left := l
 		var sn int
 		var err error
@@ -105,11 +105,11 @@ func (vs *DefaultValueStore) newInBulkSetMsg(r io.Reader, l uint64) (uint64, err
 			sn, err = r.Read(t)
 			left -= uint64(sn)
 			if err != nil {
-				atomic.AddInt32(&vs.inBulkSetInvalids, 1)
+				atomic.AddInt32(&store.inBulkSetInvalids, 1)
 				return l - left, err
 			}
 		}
-		atomic.AddInt32(&vs.inBulkSetInvalids, 1)
+		atomic.AddInt32(&store.inBulkSetInvalids, 1)
 		return l, nil
 	}
 	var n int
@@ -119,13 +119,13 @@ func (vs *DefaultValueStore) newInBulkSetMsg(r io.Reader, l uint64) (uint64, err
 		sn, err = r.Read(bsm.header[n:])
 		n += sn
 		if err != nil {
-			vs.bulkSetState.inFreeMsgChan <- bsm
-			atomic.AddInt32(&vs.inBulkSetInvalids, 1)
+			store.bulkSetState.inFreeMsgChan <- bsm
+			atomic.AddInt32(&store.inBulkSetInvalids, 1)
 			return uint64(n), err
 		}
 	}
 	l -= uint64(len(bsm.header))
-	// TODO: I think we should cap the body size to vs.bulkSetState.msgCap but
+	// TODO: I think we should cap the body size to store.bulkSetState.msgCap but
 	// that also means that the inBulkSet worker will need to handle the likely
 	// trailing truncated entry. Once all this is done, the overall cluster
 	// should work even if the caps are set differently from node to node
@@ -145,27 +145,27 @@ func (vs *DefaultValueStore) newInBulkSetMsg(r io.Reader, l uint64) (uint64, err
 		sn, err = r.Read(bsm.body[n:])
 		n += sn
 		if err != nil {
-			vs.bulkSetState.inFreeMsgChan <- bsm
-			atomic.AddInt32(&vs.inBulkSetInvalids, 1)
+			store.bulkSetState.inFreeMsgChan <- bsm
+			atomic.AddInt32(&store.inBulkSetInvalids, 1)
 			return uint64(len(bsm.header)) + uint64(n), err
 		}
 	}
-	vs.bulkSetState.inMsgChan <- bsm
-	atomic.AddInt32(&vs.inBulkSets, 1)
+	store.bulkSetState.inMsgChan <- bsm
+	atomic.AddInt32(&store.inBulkSets, 1)
 	return uint64(len(bsm.header)) + l, nil
 }
 
 // inBulkSet actually processes incoming bulk-set messages; there may be more
 // than one of these workers.
-func (vs *DefaultValueStore) inBulkSet(doneChan chan struct{}) {
+func (store *DefaultValueStore) inBulkSet(doneChan chan struct{}) {
 	for {
-		bsm := <-vs.bulkSetState.inMsgChan
+		bsm := <-store.bulkSetState.inMsgChan
 		if bsm == nil {
 			break
 		}
 		body := bsm.body
 		var err error
-		ring := vs.msgRing.Ring()
+		ring := store.msgRing.Ring()
 		var rightwardPartitionShift uint64
 		var bsam *valueBulkSetAckMsg
 		var rtimestampbits uint64
@@ -174,7 +174,7 @@ func (vs *DefaultValueStore) inBulkSet(doneChan chan struct{}) {
 			// Only ack if there is someone to ack to, which should always be
 			// the case but just in case.
 			if bsm.nodeID() != 0 {
-				bsam = vs.newOutBulkSetAckMsg()
+				bsam = store.newOutBulkSetAckMsg()
 			}
 		}
 		for len(body) > _VALUE_BULK_SET_MSG_ENTRY_HEADER_LENGTH {
@@ -184,16 +184,16 @@ func (vs *DefaultValueStore) inBulkSet(doneChan chan struct{}) {
 			timestampbits := binary.BigEndian.Uint64(body[16:])
 			l := binary.BigEndian.Uint32(body[24:])
 
-			atomic.AddInt32(&vs.inBulkSetWrites, 1)
+			atomic.AddInt32(&store.inBulkSetWrites, 1)
 			// Attempt to store everything received...
 			// Note that deletions are acted upon as internal requests (work
 			// even if writes are disabled due to disk fullness) and new data
 			// writes are not.
-			rtimestampbits, err = vs.write(keyA, keyB, timestampbits, body[_VALUE_BULK_SET_MSG_ENTRY_HEADER_LENGTH:_VALUE_BULK_SET_MSG_ENTRY_HEADER_LENGTH+l], timestampbits&_TSB_DELETION != 0)
+			rtimestampbits, err = store.write(keyA, keyB, timestampbits, body[_VALUE_BULK_SET_MSG_ENTRY_HEADER_LENGTH:_VALUE_BULK_SET_MSG_ENTRY_HEADER_LENGTH+l], timestampbits&_TSB_DELETION != 0)
 			if err != nil {
-				atomic.AddInt32(&vs.inBulkSetWriteErrors, 1)
+				atomic.AddInt32(&store.inBulkSetWriteErrors, 1)
 			} else if rtimestampbits != timestampbits {
-				atomic.AddInt32(&vs.inBulkSetWritesOverridden, 1)
+				atomic.AddInt32(&store.inBulkSetWritesOverridden, 1)
 			}
 			// But only ack on success, there is someone to ack to, and the
 			// local node is responsible for the data.
@@ -203,10 +203,10 @@ func (vs *DefaultValueStore) inBulkSet(doneChan chan struct{}) {
 			body = body[_VALUE_BULK_SET_MSG_ENTRY_HEADER_LENGTH+l:]
 		}
 		if bsam != nil {
-			atomic.AddInt32(&vs.outBulkSetAcks, 1)
-			vs.msgRing.MsgToNode(bsam, bsm.nodeID(), vs.bulkSetState.inResponseMsgTimeout)
+			atomic.AddInt32(&store.outBulkSetAcks, 1)
+			store.msgRing.MsgToNode(bsam, bsm.nodeID(), store.bulkSetState.inResponseMsgTimeout)
 		}
-		vs.bulkSetState.inFreeMsgChan <- bsm
+		store.bulkSetState.inFreeMsgChan <- bsm
 	}
 	doneChan <- struct{}{}
 }
@@ -218,10 +218,10 @@ func (vs *DefaultValueStore) inBulkSet(doneChan chan struct{}) {
 // is a fixed number of outgoing valueBulkSetMsg instances that can exist at
 // any given time, capping memory usage. Once the limit is reached, this method
 // will block until a valueBulkSetMsg is available to return.
-func (vs *DefaultValueStore) newOutBulkSetMsg() *valueBulkSetMsg {
-	bsm := <-vs.bulkSetState.outFreeMsgChan
-	if vs.msgRing != nil {
-		if r := vs.msgRing.Ring(); r != nil {
+func (store *DefaultValueStore) newOutBulkSetMsg() *valueBulkSetMsg {
+	bsm := <-store.bulkSetState.outFreeMsgChan
+	if store.msgRing != nil {
+		if r := store.msgRing.Ring(); r != nil {
 			if n := r.LocalNode(); n != nil {
 				binary.BigEndian.PutUint64(bsm.header, n.ID())
 			}
@@ -249,7 +249,7 @@ func (bsm *valueBulkSetMsg) WriteContent(w io.Writer) (uint64, error) {
 }
 
 func (bsm *valueBulkSetMsg) Free() {
-	bsm.vs.bulkSetState.outFreeMsgChan <- bsm
+	bsm.store.bulkSetState.outFreeMsgChan <- bsm
 }
 
 func (bsm *valueBulkSetMsg) nodeID() uint64 {

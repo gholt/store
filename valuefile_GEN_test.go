@@ -8,7 +8,7 @@ import (
 )
 
 func TestValueValuesFileReading(t *testing.T) {
-	vs, err := NewValueStore(lowMemValueStoreConfig())
+	store, err := NewValueStore(lowMemValueStoreConfig())
 	if err != nil {
 		t.Fatal("")
 	}
@@ -16,7 +16,7 @@ func TestValueValuesFileReading(t *testing.T) {
 	openReadSeeker := func(name string) (io.ReadSeeker, error) {
 		return &memFile{buf: buf}, nil
 	}
-	vf, err := newValueFile(vs, 12345, openReadSeeker)
+	vf, err := newValueFile(store, 12345, openReadSeeker)
 	if err != nil {
 		t.Fatal("")
 	}
@@ -97,7 +97,7 @@ func TestValueValuesFileReading(t *testing.T) {
 func TestValueValuesFileWritingEmpty(t *testing.T) {
 	cfg := lowMemValueStoreConfig()
 	cfg.ChecksumInterval = 64*1024 - 4
-	vs, err := NewValueStore(cfg)
+	store, err := NewValueStore(cfg)
 	if err != nil {
 		t.Fatal("")
 	}
@@ -108,7 +108,7 @@ func TestValueValuesFileWritingEmpty(t *testing.T) {
 	openReadSeeker := func(name string) (io.ReadSeeker, error) {
 		return &memFile{buf: buf}, nil
 	}
-	vf, err := createValueFile(vs, createWriteCloser, openReadSeeker)
+	vf, err := createValueFile(store, createWriteCloser, openReadSeeker)
 	if err != nil {
 		t.Fatal("")
 	}
@@ -123,8 +123,8 @@ func TestValueValuesFileWritingEmpty(t *testing.T) {
 	if string(buf.buf[:28]) != "VALUESTORE v0               " {
 		t.Fatal(string(buf.buf[:28]))
 	}
-	if binary.BigEndian.Uint32(buf.buf[28:]) != vs.checksumInterval {
-		t.Fatal(binary.BigEndian.Uint32(buf.buf[28:]), vs.checksumInterval)
+	if binary.BigEndian.Uint32(buf.buf[28:]) != store.checksumInterval {
+		t.Fatal(binary.BigEndian.Uint32(buf.buf[28:]), store.checksumInterval)
 	}
 	if binary.BigEndian.Uint32(buf.buf[bl-20:]) != 0 { // unused at this time
 		t.Fatal(binary.BigEndian.Uint32(buf.buf[bl-20:]))
@@ -143,12 +143,12 @@ func TestValueValuesFileWritingEmpty(t *testing.T) {
 func TestValueValuesFileWritingEmpty2(t *testing.T) {
 	cfg := lowMemValueStoreConfig()
 	cfg.ChecksumInterval = 64*1024 - 4
-	vs, err := NewValueStore(cfg)
+	store, err := NewValueStore(cfg)
 	if err != nil {
 		t.Fatal("")
 	}
-	vs.freeableVMChans = make([]chan *valueMem, 1)
-	vs.freeableVMChans[0] = make(chan *valueMem, 1)
+	store.freeableVMChans = make([]chan *valueMem, 1)
+	store.freeableVMChans[0] = make(chan *valueMem, 1)
 	buf := &memBuf{}
 	createWriteCloser := func(name string) (io.WriteCloser, error) {
 		return &memFile{buf: buf}, nil
@@ -156,7 +156,7 @@ func TestValueValuesFileWritingEmpty2(t *testing.T) {
 	openReadSeeker := func(name string) (io.ReadSeeker, error) {
 		return &memFile{buf: buf}, nil
 	}
-	vf, err := createValueFile(vs, createWriteCloser, openReadSeeker)
+	vf, err := createValueFile(store, createWriteCloser, openReadSeeker)
 	if err != nil {
 		t.Fatal("")
 	}
@@ -177,8 +177,8 @@ func TestValueValuesFileWritingEmpty2(t *testing.T) {
 	if string(buf.buf[:28]) != "VALUESTORE v0               " {
 		t.Fatal(string(buf.buf[:28]))
 	}
-	if binary.BigEndian.Uint32(buf.buf[28:]) != vs.checksumInterval {
-		t.Fatal(binary.BigEndian.Uint32(buf.buf[28:]), vs.checksumInterval)
+	if binary.BigEndian.Uint32(buf.buf[28:]) != store.checksumInterval {
+		t.Fatal(binary.BigEndian.Uint32(buf.buf[28:]), store.checksumInterval)
 	}
 	if binary.BigEndian.Uint32(buf.buf[bl-20:]) != 0 { // unused at this time
 		t.Fatal(binary.BigEndian.Uint32(buf.buf[bl-20:]))
@@ -197,7 +197,7 @@ func TestValueValuesFileWritingEmpty2(t *testing.T) {
 func TestValueValuesFileWriting(t *testing.T) {
 	cfg := lowMemValueStoreConfig()
 	cfg.ChecksumInterval = 64*1024 - 4
-	vs, err := NewValueStore(cfg)
+	store, err := NewValueStore(cfg)
 	if err != nil {
 		t.Fatal("")
 	}
@@ -208,7 +208,7 @@ func TestValueValuesFileWriting(t *testing.T) {
 	openReadSeeker := func(name string) (io.ReadSeeker, error) {
 		return &memFile{buf: buf}, nil
 	}
-	vf, err := createValueFile(vs, createWriteCloser, openReadSeeker)
+	vf, err := createValueFile(store, createWriteCloser, openReadSeeker)
 	if err != nil {
 		t.Fatal("")
 	}
@@ -227,8 +227,8 @@ func TestValueValuesFileWriting(t *testing.T) {
 	if string(buf.buf[:28]) != "VALUESTORE v0               " {
 		t.Fatal(string(buf.buf[:28]))
 	}
-	if binary.BigEndian.Uint32(buf.buf[28:]) != vs.checksumInterval {
-		t.Fatal(binary.BigEndian.Uint32(buf.buf[28:]), vs.checksumInterval)
+	if binary.BigEndian.Uint32(buf.buf[28:]) != store.checksumInterval {
+		t.Fatal(binary.BigEndian.Uint32(buf.buf[28:]), store.checksumInterval)
 	}
 	if !bytes.Equal(buf.buf[32:bl-20], values) {
 		t.Fatal("")
@@ -250,7 +250,7 @@ func TestValueValuesFileWriting(t *testing.T) {
 func TestValueValuesFileWritingMore(t *testing.T) {
 	cfg := lowMemValueStoreConfig()
 	cfg.ChecksumInterval = 64*1024 - 4
-	vs, err := NewValueStore(cfg)
+	store, err := NewValueStore(cfg)
 	if err != nil {
 		t.Fatal("")
 	}
@@ -261,7 +261,7 @@ func TestValueValuesFileWritingMore(t *testing.T) {
 	openReadSeeker := func(name string) (io.ReadSeeker, error) {
 		return &memFile{buf: buf}, nil
 	}
-	vf, err := createValueFile(vs, createWriteCloser, openReadSeeker)
+	vf, err := createValueFile(store, createWriteCloser, openReadSeeker)
 	if err != nil {
 		t.Fatal("")
 	}
@@ -274,14 +274,14 @@ func TestValueValuesFileWritingMore(t *testing.T) {
 	vf.write(&valueMem{values: values})
 	vf.close()
 	bl := len(buf.buf)
-	if bl != 123456+int(123512/vs.checksumInterval*4)+52 {
+	if bl != 123456+int(123512/store.checksumInterval*4)+52 {
 		t.Fatal(bl)
 	}
 	if string(buf.buf[:28]) != "VALUESTORE v0               " {
 		t.Fatal(string(buf.buf[:28]))
 	}
-	if binary.BigEndian.Uint32(buf.buf[28:]) != vs.checksumInterval {
-		t.Fatal(binary.BigEndian.Uint32(buf.buf[28:]), vs.checksumInterval)
+	if binary.BigEndian.Uint32(buf.buf[28:]) != store.checksumInterval {
+		t.Fatal(binary.BigEndian.Uint32(buf.buf[28:]), store.checksumInterval)
 	}
 	if binary.BigEndian.Uint32(buf.buf[bl-20:]) != 0 { // unused at this time
 		t.Fatal(binary.BigEndian.Uint32(buf.buf[bl-20:]))
@@ -300,12 +300,12 @@ func TestValueValuesFileWritingMore(t *testing.T) {
 func TestValueValuesFileWritingMultiple(t *testing.T) {
 	cfg := lowMemValueStoreConfig()
 	cfg.ChecksumInterval = 64*1024 - 4
-	vs, err := NewValueStore(cfg)
+	store, err := NewValueStore(cfg)
 	if err != nil {
 		t.Fatal("")
 	}
-	vs.freeableVMChans = make([]chan *valueMem, 1)
-	vs.freeableVMChans[0] = make(chan *valueMem, 2)
+	store.freeableVMChans = make([]chan *valueMem, 1)
+	store.freeableVMChans[0] = make(chan *valueMem, 2)
 	buf := &memBuf{}
 	createWriteCloser := func(name string) (io.WriteCloser, error) {
 		return &memFile{buf: buf}, nil
@@ -313,7 +313,7 @@ func TestValueValuesFileWritingMultiple(t *testing.T) {
 	openReadSeeker := func(name string) (io.ReadSeeker, error) {
 		return &memFile{buf: buf}, nil
 	}
-	vf, err := createValueFile(vs, createWriteCloser, openReadSeeker)
+	vf, err := createValueFile(store, createWriteCloser, openReadSeeker)
 	if err != nil {
 		t.Fatal("")
 	}
@@ -336,14 +336,14 @@ func TestValueValuesFileWritingMultiple(t *testing.T) {
 		t.Fatal(vm2.vfID, vf.id)
 	}
 	bl := len(buf.buf)
-	if bl != 12345+54321+int(123512/vs.checksumInterval*4)+52 {
+	if bl != 12345+54321+int(123512/store.checksumInterval*4)+52 {
 		t.Fatal(bl)
 	}
 	if string(buf.buf[:28]) != "VALUESTORE v0               " {
 		t.Fatal(string(buf.buf[:28]))
 	}
-	if binary.BigEndian.Uint32(buf.buf[28:]) != vs.checksumInterval {
-		t.Fatal(binary.BigEndian.Uint32(buf.buf[28:]), vs.checksumInterval)
+	if binary.BigEndian.Uint32(buf.buf[28:]) != store.checksumInterval {
+		t.Fatal(binary.BigEndian.Uint32(buf.buf[28:]), store.checksumInterval)
 	}
 	if binary.BigEndian.Uint32(buf.buf[bl-20:]) != 0 { // unused at this time
 		t.Fatal(binary.BigEndian.Uint32(buf.buf[bl-20:]))

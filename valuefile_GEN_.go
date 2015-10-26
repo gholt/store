@@ -24,7 +24,7 @@ const _VALUE_FILE_ENTRY_SIZE = 32
 const _VALUE_FILE_TRAILER_SIZE = 16
 
 type valueFile struct {
-	vs                  *DefaultValueStore
+	store               *DefaultValueStore
 	name                string
 	id                  uint32
 	bts                 int64
@@ -48,10 +48,10 @@ type valueFileWriteBuf struct {
 	vms    []*valueMem
 }
 
-func newValueFile(vs *DefaultValueStore, bts int64, openReadSeeker func(name string) (io.ReadSeeker, error)) (*valueFile, error) {
-	vf := &valueFile{vs: vs, bts: bts}
-	vf.name = path.Join(vs.path, fmt.Sprintf("%019d.value", vf.bts))
-	vf.readerFPs = make([]brimutil.ChecksummedReader, vs.fileReaders)
+func newValueFile(store *DefaultValueStore, bts int64, openReadSeeker func(name string) (io.ReadSeeker, error)) (*valueFile, error) {
+	vf := &valueFile{store: store, bts: bts}
+	vf.name = path.Join(store.path, fmt.Sprintf("%019d.value", vf.bts))
+	vf.readerFPs = make([]brimutil.ChecksummedReader, store.fileReaders)
 	vf.readerLocks = make([]sync.Mutex, len(vf.readerFPs))
 	vf.readerLens = make([][]byte, len(vf.readerFPs))
 	for i := 0; i < len(vf.readerFPs); i++ {
@@ -59,11 +59,11 @@ func newValueFile(vs *DefaultValueStore, bts int64, openReadSeeker func(name str
 		if err != nil {
 			return nil, err
 		}
-		vf.readerFPs[i] = brimutil.NewChecksummedReader(fp, int(vs.checksumInterval), murmur3.New32)
+		vf.readerFPs[i] = brimutil.NewChecksummedReader(fp, int(store.checksumInterval), murmur3.New32)
 		vf.readerLens[i] = make([]byte, 4)
 	}
 	var err error
-	vf.id, err = vs.addLocBlock(vf)
+	vf.id, err = store.addLocBlock(vf)
 	if err != nil {
 		vf.close()
 		return nil, err
@@ -71,31 +71,31 @@ func newValueFile(vs *DefaultValueStore, bts int64, openReadSeeker func(name str
 	return vf, nil
 }
 
-func createValueFile(vs *DefaultValueStore, createWriteCloser func(name string) (io.WriteCloser, error), openReadSeeker func(name string) (io.ReadSeeker, error)) (*valueFile, error) {
-	vf := &valueFile{vs: vs, bts: time.Now().UnixNano()}
-	vf.name = path.Join(vs.path, fmt.Sprintf("%019d.value", vf.bts))
+func createValueFile(store *DefaultValueStore, createWriteCloser func(name string) (io.WriteCloser, error), openReadSeeker func(name string) (io.ReadSeeker, error)) (*valueFile, error) {
+	vf := &valueFile{store: store, bts: time.Now().UnixNano()}
+	vf.name = path.Join(store.path, fmt.Sprintf("%019d.value", vf.bts))
 	fp, err := createWriteCloser(vf.name)
 	if err != nil {
 		return nil, err
 	}
 	vf.writerFP = fp
-	vf.freeChan = make(chan *valueFileWriteBuf, vs.workers)
-	for i := 0; i < vs.workers; i++ {
-		vf.freeChan <- &valueFileWriteBuf{buf: make([]byte, vs.checksumInterval+4)}
+	vf.freeChan = make(chan *valueFileWriteBuf, store.workers)
+	for i := 0; i < store.workers; i++ {
+		vf.freeChan <- &valueFileWriteBuf{buf: make([]byte, store.checksumInterval+4)}
 	}
-	vf.checksumChan = make(chan *valueFileWriteBuf, vs.workers)
-	vf.writeChan = make(chan *valueFileWriteBuf, vs.workers)
+	vf.checksumChan = make(chan *valueFileWriteBuf, store.workers)
+	vf.writeChan = make(chan *valueFileWriteBuf, store.workers)
 	vf.doneChan = make(chan struct{})
 	vf.buf = <-vf.freeChan
 	head := []byte("VALUESTORE v0                   ")
-	binary.BigEndian.PutUint32(head[28:], vs.checksumInterval)
+	binary.BigEndian.PutUint32(head[28:], store.checksumInterval)
 	vf.buf.offset = uint32(copy(vf.buf.buf, head))
 	atomic.StoreUint32(&vf.atOffset, vf.buf.offset)
 	go vf.writer()
-	for i := 0; i < vs.workers; i++ {
+	for i := 0; i < store.workers; i++ {
 		go vf.checksummer()
 	}
-	vf.readerFPs = make([]brimutil.ChecksummedReader, vs.fileReaders)
+	vf.readerFPs = make([]brimutil.ChecksummedReader, store.fileReaders)
 	vf.readerLocks = make([]sync.Mutex, len(vf.readerFPs))
 	vf.readerLens = make([][]byte, len(vf.readerFPs))
 	for i := 0; i < len(vf.readerFPs); i++ {
@@ -107,10 +107,10 @@ func createValueFile(vs *DefaultValueStore, createWriteCloser func(name string) 
 			}
 			return nil, err
 		}
-		vf.readerFPs[i] = brimutil.NewChecksummedReader(fp, int(vs.checksumInterval), murmur3.New32)
+		vf.readerFPs[i] = brimutil.NewChecksummedReader(fp, int(store.checksumInterval), murmur3.New32)
 		vf.readerLens[i] = make([]byte, 4)
 	}
-	vf.id, err = vs.addLocBlock(vf)
+	vf.id, err = store.addLocBlock(vf)
 	if err != nil {
 		return nil, err
 	}
@@ -153,19 +153,19 @@ func (vf *valueFile) write(vm *valueMem) {
 	vm.vfID = vf.id
 	vm.vfOffset = atomic.LoadUint32(&vf.atOffset)
 	if len(vm.values) < 1 {
-		vf.vs.freeableVMChans[vf.freeableVMChanIndex] <- vm
+		vf.store.freeableVMChans[vf.freeableVMChanIndex] <- vm
 		vf.freeableVMChanIndex++
-		if vf.freeableVMChanIndex >= len(vf.vs.freeableVMChans) {
+		if vf.freeableVMChanIndex >= len(vf.store.freeableVMChans) {
 			vf.freeableVMChanIndex = 0
 		}
 		return
 	}
 	left := len(vm.values)
 	for left > 0 {
-		n := copy(vf.buf.buf[vf.buf.offset:vf.vs.checksumInterval], vm.values[len(vm.values)-left:])
+		n := copy(vf.buf.buf[vf.buf.offset:vf.store.checksumInterval], vm.values[len(vm.values)-left:])
 		atomic.AddUint32(&vf.atOffset, uint32(n))
 		vf.buf.offset += uint32(n)
-		if vf.buf.offset >= vf.vs.checksumInterval {
+		if vf.buf.offset >= vf.store.checksumInterval {
 			s := vf.buf.seq
 			vf.checksumChan <- vf.buf
 			vf.buf = <-vf.freeChan
@@ -174,9 +174,9 @@ func (vf *valueFile) write(vm *valueMem) {
 		left -= n
 	}
 	if vf.buf.offset == 0 {
-		vf.vs.freeableVMChans[vf.freeableVMChanIndex] <- vm
+		vf.store.freeableVMChans[vf.freeableVMChanIndex] <- vm
 		vf.freeableVMChanIndex++
-		if vf.freeableVMChanIndex >= len(vf.vs.freeableVMChans) {
+		if vf.freeableVMChanIndex >= len(vf.store.freeableVMChans) {
 			vf.freeableVMChanIndex = 0
 		}
 	} else {
@@ -197,7 +197,7 @@ func (vf *valueFile) close() error {
 	copy(term[12:], "TERM")
 	left := len(term)
 	for left > 0 {
-		n := copy(vf.buf.buf[vf.buf.offset:vf.vs.checksumInterval], term[len(term)-left:])
+		n := copy(vf.buf.buf[vf.buf.offset:vf.store.checksumInterval], term[len(term)-left:])
 		vf.buf.offset += uint32(n)
 		binary.BigEndian.PutUint32(vf.buf.buf[vf.buf.offset:], murmur3.Sum32(vf.buf.buf[:vf.buf.offset]))
 		if _, err := vf.writerFP.Write(vf.buf.buf[:vf.buf.offset+4]); err != nil {
@@ -215,9 +215,9 @@ func (vf *valueFile) close() error {
 		}
 	}
 	for _, vm := range vf.buf.vms {
-		vf.vs.freeableVMChans[vf.freeableVMChanIndex] <- vm
+		vf.store.freeableVMChans[vf.freeableVMChanIndex] <- vm
 		vf.freeableVMChanIndex++
-		if vf.freeableVMChanIndex >= len(vf.vs.freeableVMChans) {
+		if vf.freeableVMChanIndex >= len(vf.store.freeableVMChans) {
 			vf.freeableVMChanIndex = 0
 		}
 	}
@@ -248,7 +248,7 @@ func (vf *valueFile) checksummer() {
 		if buf == nil {
 			break
 		}
-		binary.BigEndian.PutUint32(buf.buf[vf.vs.checksumInterval:], murmur3.Sum32(buf.buf[:vf.vs.checksumInterval]))
+		binary.BigEndian.PutUint32(buf.buf[vf.store.checksumInterval:], murmur3.Sum32(buf.buf[:vf.store.checksumInterval]))
 		vf.writeChan <- buf
 	}
 	vf.doneChan <- struct{}{}
@@ -273,14 +273,14 @@ func (vf *valueFile) writer() {
 			continue
 		}
 		if _, err := vf.writerFP.Write(buf.buf); err != nil {
-			vf.vs.logCritical("%s %s\n", vf.name, err)
+			vf.store.logCritical("%s %s\n", vf.name, err)
 			break
 		}
 		if len(buf.vms) > 0 {
 			for _, vm := range buf.vms {
-				vf.vs.freeableVMChans[vf.freeableVMChanIndex] <- vm
+				vf.store.freeableVMChans[vf.freeableVMChanIndex] <- vm
 				vf.freeableVMChanIndex++
-				if vf.freeableVMChanIndex >= len(vf.vs.freeableVMChans) {
+				if vf.freeableVMChanIndex >= len(vf.store.freeableVMChans) {
 					vf.freeableVMChanIndex = 0
 				}
 			}

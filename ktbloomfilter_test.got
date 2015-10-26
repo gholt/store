@@ -51,7 +51,7 @@ func Test{{.T}}KTBloomFilterPersistence(t *testing.T) {
         f.add(i, i{{if eq .t "group"}}, i, i{{end}}, i)
     }
     m := &{{.t}}PullReplicationMsg{
-        vs:     nil,
+        store:  nil,
         header: make([]byte, _{{.TT}}_KT_BLOOM_FILTER_HEADER_BYTES+_{{.TT}}_PULL_REPLICATION_MSG_HEADER_BYTES),
         body:   make([]byte, len(f.bits)),
     }

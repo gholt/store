@@ -65,17 +65,17 @@ func TestValuePullReplicationSimple(t *testing.T) {
 	m := &msgRingValuePullReplicationTester{ring: r}
 	cfg := lowMemValueStoreConfig()
 	cfg.MsgRing = m
-	vs, err := NewValueStore(cfg)
+	store, err := NewValueStore(cfg)
 	if err != nil {
 		t.Fatal("")
 	}
-	vs.EnableAll()
-	defer vs.DisableAll()
-	_, err = vs.write(1, 2, 0x500, []byte("testing"), false)
+	store.EnableAll()
+	defer store.DisableAll()
+	_, err = store.write(1, 2, 0x500, []byte("testing"), false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	vs.OutPullReplicationPass()
+	store.OutPullReplicationPass()
 	m.lock.Lock()
 	v := len(m.headerToPartitions)
 	m.lock.Unlock()
@@ -85,7 +85,7 @@ func TestValuePullReplicationSimple(t *testing.T) {
 	mayHave := false
 	m.lock.Lock()
 	for i := 0; i < len(m.headerToPartitions); i++ {
-		prm := &valuePullReplicationMsg{vs: vs, header: m.headerToPartitions[i], body: m.bodyToPartitions[i]}
+		prm := &valuePullReplicationMsg{store: store, header: m.headerToPartitions[i], body: m.bodyToPartitions[i]}
 		bf := prm.ktBloomFilter()
 		if bf.mayHave(1, 2, 0x500) {
 			mayHave = true

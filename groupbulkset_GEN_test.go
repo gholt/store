@@ -13,17 +13,17 @@ import (
 func TestGroupBulkSetReadObviouslyTooShort(t *testing.T) {
 	cfg := lowMemGroupStoreConfig()
 	cfg.MsgRing = &msgRingPlaceholder{}
-	vs, err := NewGroupStore(cfg)
+	store, err := NewGroupStore(cfg)
 	if err != nil {
 		t.Fatal("")
 	}
-	for i := 0; i < len(vs.bulkSetState.inBulkSetDoneChans); i++ {
-		vs.bulkSetState.inMsgChan <- nil
+	for i := 0; i < len(store.bulkSetState.inBulkSetDoneChans); i++ {
+		store.bulkSetState.inMsgChan <- nil
 	}
-	for _, doneChan := range vs.bulkSetState.inBulkSetDoneChans {
+	for _, doneChan := range store.bulkSetState.inBulkSetDoneChans {
 		<-doneChan
 	}
-	n, err := vs.newInBulkSetMsg(bytes.NewBuffer(make([]byte, 1)), 1)
+	n, err := store.newInBulkSetMsg(bytes.NewBuffer(make([]byte, 1)), 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -31,17 +31,17 @@ func TestGroupBulkSetReadObviouslyTooShort(t *testing.T) {
 		t.Fatal(n)
 	}
 	select {
-	case bsm := <-vs.bulkSetState.inMsgChan:
+	case bsm := <-store.bulkSetState.inMsgChan:
 		t.Fatal(bsm)
 	default:
 	}
 	// Once again, way too short but with an error too.
-	_, err = vs.newInBulkSetMsg(bytes.NewBuffer(make([]byte, 1)), 2)
+	_, err = store.newInBulkSetMsg(bytes.NewBuffer(make([]byte, 1)), 2)
 	if err != io.EOF {
 		t.Fatal(err)
 	}
 	select {
-	case bsm := <-vs.bulkSetState.inMsgChan:
+	case bsm := <-store.bulkSetState.inMsgChan:
 		t.Fatal(bsm)
 	default:
 	}
@@ -50,26 +50,26 @@ func TestGroupBulkSetReadObviouslyTooShort(t *testing.T) {
 func TestGroupBulkSetRead(t *testing.T) {
 	cfg := lowMemGroupStoreConfig()
 	cfg.MsgRing = &msgRingPlaceholder{}
-	vs, err := NewGroupStore(cfg)
+	store, err := NewGroupStore(cfg)
 	if err != nil {
 		t.Fatal("")
 	}
-	for i := 0; i < len(vs.bulkSetState.inBulkSetDoneChans); i++ {
-		vs.bulkSetState.inMsgChan <- nil
+	for i := 0; i < len(store.bulkSetState.inBulkSetDoneChans); i++ {
+		store.bulkSetState.inMsgChan <- nil
 	}
-	for _, doneChan := range vs.bulkSetState.inBulkSetDoneChans {
+	for _, doneChan := range store.bulkSetState.inBulkSetDoneChans {
 		<-doneChan
 	}
-	n, err := vs.newInBulkSetMsg(bytes.NewBuffer(make([]byte, 100)), 100)
+	n, err := store.newInBulkSetMsg(bytes.NewBuffer(make([]byte, 100)), 100)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if n != 100 {
 		t.Fatal(n)
 	}
-	<-vs.bulkSetState.inMsgChan
+	<-store.bulkSetState.inMsgChan
 	// Again, but with an error in the header.
-	n, err = vs.newInBulkSetMsg(bytes.NewBuffer(make([]byte, _GROUP_BULK_SET_MSG_HEADER_LENGTH-1)), 100)
+	n, err = store.newInBulkSetMsg(bytes.NewBuffer(make([]byte, _GROUP_BULK_SET_MSG_HEADER_LENGTH-1)), 100)
 	if err != io.EOF {
 		t.Fatal(err)
 	}
@@ -77,12 +77,12 @@ func TestGroupBulkSetRead(t *testing.T) {
 		t.Fatal(n)
 	}
 	select {
-	case bsm := <-vs.bulkSetState.inMsgChan:
+	case bsm := <-store.bulkSetState.inMsgChan:
 		t.Fatal(bsm)
 	default:
 	}
 	// Once again, but with an error in the body.
-	n, err = vs.newInBulkSetMsg(bytes.NewBuffer(make([]byte, 10)), 100)
+	n, err = store.newInBulkSetMsg(bytes.NewBuffer(make([]byte, 10)), 100)
 	if err != io.EOF {
 		t.Fatal(err)
 	}
@@ -90,7 +90,7 @@ func TestGroupBulkSetRead(t *testing.T) {
 		t.Fatal(n)
 	}
 	select {
-	case bsm := <-vs.bulkSetState.inMsgChan:
+	case bsm := <-store.bulkSetState.inMsgChan:
 		t.Fatal(bsm)
 	default:
 	}
@@ -100,27 +100,27 @@ func TestGroupBulkSetReadLowSendCap(t *testing.T) {
 	cfg := lowMemGroupStoreConfig()
 	cfg.MsgRing = &msgRingPlaceholder{}
 	cfg.BulkSetMsgCap = _GROUP_BULK_SET_MSG_HEADER_LENGTH + 1
-	vs, err := NewGroupStore(cfg)
+	store, err := NewGroupStore(cfg)
 	if err != nil {
 		t.Fatal("")
 	}
-	for i := 0; i < len(vs.bulkSetState.inBulkSetDoneChans); i++ {
-		vs.bulkSetState.inMsgChan <- nil
+	for i := 0; i < len(store.bulkSetState.inBulkSetDoneChans); i++ {
+		store.bulkSetState.inMsgChan <- nil
 	}
-	for _, doneChan := range vs.bulkSetState.inBulkSetDoneChans {
+	for _, doneChan := range store.bulkSetState.inBulkSetDoneChans {
 		<-doneChan
 	}
-	for len(vs.bulkSetState.inMsgChan) > 0 {
+	for len(store.bulkSetState.inMsgChan) > 0 {
 		time.Sleep(time.Millisecond)
 	}
-	n, err := vs.newInBulkSetMsg(bytes.NewBuffer(make([]byte, 100)), 100)
+	n, err := store.newInBulkSetMsg(bytes.NewBuffer(make([]byte, 100)), 100)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if n != 100 {
 		t.Fatal(n)
 	}
-	<-vs.bulkSetState.inMsgChan
+	<-store.bulkSetState.inMsgChan
 }
 
 func TestGroupBulkSetMsgWithoutAck(t *testing.T) {
@@ -136,22 +136,22 @@ func TestGroupBulkSetMsgWithoutAck(t *testing.T) {
 	cfg.MsgRing = m
 	cfg.InBulkSetWorkers = 1
 	cfg.InBulkSetMsgs = 1
-	vs, err := NewGroupStore(cfg)
+	store, err := NewGroupStore(cfg)
 	if err != nil {
 		t.Fatal("")
 	}
-	vs.EnableAll()
-	defer vs.DisableAll()
-	bsm := <-vs.bulkSetState.inFreeMsgChan
+	store.EnableAll()
+	defer store.DisableAll()
+	bsm := <-store.bulkSetState.inFreeMsgChan
 	bsm.body = bsm.body[:0]
 	if !bsm.add(1, 2, 3, 4, 0x500, []byte("testing")) {
 		t.Fatal("")
 	}
-	vs.bulkSetState.inMsgChan <- bsm
+	store.bulkSetState.inMsgChan <- bsm
 	// only one of these, so if we get it back we know the previous data was
 	// processed
-	<-vs.bulkSetState.inFreeMsgChan
-	ts, v, err := vs.Read(1, 2, 3, 4, nil)
+	<-store.bulkSetState.inFreeMsgChan
+	ts, v, err := store.Read(1, 2, 3, 4, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -182,23 +182,23 @@ func TestGroupBulkSetMsgWithAck(t *testing.T) {
 	cfg.MsgRing = m
 	cfg.InBulkSetWorkers = 1
 	cfg.InBulkSetMsgs = 1
-	vs, err := NewGroupStore(cfg)
+	store, err := NewGroupStore(cfg)
 	if err != nil {
 		t.Fatal("")
 	}
-	vs.EnableAll()
-	defer vs.DisableAll()
-	bsm := <-vs.bulkSetState.inFreeMsgChan
+	store.EnableAll()
+	defer store.DisableAll()
+	bsm := <-store.bulkSetState.inFreeMsgChan
 	binary.BigEndian.PutUint64(bsm.header, 123)
 	bsm.body = bsm.body[:0]
 	if !bsm.add(1, 2, 3, 4, 0x500, []byte("testing")) {
 		t.Fatal("")
 	}
-	vs.bulkSetState.inMsgChan <- bsm
+	store.bulkSetState.inMsgChan <- bsm
 	// only one of these, so if we get it back we know the previous data was
 	// processed
-	<-vs.bulkSetState.inFreeMsgChan
-	ts, v, err := vs.Read(1, 2, 3, 4, nil)
+	<-store.bulkSetState.inFreeMsgChan
+	ts, v, err := store.Read(1, 2, 3, 4, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -228,23 +228,23 @@ func TestGroupBulkSetMsgWithoutRing(t *testing.T) {
 	cfg.MsgRing = m
 	cfg.InBulkSetWorkers = 1
 	cfg.InBulkSetMsgs = 1
-	vs, err := NewGroupStore(cfg)
+	store, err := NewGroupStore(cfg)
 	if err != nil {
 		t.Fatal("")
 	}
-	vs.EnableAll()
-	defer vs.DisableAll()
-	bsm := <-vs.bulkSetState.inFreeMsgChan
+	store.EnableAll()
+	defer store.DisableAll()
+	bsm := <-store.bulkSetState.inFreeMsgChan
 	binary.BigEndian.PutUint64(bsm.header, 123)
 	bsm.body = bsm.body[:0]
 	if !bsm.add(1, 2, 3, 4, 0x500, []byte("testing")) {
 		t.Fatal("")
 	}
-	vs.bulkSetState.inMsgChan <- bsm
+	store.bulkSetState.inMsgChan <- bsm
 	// only one of these, so if we get it back we know the previous data was
 	// processed
-	<-vs.bulkSetState.inFreeMsgChan
-	ts, v, err := vs.Read(1, 2, 3, 4, nil)
+	<-store.bulkSetState.inFreeMsgChan
+	ts, v, err := store.Read(1, 2, 3, 4, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -265,11 +265,11 @@ func TestGroupBulkSetMsgWithoutRing(t *testing.T) {
 func TestGroupBulkSetMsgOut(t *testing.T) {
 	cfg := lowMemGroupStoreConfig()
 	cfg.MsgRing = &msgRingPlaceholder{}
-	vs, err := NewGroupStore(cfg)
+	store, err := NewGroupStore(cfg)
 	if err != nil {
 		t.Fatal("")
 	}
-	bsm := vs.newOutBulkSetMsg()
+	bsm := store.newOutBulkSetMsg()
 	if bsm.MsgType() != _GROUP_BULK_SET_MSG_TYPE {
 		t.Fatal(bsm.MsgType())
 	}
@@ -288,7 +288,7 @@ func TestGroupBulkSetMsgOut(t *testing.T) {
 		t.Fatal(buf.Bytes())
 	}
 	bsm.Free()
-	bsm = vs.newOutBulkSetMsg()
+	bsm = store.newOutBulkSetMsg()
 	binary.BigEndian.PutUint64(bsm.header, 12345)
 	bsm.add(1, 2, 3, 4, 0x500, nil)
 	bsm.add(6, 7, 8, 9, 0xa00, []byte("testing"))
@@ -341,11 +341,11 @@ func TestGroupBulkSetMsgOutDefaultsToFromLocalNode(t *testing.T) {
 	r.SetLocalNode(n.ID())
 	cfg := lowMemGroupStoreConfig()
 	cfg.MsgRing = &msgRingPlaceholder{ring: r}
-	vs, err := NewGroupStore(cfg)
+	store, err := NewGroupStore(cfg)
 	if err != nil {
 		t.Fatal("")
 	}
-	bsm := vs.newOutBulkSetMsg()
+	bsm := store.newOutBulkSetMsg()
 	if binary.BigEndian.Uint64(bsm.header) != n.ID() {
 		t.Fatal(bsm)
 	}
@@ -354,11 +354,11 @@ func TestGroupBulkSetMsgOutDefaultsToFromLocalNode(t *testing.T) {
 func TestGroupBulkSetMsgOutWriteError(t *testing.T) {
 	cfg := lowMemGroupStoreConfig()
 	cfg.MsgRing = &msgRingPlaceholder{}
-	vs, err := NewGroupStore(cfg)
+	store, err := NewGroupStore(cfg)
 	if err != nil {
 		t.Fatal("")
 	}
-	bsm := vs.newOutBulkSetMsg()
+	bsm := store.newOutBulkSetMsg()
 	_, err = bsm.WriteContent(&testErrorWriter{})
 	if err == nil {
 		t.Fatal(err)
@@ -370,11 +370,11 @@ func TestGroupBulkSetMsgOutHitCap(t *testing.T) {
 	cfg := lowMemGroupStoreConfig()
 	cfg.MsgRing = &msgRingPlaceholder{}
 	cfg.BulkSetMsgCap = _GROUP_BULK_SET_MSG_HEADER_LENGTH + _GROUP_BULK_SET_MSG_ENTRY_HEADER_LENGTH + 3
-	vs, err := NewGroupStore(cfg)
+	store, err := NewGroupStore(cfg)
 	if err != nil {
 		t.Fatal("")
 	}
-	bsm := vs.newOutBulkSetMsg()
+	bsm := store.newOutBulkSetMsg()
 	if !bsm.add(1, 2, 3, 4, 0x500, []byte("1")) {
 		t.Fatal("")
 	}

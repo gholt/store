@@ -51,7 +51,7 @@ func TestGroupKTBloomFilterPersistence(t *testing.T) {
 		f.add(i, i, i, i, i)
 	}
 	m := &groupPullReplicationMsg{
-		vs:     nil,
+		store:  nil,
 		header: make([]byte, _GROUP_KT_BLOOM_FILTER_HEADER_BYTES+_GROUP_PULL_REPLICATION_MSG_HEADER_BYTES),
 		body:   make([]byte, len(f.bits)),
 	}

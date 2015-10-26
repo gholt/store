@@ -20,47 +20,47 @@ type valueBulkSetAckState struct {
 }
 
 type valueBulkSetAckMsg struct {
-	vs   *DefaultValueStore
-	body []byte
+	store *DefaultValueStore
+	body  []byte
 }
 
-func (vs *DefaultValueStore) bulkSetAckConfig(cfg *ValueStoreConfig) {
-	if vs.msgRing != nil {
-		vs.msgRing.SetMsgHandler(_VALUE_BULK_SET_ACK_MSG_TYPE, vs.newInBulkSetAckMsg)
-		vs.bulkSetAckState.inMsgChan = make(chan *valueBulkSetAckMsg, cfg.InBulkSetAckMsgs)
-		vs.bulkSetAckState.inFreeMsgChan = make(chan *valueBulkSetAckMsg, cfg.InBulkSetAckMsgs)
-		for i := 0; i < cap(vs.bulkSetAckState.inFreeMsgChan); i++ {
-			vs.bulkSetAckState.inFreeMsgChan <- &valueBulkSetAckMsg{
-				vs:   vs,
-				body: make([]byte, cfg.BulkSetAckMsgCap),
+func (store *DefaultValueStore) bulkSetAckConfig(cfg *ValueStoreConfig) {
+	if store.msgRing != nil {
+		store.msgRing.SetMsgHandler(_VALUE_BULK_SET_ACK_MSG_TYPE, store.newInBulkSetAckMsg)
+		store.bulkSetAckState.inMsgChan = make(chan *valueBulkSetAckMsg, cfg.InBulkSetAckMsgs)
+		store.bulkSetAckState.inFreeMsgChan = make(chan *valueBulkSetAckMsg, cfg.InBulkSetAckMsgs)
+		for i := 0; i < cap(store.bulkSetAckState.inFreeMsgChan); i++ {
+			store.bulkSetAckState.inFreeMsgChan <- &valueBulkSetAckMsg{
+				store: store,
+				body:  make([]byte, cfg.BulkSetAckMsgCap),
 			}
 		}
-		vs.bulkSetAckState.inBulkSetAckDoneChans = make([]chan struct{}, cfg.InBulkSetAckWorkers)
-		for i := 0; i < len(vs.bulkSetAckState.inBulkSetAckDoneChans); i++ {
-			vs.bulkSetAckState.inBulkSetAckDoneChans[i] = make(chan struct{}, 1)
+		store.bulkSetAckState.inBulkSetAckDoneChans = make([]chan struct{}, cfg.InBulkSetAckWorkers)
+		for i := 0; i < len(store.bulkSetAckState.inBulkSetAckDoneChans); i++ {
+			store.bulkSetAckState.inBulkSetAckDoneChans[i] = make(chan struct{}, 1)
 		}
-		vs.bulkSetAckState.outFreeMsgChan = make(chan *valueBulkSetAckMsg, cfg.OutBulkSetAckMsgs)
-		for i := 0; i < cap(vs.bulkSetAckState.outFreeMsgChan); i++ {
-			vs.bulkSetAckState.outFreeMsgChan <- &valueBulkSetAckMsg{
-				vs:   vs,
-				body: make([]byte, cfg.BulkSetAckMsgCap),
+		store.bulkSetAckState.outFreeMsgChan = make(chan *valueBulkSetAckMsg, cfg.OutBulkSetAckMsgs)
+		for i := 0; i < cap(store.bulkSetAckState.outFreeMsgChan); i++ {
+			store.bulkSetAckState.outFreeMsgChan <- &valueBulkSetAckMsg{
+				store: store,
+				body:  make([]byte, cfg.BulkSetAckMsgCap),
 			}
 		}
 	}
 }
 
-func (vs *DefaultValueStore) bulkSetAckLaunch() {
-	for i := 0; i < len(vs.bulkSetAckState.inBulkSetAckDoneChans); i++ {
-		go vs.inBulkSetAck(vs.bulkSetAckState.inBulkSetAckDoneChans[i])
+func (store *DefaultValueStore) bulkSetAckLaunch() {
+	for i := 0; i < len(store.bulkSetAckState.inBulkSetAckDoneChans); i++ {
+		go store.inBulkSetAck(store.bulkSetAckState.inBulkSetAckDoneChans[i])
 	}
 }
 
 // newInBulkSetAckMsg reads bulk-set-ack messages from the MsgRing and puts
 // them on the inMsgChan for the inBulkSetAck workers to work on.
-func (vs *DefaultValueStore) newInBulkSetAckMsg(r io.Reader, l uint64) (uint64, error) {
+func (store *DefaultValueStore) newInBulkSetAckMsg(r io.Reader, l uint64) (uint64, error) {
 	var bsam *valueBulkSetAckMsg
 	select {
-	case bsam = <-vs.bulkSetAckState.inFreeMsgChan:
+	case bsam = <-store.bulkSetAckState.inFreeMsgChan:
 	default:
 		// If there isn't a free valueBulkSetAckMsg, just read and discard the
 		// incoming bulk-set-ack message.
@@ -75,11 +75,11 @@ func (vs *DefaultValueStore) newInBulkSetAckMsg(r io.Reader, l uint64) (uint64, 
 			sn, err = r.Read(t)
 			left -= uint64(sn)
 			if err != nil {
-				atomic.AddInt32(&vs.inBulkSetAckInvalids, 1)
+				atomic.AddInt32(&store.inBulkSetAckInvalids, 1)
 				return l - left, err
 			}
 		}
-		atomic.AddInt32(&vs.inBulkSetAckDrops, 1)
+		atomic.AddInt32(&store.inBulkSetAckDrops, 1)
 		return l, nil
 	}
 	var n int
@@ -95,25 +95,25 @@ func (vs *DefaultValueStore) newInBulkSetAckMsg(r io.Reader, l uint64) (uint64, 
 		sn, err = r.Read(bsam.body[n:])
 		n += sn
 		if err != nil {
-			vs.bulkSetAckState.inFreeMsgChan <- bsam
-			atomic.AddInt32(&vs.inBulkSetAckInvalids, 1)
+			store.bulkSetAckState.inFreeMsgChan <- bsam
+			atomic.AddInt32(&store.inBulkSetAckInvalids, 1)
 			return uint64(n), err
 		}
 	}
-	vs.bulkSetAckState.inMsgChan <- bsam
-	atomic.AddInt32(&vs.inBulkSetAcks, 1)
+	store.bulkSetAckState.inMsgChan <- bsam
+	atomic.AddInt32(&store.inBulkSetAcks, 1)
 	return l, nil
 }
 
 // inBulkSetAck actually processes incoming bulk-set-ack messages; there may be
 // more than one of these workers.
-func (vs *DefaultValueStore) inBulkSetAck(doneChan chan struct{}) {
+func (store *DefaultValueStore) inBulkSetAck(doneChan chan struct{}) {
 	for {
-		bsam := <-vs.bulkSetAckState.inMsgChan
+		bsam := <-store.bulkSetAckState.inMsgChan
 		if bsam == nil {
 			break
 		}
-		ring := vs.msgRing.Ring()
+		ring := store.msgRing.Ring()
 		var rightwardPartitionShift uint64
 		if ring != nil {
 			rightwardPartitionShift = 64 - uint64(ring.PartitionBitCount())
@@ -124,17 +124,17 @@ func (vs *DefaultValueStore) inBulkSetAck(doneChan chan struct{}) {
 		for o := 0; o < l; o += _VALUE_BULK_SET_ACK_MSG_ENTRY_LENGTH {
 			keyA := binary.BigEndian.Uint64(b[o:])
 			if ring != nil && !ring.Responsible(uint32(keyA>>rightwardPartitionShift)) {
-				atomic.AddInt32(&vs.inBulkSetAckWrites, 1)
+				atomic.AddInt32(&store.inBulkSetAckWrites, 1)
 				timestampbits := binary.BigEndian.Uint64(b[o+16:]) | _TSB_LOCAL_REMOVAL
-				rtimestampbits, err := vs.write(keyA, binary.BigEndian.Uint64(b[o+8:]), timestampbits, nil, true)
+				rtimestampbits, err := store.write(keyA, binary.BigEndian.Uint64(b[o+8:]), timestampbits, nil, true)
 				if err != nil {
-					atomic.AddInt32(&vs.inBulkSetAckWriteErrors, 1)
+					atomic.AddInt32(&store.inBulkSetAckWriteErrors, 1)
 				} else if rtimestampbits != timestampbits {
-					atomic.AddInt32(&vs.inBulkSetAckWritesOverridden, 1)
+					atomic.AddInt32(&store.inBulkSetAckWritesOverridden, 1)
 				}
 			}
 		}
-		vs.bulkSetAckState.inFreeMsgChan <- bsam
+		store.bulkSetAckState.inFreeMsgChan <- bsam
 	}
 	doneChan <- struct{}{}
 }
@@ -147,8 +147,8 @@ func (vs *DefaultValueStore) inBulkSetAck(doneChan chan struct{}) {
 // valueBulkSetAckMsg instances that can exist at any given time, capping
 // memory usage. Once the limit is reached, this method will block until a
 // valueBulkSetAckMsg is available to return.
-func (vs *DefaultValueStore) newOutBulkSetAckMsg() *valueBulkSetAckMsg {
-	bsam := <-vs.bulkSetAckState.outFreeMsgChan
+func (store *DefaultValueStore) newOutBulkSetAckMsg() *valueBulkSetAckMsg {
+	bsam := <-store.bulkSetAckState.outFreeMsgChan
 	bsam.body = bsam.body[:0]
 	return bsam
 }
@@ -167,7 +167,7 @@ func (bsam *valueBulkSetAckMsg) WriteContent(w io.Writer) (uint64, error) {
 }
 
 func (bsam *valueBulkSetAckMsg) Free() {
-	bsam.vs.bulkSetAckState.outFreeMsgChan <- bsam
+	bsam.store.bulkSetAckState.outFreeMsgChan <- bsam
 }
 
 func (bsam *valueBulkSetAckMsg) add(keyA uint64, keyB uint64, timestampbits uint64) bool {

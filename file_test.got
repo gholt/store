@@ -8,7 +8,7 @@ import (
 )
 
 func Test{{.T}}ValuesFileReading(t *testing.T) {
-    vs, err := New{{.T}}Store(lowMem{{.T}}StoreConfig())
+    store, err := New{{.T}}Store(lowMem{{.T}}StoreConfig())
     if err != nil {
         t.Fatal("")
     }
@@ -16,7 +16,7 @@ func Test{{.T}}ValuesFileReading(t *testing.T) {
     openReadSeeker := func(name string) (io.ReadSeeker, error) {
         return &memFile{buf: buf}, nil
     }
-    vf, err := new{{.T}}File(vs, 12345, openReadSeeker)
+    vf, err := new{{.T}}File(store, 12345, openReadSeeker)
     if err != nil {
         t.Fatal("")
     }
@@ -97,7 +97,7 @@ func Test{{.T}}ValuesFileReading(t *testing.T) {
 func Test{{.T}}ValuesFileWritingEmpty(t *testing.T) {
     cfg := lowMem{{.T}}StoreConfig()
     cfg.ChecksumInterval = 64*1024 - 4
-    vs, err := New{{.T}}Store(cfg)
+    store, err := New{{.T}}Store(cfg)
     if err != nil {
         t.Fatal("")
     }
@@ -108,7 +108,7 @@ func Test{{.T}}ValuesFileWritingEmpty(t *testing.T) {
     openReadSeeker := func(name string) (io.ReadSeeker, error) {
         return &memFile{buf: buf}, nil
     }
-    vf, err := create{{.T}}File(vs, createWriteCloser, openReadSeeker)
+    vf, err := create{{.T}}File(store, createWriteCloser, openReadSeeker)
     if err != nil {
         t.Fatal("")
     }
@@ -123,8 +123,8 @@ func Test{{.T}}ValuesFileWritingEmpty(t *testing.T) {
     if string(buf.buf[:28]) != "{{.TT}}STORE v0               " {
         t.Fatal(string(buf.buf[:28]))
     }
-    if binary.BigEndian.Uint32(buf.buf[28:]) != vs.checksumInterval {
-        t.Fatal(binary.BigEndian.Uint32(buf.buf[28:]), vs.checksumInterval)
+    if binary.BigEndian.Uint32(buf.buf[28:]) != store.checksumInterval {
+        t.Fatal(binary.BigEndian.Uint32(buf.buf[28:]), store.checksumInterval)
     }
     if binary.BigEndian.Uint32(buf.buf[bl-20:]) != 0 { // unused at this time
         t.Fatal(binary.BigEndian.Uint32(buf.buf[bl-20:]))
@@ -143,12 +143,12 @@ func Test{{.T}}ValuesFileWritingEmpty(t *testing.T) {
 func Test{{.T}}ValuesFileWritingEmpty2(t *testing.T) {
     cfg := lowMem{{.T}}StoreConfig()
     cfg.ChecksumInterval = 64*1024 - 4
-    vs, err := New{{.T}}Store(cfg)
+    store, err := New{{.T}}Store(cfg)
     if err != nil {
         t.Fatal("")
     }
-    vs.freeableVMChans = make([]chan *{{.t}}Mem, 1)
-    vs.freeableVMChans[0] = make(chan *{{.t}}Mem, 1)
+    store.freeableVMChans = make([]chan *{{.t}}Mem, 1)
+    store.freeableVMChans[0] = make(chan *{{.t}}Mem, 1)
     buf := &memBuf{}
     createWriteCloser := func(name string) (io.WriteCloser, error) {
         return &memFile{buf: buf}, nil
@@ -156,7 +156,7 @@ func Test{{.T}}ValuesFileWritingEmpty2(t *testing.T) {
     openReadSeeker := func(name string) (io.ReadSeeker, error) {
         return &memFile{buf: buf}, nil
     }
-    vf, err := create{{.T}}File(vs, createWriteCloser, openReadSeeker)
+    vf, err := create{{.T}}File(store, createWriteCloser, openReadSeeker)
     if err != nil {
         t.Fatal("")
     }
@@ -177,8 +177,8 @@ func Test{{.T}}ValuesFileWritingEmpty2(t *testing.T) {
     if string(buf.buf[:28]) != "{{.TT}}STORE v0               " {
         t.Fatal(string(buf.buf[:28]))
     }
-    if binary.BigEndian.Uint32(buf.buf[28:]) != vs.checksumInterval {
-        t.Fatal(binary.BigEndian.Uint32(buf.buf[28:]), vs.checksumInterval)
+    if binary.BigEndian.Uint32(buf.buf[28:]) != store.checksumInterval {
+        t.Fatal(binary.BigEndian.Uint32(buf.buf[28:]), store.checksumInterval)
     }
     if binary.BigEndian.Uint32(buf.buf[bl-20:]) != 0 { // unused at this time
         t.Fatal(binary.BigEndian.Uint32(buf.buf[bl-20:]))
@@ -197,7 +197,7 @@ func Test{{.T}}ValuesFileWritingEmpty2(t *testing.T) {
 func Test{{.T}}ValuesFileWriting(t *testing.T) {
     cfg := lowMem{{.T}}StoreConfig()
     cfg.ChecksumInterval = 64*1024 - 4
-    vs, err := New{{.T}}Store(cfg)
+    store, err := New{{.T}}Store(cfg)
     if err != nil {
         t.Fatal("")
     }
@@ -208,7 +208,7 @@ func Test{{.T}}ValuesFileWriting(t *testing.T) {
     openReadSeeker := func(name string) (io.ReadSeeker, error) {
         return &memFile{buf: buf}, nil
     }
-    vf, err := create{{.T}}File(vs, createWriteCloser, openReadSeeker)
+    vf, err := create{{.T}}File(store, createWriteCloser, openReadSeeker)
     if err != nil {
         t.Fatal("")
     }
@@ -227,8 +227,8 @@ func Test{{.T}}ValuesFileWriting(t *testing.T) {
     if string(buf.buf[:28]) != "{{.TT}}STORE v0               " {
         t.Fatal(string(buf.buf[:28]))
     }
-    if binary.BigEndian.Uint32(buf.buf[28:]) != vs.checksumInterval {
-        t.Fatal(binary.BigEndian.Uint32(buf.buf[28:]), vs.checksumInterval)
+    if binary.BigEndian.Uint32(buf.buf[28:]) != store.checksumInterval {
+        t.Fatal(binary.BigEndian.Uint32(buf.buf[28:]), store.checksumInterval)
     }
     if !bytes.Equal(buf.buf[32:bl-20], values) {
         t.Fatal("")
@@ -250,7 +250,7 @@ func Test{{.T}}ValuesFileWriting(t *testing.T) {
 func Test{{.T}}ValuesFileWritingMore(t *testing.T) {
     cfg := lowMem{{.T}}StoreConfig()
     cfg.ChecksumInterval = 64*1024 - 4
-    vs, err := New{{.T}}Store(cfg)
+    store, err := New{{.T}}Store(cfg)
     if err != nil {
         t.Fatal("")
     }
@@ -261,7 +261,7 @@ func Test{{.T}}ValuesFileWritingMore(t *testing.T) {
     openReadSeeker := func(name string) (io.ReadSeeker, error) {
         return &memFile{buf: buf}, nil
     }
-    vf, err := create{{.T}}File(vs, createWriteCloser, openReadSeeker)
+    vf, err := create{{.T}}File(store, createWriteCloser, openReadSeeker)
     if err != nil {
         t.Fatal("")
     }
@@ -274,14 +274,14 @@ func Test{{.T}}ValuesFileWritingMore(t *testing.T) {
     vf.write(&{{.t}}Mem{values: values})
     vf.close()
     bl := len(buf.buf)
-    if bl != 123456+int(123512/vs.checksumInterval*4)+52 {
+    if bl != 123456+int(123512/store.checksumInterval*4)+52 {
         t.Fatal(bl)
     }
     if string(buf.buf[:28]) != "{{.TT}}STORE v0               " {
         t.Fatal(string(buf.buf[:28]))
     }
-    if binary.BigEndian.Uint32(buf.buf[28:]) != vs.checksumInterval {
-        t.Fatal(binary.BigEndian.Uint32(buf.buf[28:]), vs.checksumInterval)
+    if binary.BigEndian.Uint32(buf.buf[28:]) != store.checksumInterval {
+        t.Fatal(binary.BigEndian.Uint32(buf.buf[28:]), store.checksumInterval)
     }
     if binary.BigEndian.Uint32(buf.buf[bl-20:]) != 0 { // unused at this time
         t.Fatal(binary.BigEndian.Uint32(buf.buf[bl-20:]))
@@ -300,12 +300,12 @@ func Test{{.T}}ValuesFileWritingMore(t *testing.T) {
 func Test{{.T}}ValuesFileWritingMultiple(t *testing.T) {
     cfg := lowMem{{.T}}StoreConfig()
     cfg.ChecksumInterval = 64*1024 - 4
-    vs, err := New{{.T}}Store(cfg)
+    store, err := New{{.T}}Store(cfg)
     if err != nil {
         t.Fatal("")
     }
-    vs.freeableVMChans = make([]chan *{{.t}}Mem, 1)
-    vs.freeableVMChans[0] = make(chan *{{.t}}Mem, 2)
+    store.freeableVMChans = make([]chan *{{.t}}Mem, 1)
+    store.freeableVMChans[0] = make(chan *{{.t}}Mem, 2)
     buf := &memBuf{}
     createWriteCloser := func(name string) (io.WriteCloser, error) {
         return &memFile{buf: buf}, nil
@@ -313,7 +313,7 @@ func Test{{.T}}ValuesFileWritingMultiple(t *testing.T) {
     openReadSeeker := func(name string) (io.ReadSeeker, error) {
         return &memFile{buf: buf}, nil
     }
-    vf, err := create{{.T}}File(vs, createWriteCloser, openReadSeeker)
+    vf, err := create{{.T}}File(store, createWriteCloser, openReadSeeker)
     if err != nil {
         t.Fatal("")
     }
@@ -336,14 +336,14 @@ func Test{{.T}}ValuesFileWritingMultiple(t *testing.T) {
         t.Fatal(vm2.vfID, vf.id)
     }
     bl := len(buf.buf)
-    if bl != 12345+54321+int(123512/vs.checksumInterval*4)+52 {
+    if bl != 12345+54321+int(123512/store.checksumInterval*4)+52 {
         t.Fatal(bl)
     }
     if string(buf.buf[:28]) != "{{.TT}}STORE v0               " {
         t.Fatal(string(buf.buf[:28]))
     }
-    if binary.BigEndian.Uint32(buf.buf[28:]) != vs.checksumInterval {
-        t.Fatal(binary.BigEndian.Uint32(buf.buf[28:]), vs.checksumInterval)
+    if binary.BigEndian.Uint32(buf.buf[28:]) != store.checksumInterval {
+        t.Fatal(binary.BigEndian.Uint32(buf.buf[28:]), store.checksumInterval)
     }
     if binary.BigEndian.Uint32(buf.buf[bl-20:]) != 0 { // unused at this time
         t.Fatal(binary.BigEndian.Uint32(buf.buf[bl-20:]))

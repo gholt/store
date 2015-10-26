@@ -33,56 +33,56 @@ type groupPullReplicationState struct {
 }
 
 type groupPullReplicationMsg struct {
-	vs     *DefaultGroupStore
+	store  *DefaultGroupStore
 	header []byte
 	body   []byte
 }
 
-func (vs *DefaultGroupStore) pullReplicationConfig(cfg *GroupStoreConfig) {
-	vs.pullReplicationState.outInterval = time.Duration(cfg.OutPullReplicationInterval) * time.Second
-	vs.pullReplicationState.outNotifyChan = make(chan *backgroundNotification, 1)
-	vs.pullReplicationState.outWorkers = uint64(cfg.OutPullReplicationWorkers)
-	vs.pullReplicationState.outIteration = uint16(cfg.Rand.Uint32())
-	if vs.msgRing != nil {
-		vs.msgRing.SetMsgHandler(_GROUP_PULL_REPLICATION_MSG_TYPE, vs.newInPullReplicationMsg)
-		vs.pullReplicationState.inMsgChan = make(chan *groupPullReplicationMsg, cfg.InPullReplicationMsgs)
-		vs.pullReplicationState.inFreeMsgChan = make(chan *groupPullReplicationMsg, cfg.InPullReplicationMsgs)
-		for i := 0; i < cap(vs.pullReplicationState.inFreeMsgChan); i++ {
-			vs.pullReplicationState.inFreeMsgChan <- &groupPullReplicationMsg{
-				vs:     vs,
+func (store *DefaultGroupStore) pullReplicationConfig(cfg *GroupStoreConfig) {
+	store.pullReplicationState.outInterval = time.Duration(cfg.OutPullReplicationInterval) * time.Second
+	store.pullReplicationState.outNotifyChan = make(chan *backgroundNotification, 1)
+	store.pullReplicationState.outWorkers = uint64(cfg.OutPullReplicationWorkers)
+	store.pullReplicationState.outIteration = uint16(cfg.Rand.Uint32())
+	if store.msgRing != nil {
+		store.msgRing.SetMsgHandler(_GROUP_PULL_REPLICATION_MSG_TYPE, store.newInPullReplicationMsg)
+		store.pullReplicationState.inMsgChan = make(chan *groupPullReplicationMsg, cfg.InPullReplicationMsgs)
+		store.pullReplicationState.inFreeMsgChan = make(chan *groupPullReplicationMsg, cfg.InPullReplicationMsgs)
+		for i := 0; i < cap(store.pullReplicationState.inFreeMsgChan); i++ {
+			store.pullReplicationState.inFreeMsgChan <- &groupPullReplicationMsg{
+				store:  store,
 				header: make([]byte, _GROUP_KT_BLOOM_FILTER_HEADER_BYTES+_GROUP_PULL_REPLICATION_MSG_HEADER_BYTES),
 			}
 		}
-		vs.pullReplicationState.inWorkers = cfg.InPullReplicationWorkers
-		vs.pullReplicationState.outMsgChan = make(chan *groupPullReplicationMsg, cfg.OutPullReplicationMsgs)
-		vs.pullReplicationState.bloomN = uint64(cfg.OutPullReplicationBloomN)
-		vs.pullReplicationState.bloomP = cfg.OutPullReplicationBloomP
-		vs.pullReplicationState.outKTBFs = []*groupKTBloomFilter{newGroupKTBloomFilter(vs.pullReplicationState.bloomN, vs.pullReplicationState.bloomP, 0)}
-		for i := 0; i < cap(vs.pullReplicationState.outMsgChan); i++ {
-			vs.pullReplicationState.outMsgChan <- &groupPullReplicationMsg{
-				vs:     vs,
+		store.pullReplicationState.inWorkers = cfg.InPullReplicationWorkers
+		store.pullReplicationState.outMsgChan = make(chan *groupPullReplicationMsg, cfg.OutPullReplicationMsgs)
+		store.pullReplicationState.bloomN = uint64(cfg.OutPullReplicationBloomN)
+		store.pullReplicationState.bloomP = cfg.OutPullReplicationBloomP
+		store.pullReplicationState.outKTBFs = []*groupKTBloomFilter{newGroupKTBloomFilter(store.pullReplicationState.bloomN, store.pullReplicationState.bloomP, 0)}
+		for i := 0; i < cap(store.pullReplicationState.outMsgChan); i++ {
+			store.pullReplicationState.outMsgChan <- &groupPullReplicationMsg{
+				store:  store,
 				header: make([]byte, _GROUP_KT_BLOOM_FILTER_HEADER_BYTES+_GROUP_PULL_REPLICATION_MSG_HEADER_BYTES),
-				body:   make([]byte, len(vs.pullReplicationState.outKTBFs[0].bits)),
+				body:   make([]byte, len(store.pullReplicationState.outKTBFs[0].bits)),
 			}
 		}
-		vs.pullReplicationState.inResponseMsgTimeout = time.Duration(cfg.InPullReplicationResponseMsgTimeout) * time.Millisecond
-		vs.pullReplicationState.outMsgTimeout = time.Duration(cfg.OutPullReplicationMsgTimeout) * time.Millisecond
+		store.pullReplicationState.inResponseMsgTimeout = time.Duration(cfg.InPullReplicationResponseMsgTimeout) * time.Millisecond
+		store.pullReplicationState.outMsgTimeout = time.Duration(cfg.OutPullReplicationMsgTimeout) * time.Millisecond
 	}
-	vs.pullReplicationState.outNotifyChan = make(chan *backgroundNotification, 1)
+	store.pullReplicationState.outNotifyChan = make(chan *backgroundNotification, 1)
 }
 
-func (vs *DefaultGroupStore) pullReplicationLaunch() {
-	for i := 0; i < vs.pullReplicationState.inWorkers; i++ {
-		go vs.inPullReplication()
+func (store *DefaultGroupStore) pullReplicationLaunch() {
+	for i := 0; i < store.pullReplicationState.inWorkers; i++ {
+		go store.inPullReplication()
 	}
-	go vs.outPullReplicationLauncher()
+	go store.outPullReplicationLauncher()
 }
 
 // DisableOutPullReplication will stop any outgoing pull replication requests
 // until EnableOutPullReplication is called.
-func (vs *DefaultGroupStore) DisableOutPullReplication() {
+func (store *DefaultGroupStore) DisableOutPullReplication() {
 	c := make(chan struct{}, 1)
-	vs.pullReplicationState.outNotifyChan <- &backgroundNotification{
+	store.pullReplicationState.outNotifyChan <- &backgroundNotification{
 		disable:  true,
 		doneChan: c,
 	}
@@ -90,9 +90,9 @@ func (vs *DefaultGroupStore) DisableOutPullReplication() {
 }
 
 // EnableOutPullReplication will resume outgoing pull replication requests.
-func (vs *DefaultGroupStore) EnableOutPullReplication() {
+func (store *DefaultGroupStore) EnableOutPullReplication() {
 	c := make(chan struct{}, 1)
-	vs.pullReplicationState.outNotifyChan <- &backgroundNotification{
+	store.pullReplicationState.outNotifyChan <- &backgroundNotification{
 		enable:   true,
 		doneChan: c,
 	}
@@ -101,10 +101,10 @@ func (vs *DefaultGroupStore) EnableOutPullReplication() {
 
 // newInPullReplicationMsg reads pull-replication messages from the MsgRing and
 // puts them on the inMsgChan for the inPullReplication workers to work on.
-func (vs *DefaultGroupStore) newInPullReplicationMsg(r io.Reader, l uint64) (uint64, error) {
+func (store *DefaultGroupStore) newInPullReplicationMsg(r io.Reader, l uint64) (uint64, error) {
 	var prm *groupPullReplicationMsg
 	select {
-	case prm = <-vs.pullReplicationState.inFreeMsgChan:
+	case prm = <-store.pullReplicationState.inFreeMsgChan:
 	default:
 		// If there isn't a free groupPullReplicationMsg, just read and discard the
 		// incoming pull-replication message.
@@ -119,11 +119,11 @@ func (vs *DefaultGroupStore) newInPullReplicationMsg(r io.Reader, l uint64) (uin
 			sn, err = r.Read(t)
 			left -= uint64(sn)
 			if err != nil {
-				atomic.AddInt32(&vs.inPullReplicationInvalids, 1)
+				atomic.AddInt32(&store.inPullReplicationInvalids, 1)
 				return l - left, err
 			}
 		}
-		atomic.AddInt32(&vs.inPullReplicationDrops, 1)
+		atomic.AddInt32(&store.inPullReplicationDrops, 1)
 		return l, nil
 	}
 	// TODO: We need to cap this so memory isn't abused in case someone
@@ -141,8 +141,8 @@ func (vs *DefaultGroupStore) newInPullReplicationMsg(r io.Reader, l uint64) (uin
 	var err error
 	for n != len(prm.header) {
 		if err != nil {
-			vs.pullReplicationState.inFreeMsgChan <- prm
-			atomic.AddInt32(&vs.inPullReplicationInvalids, 1)
+			store.pullReplicationState.inFreeMsgChan <- prm
+			atomic.AddInt32(&store.inPullReplicationInvalids, 1)
 			return uint64(n), err
 		}
 		sn, err = r.Read(prm.header[n:])
@@ -151,31 +151,31 @@ func (vs *DefaultGroupStore) newInPullReplicationMsg(r io.Reader, l uint64) (uin
 	n = 0
 	for n != len(prm.body) {
 		if err != nil {
-			vs.pullReplicationState.inFreeMsgChan <- prm
-			atomic.AddInt32(&vs.inPullReplicationInvalids, 1)
+			store.pullReplicationState.inFreeMsgChan <- prm
+			atomic.AddInt32(&store.inPullReplicationInvalids, 1)
 			return uint64(len(prm.header)) + uint64(n), err
 		}
 		sn, err = r.Read(prm.body[n:])
 		n += sn
 	}
-	vs.pullReplicationState.inMsgChan <- prm
-	atomic.AddInt32(&vs.inPullReplications, 1)
+	store.pullReplicationState.inMsgChan <- prm
+	atomic.AddInt32(&store.inPullReplications, 1)
 	return l, nil
 }
 
 // inPullReplication actually processes incoming pull-replication messages;
 // there may be more than one of these workers.
-func (vs *DefaultGroupStore) inPullReplication() {
-	k := make([]uint64, vs.bulkSetState.msgCap/_GROUP_BULK_SET_MSG_MIN_ENTRY_LENGTH*4)
-	v := make([]byte, vs.valueCap)
+func (store *DefaultGroupStore) inPullReplication() {
+	k := make([]uint64, store.bulkSetState.msgCap/_GROUP_BULK_SET_MSG_MIN_ENTRY_LENGTH*4)
+	v := make([]byte, store.valueCap)
 	for {
-		prm := <-vs.pullReplicationState.inMsgChan
+		prm := <-store.pullReplicationState.inMsgChan
 		if prm == nil {
 			break
 		}
-		ring := vs.msgRing.Ring()
+		ring := store.msgRing.Ring()
 		if ring == nil {
-			vs.pullReplicationState.inFreeMsgChan <- prm
+			store.pullReplicationState.inFreeMsgChan <- prm
 			continue
 		}
 		k = k[:0]
@@ -183,9 +183,9 @@ func (vs *DefaultGroupStore) inPullReplication() {
 		// computed via its config.ReplicationIgnoreRecent setting. We want to
 		// use the exact same cutoff in our checks and possible response.
 		cutoff := prm.cutoff()
-		tombstoneCutoff := (uint64(brimtime.TimeToUnixMicro(time.Now())) << _TSB_UTIL_BITS) - vs.tombstoneDiscardState.age
+		tombstoneCutoff := (uint64(brimtime.TimeToUnixMicro(time.Now())) << _TSB_UTIL_BITS) - store.tombstoneDiscardState.age
 		ktbf := prm.ktBloomFilter()
-		l := int64(vs.bulkSetState.msgCap)
+		l := int64(store.bulkSetState.msgCap)
 		callback := func(keyA uint64, keyB uint64, nameKeyA uint64, nameKeyB uint64, timestampbits uint64, length uint32) bool {
 			if timestampbits&_TSB_DELETION == 0 || timestampbits >= tombstoneCutoff {
 				if !ktbf.mayHave(keyA, keyB, nameKeyA, nameKeyB, timestampbits) {
@@ -207,16 +207,16 @@ func (vs *DefaultGroupStore) inPullReplication() {
 		// items if there is a lot of data to be sent.
 		scanStart := prm.rangeStart() + (prm.rangeStop()-prm.rangeStart())/uint64(ring.ReplicaCount())*uint64(ring.ResponsibleReplica(uint32(prm.rangeStart()>>(64-ring.PartitionBitCount()))))
 		scanStop := prm.rangeStop()
-		vs.vlm.ScanCallback(scanStart, scanStop, 0, _TSB_LOCAL_REMOVAL, cutoff, math.MaxUint64, callback)
+		store.vlm.ScanCallback(scanStart, scanStop, 0, _TSB_LOCAL_REMOVAL, cutoff, math.MaxUint64, callback)
 		if l > 0 {
 			scanStop = scanStart - 1
 			scanStart = prm.rangeStart()
-			vs.vlm.ScanCallback(scanStart, scanStop, 0, _TSB_LOCAL_REMOVAL, cutoff, math.MaxUint64, callback)
+			store.vlm.ScanCallback(scanStart, scanStop, 0, _TSB_LOCAL_REMOVAL, cutoff, math.MaxUint64, callback)
 		}
 		nodeID := prm.nodeID()
-		vs.pullReplicationState.inFreeMsgChan <- prm
+		store.pullReplicationState.inFreeMsgChan <- prm
 		if len(k) > 0 {
-			bsm := vs.newOutBulkSetMsg()
+			bsm := store.newOutBulkSetMsg()
 			// Indicate that a response to this bulk-set message is not
 			// necessary. If the message fails to reach its destination, that
 			// destination will simply resend another pull replication message
@@ -225,7 +225,7 @@ func (vs *DefaultGroupStore) inPullReplication() {
 			var t uint64
 			var err error
 			for i := 0; i < len(k); i += 4 {
-				t, v, err = vs.read(k[i], k[i+1], k[i+2], k[i+3], v[:0])
+				t, v, err = store.read(k[i], k[i+1], k[i+2], k[i+3], v[:0])
 				if err == ErrNotFound {
 					if t == 0 {
 						continue
@@ -237,12 +237,12 @@ func (vs *DefaultGroupStore) inPullReplication() {
 					if !bsm.add(k[i], k[i+1], k[i+2], k[i+3], t, v) {
 						break
 					}
-					atomic.AddInt32(&vs.outBulkSetValues, 1)
+					atomic.AddInt32(&store.outBulkSetValues, 1)
 				}
 			}
 			if len(bsm.body) > 0 {
-				atomic.AddInt32(&vs.outBulkSets, 1)
-				vs.msgRing.MsgToNode(bsm, nodeID, vs.pullReplicationState.inResponseMsgTimeout)
+				atomic.AddInt32(&store.outBulkSets, 1)
+				store.msgRing.MsgToNode(bsm, nodeID, store.pullReplicationState.inResponseMsgTimeout)
 			}
 		}
 	}
@@ -255,36 +255,36 @@ func (vs *DefaultGroupStore) inPullReplication() {
 // pull replication requests, but all the responses will almost certainly not
 // have been received when this function returns. These requests are stateless,
 // and so synchronization at that level is not possible.
-func (vs *DefaultGroupStore) OutPullReplicationPass() {
-	atomic.StoreUint32(&vs.pullReplicationState.outAbort, 1)
+func (store *DefaultGroupStore) OutPullReplicationPass() {
+	atomic.StoreUint32(&store.pullReplicationState.outAbort, 1)
 	c := make(chan struct{}, 1)
-	vs.pullReplicationState.outNotifyChan <- &backgroundNotification{doneChan: c}
+	store.pullReplicationState.outNotifyChan <- &backgroundNotification{doneChan: c}
 	<-c
 }
 
-func (vs *DefaultGroupStore) outPullReplicationLauncher() {
+func (store *DefaultGroupStore) outPullReplicationLauncher() {
 	var enabled bool
-	interval := float64(vs.pullReplicationState.outInterval)
-	vs.randMutex.Lock()
-	nextRun := time.Now().Add(time.Duration(interval + interval*vs.rand.NormFloat64()*0.1))
-	vs.randMutex.Unlock()
+	interval := float64(store.pullReplicationState.outInterval)
+	store.randMutex.Lock()
+	nextRun := time.Now().Add(time.Duration(interval + interval*store.rand.NormFloat64()*0.1))
+	store.randMutex.Unlock()
 	for {
 		var notification *backgroundNotification
 		sleep := nextRun.Sub(time.Now())
 		if sleep > 0 {
 			select {
-			case notification = <-vs.pullReplicationState.outNotifyChan:
+			case notification = <-store.pullReplicationState.outNotifyChan:
 			case <-time.After(sleep):
 			}
 		} else {
 			select {
-			case notification = <-vs.pullReplicationState.outNotifyChan:
+			case notification = <-store.pullReplicationState.outNotifyChan:
 			default:
 			}
 		}
-		vs.randMutex.Lock()
-		nextRun = time.Now().Add(time.Duration(interval + interval*vs.rand.NormFloat64()*0.1))
-		vs.randMutex.Unlock()
+		store.randMutex.Lock()
+		nextRun = time.Now().Add(time.Duration(interval + interval*store.rand.NormFloat64()*0.1))
+		store.randMutex.Unlock()
 		if notification != nil {
 			if notification.enable {
 				enabled = true
@@ -292,46 +292,46 @@ func (vs *DefaultGroupStore) outPullReplicationLauncher() {
 				continue
 			}
 			if notification.disable {
-				atomic.StoreUint32(&vs.pullReplicationState.outAbort, 1)
+				atomic.StoreUint32(&store.pullReplicationState.outAbort, 1)
 				enabled = false
 				notification.doneChan <- struct{}{}
 				continue
 			}
-			atomic.StoreUint32(&vs.pullReplicationState.outAbort, 0)
-			vs.outPullReplicationPass()
+			atomic.StoreUint32(&store.pullReplicationState.outAbort, 0)
+			store.outPullReplicationPass()
 			notification.doneChan <- struct{}{}
 		} else if enabled {
-			atomic.StoreUint32(&vs.pullReplicationState.outAbort, 0)
-			vs.outPullReplicationPass()
+			atomic.StoreUint32(&store.pullReplicationState.outAbort, 0)
+			store.outPullReplicationPass()
 		}
 	}
 }
 
-func (vs *DefaultGroupStore) outPullReplicationPass() {
-	if vs.msgRing == nil {
+func (store *DefaultGroupStore) outPullReplicationPass() {
+	if store.msgRing == nil {
 		return
 	}
-	if vs.logDebug != nil {
+	if store.logDebug != nil {
 		begin := time.Now()
 		defer func() {
-			vs.logDebug("out pull replication pass took %s\n", time.Now().Sub(begin))
+			store.logDebug("out pull replication pass took %s\n", time.Now().Sub(begin))
 		}()
 	}
-	ring := vs.msgRing.Ring()
+	ring := store.msgRing.Ring()
 	if ring == nil {
 		return
 	}
 	rightwardPartitionShift := 64 - ring.PartitionBitCount()
 	partitionCount := uint64(1) << ring.PartitionBitCount()
-	if vs.pullReplicationState.outIteration == math.MaxUint16 {
-		vs.pullReplicationState.outIteration = 0
+	if store.pullReplicationState.outIteration == math.MaxUint16 {
+		store.pullReplicationState.outIteration = 0
 	} else {
-		vs.pullReplicationState.outIteration++
+		store.pullReplicationState.outIteration++
 	}
 	ringVersion := ring.Version()
-	ws := vs.pullReplicationState.outWorkers
-	for uint64(len(vs.pullReplicationState.outKTBFs)) < ws {
-		vs.pullReplicationState.outKTBFs = append(vs.pullReplicationState.outKTBFs, newGroupKTBloomFilter(vs.pullReplicationState.bloomN, vs.pullReplicationState.bloomP, 0))
+	ws := store.pullReplicationState.outWorkers
+	for uint64(len(store.pullReplicationState.outKTBFs)) < ws {
+		store.pullReplicationState.outKTBFs = append(store.pullReplicationState.outKTBFs, newGroupKTBloomFilter(store.pullReplicationState.bloomN, store.pullReplicationState.bloomP, 0))
 	}
 	f := func(p uint64, w uint64, ktbf *groupKTBloomFilter) {
 		pb := p << rightwardPartitionShift
@@ -347,19 +347,19 @@ func (vs *DefaultGroupStore) outPullReplicationPass() {
 			re = pb + ((uint64(1) << rightwardPartitionShift) / ws * (w + 1)) - 1
 		}
 		timestampbitsnow := uint64(brimtime.TimeToUnixMicro(time.Now())) << _TSB_UTIL_BITS
-		cutoff := timestampbitsnow - vs.replicationIgnoreRecent
+		cutoff := timestampbitsnow - store.replicationIgnoreRecent
 		var more bool
 		for {
 			rbThis := rb
-			ktbf.reset(vs.pullReplicationState.outIteration)
-			rb, more = vs.vlm.ScanCallback(rb, re, 0, _TSB_LOCAL_REMOVAL, cutoff, vs.pullReplicationState.bloomN, func(keyA uint64, keyB uint64, nameKeyA uint64, nameKeyB uint64, timestampbits uint64, length uint32) bool {
+			ktbf.reset(store.pullReplicationState.outIteration)
+			rb, more = store.vlm.ScanCallback(rb, re, 0, _TSB_LOCAL_REMOVAL, cutoff, store.pullReplicationState.bloomN, func(keyA uint64, keyB uint64, nameKeyA uint64, nameKeyB uint64, timestampbits uint64, length uint32) bool {
 				ktbf.add(keyA, keyB, nameKeyA, nameKeyB, timestampbits)
 				return true
 			})
-			if atomic.LoadUint32(&vs.pullReplicationState.outAbort) != 0 {
+			if atomic.LoadUint32(&store.pullReplicationState.outAbort) != 0 {
 				break
 			}
-			ring2 := vs.msgRing.Ring()
+			ring2 := store.msgRing.Ring()
 			if ring2 == nil || ring2.Version() != ringVersion {
 				break
 			}
@@ -367,9 +367,9 @@ func (vs *DefaultGroupStore) outPullReplicationPass() {
 			if more {
 				reThis = rb - 1
 			}
-			prm := vs.newOutPullReplicationMsg(ringVersion, uint32(p), cutoff, rbThis, reThis, ktbf)
-			atomic.AddInt32(&vs.outPullReplications, 1)
-			vs.msgRing.MsgToOtherReplicas(prm, uint32(p), vs.pullReplicationState.outMsgTimeout)
+			prm := store.newOutPullReplicationMsg(ringVersion, uint32(p), cutoff, rbThis, reThis, ktbf)
+			atomic.AddInt32(&store.outPullReplications, 1)
+			store.msgRing.MsgToOtherReplicas(prm, uint32(p), store.pullReplicationState.outMsgTimeout)
 			if !more {
 				break
 			}
@@ -379,13 +379,13 @@ func (vs *DefaultGroupStore) outPullReplicationPass() {
 	wg.Add(int(ws))
 	for w := uint64(0); w < ws; w++ {
 		go func(w uint64) {
-			ktbf := vs.pullReplicationState.outKTBFs[w]
+			ktbf := store.pullReplicationState.outKTBFs[w]
 			pb := partitionCount / ws * w
 			for p := pb; p < partitionCount; p++ {
-				if atomic.LoadUint32(&vs.pullReplicationState.outAbort) != 0 {
+				if atomic.LoadUint32(&store.pullReplicationState.outAbort) != 0 {
 					break
 				}
-				ring2 := vs.msgRing.Ring()
+				ring2 := store.msgRing.Ring()
 				if ring2 == nil || ring2.Version() != ringVersion {
 					break
 				}
@@ -394,10 +394,10 @@ func (vs *DefaultGroupStore) outPullReplicationPass() {
 				}
 			}
 			for p := uint64(0); p < pb; p++ {
-				if atomic.LoadUint32(&vs.pullReplicationState.outAbort) != 0 {
+				if atomic.LoadUint32(&store.pullReplicationState.outAbort) != 0 {
 					break
 				}
-				ring2 := vs.msgRing.Ring()
+				ring2 := store.msgRing.Ring()
 				if ring2 == nil || ring2.Version() != ringVersion {
 					break
 				}
@@ -419,10 +419,10 @@ func (vs *DefaultGroupStore) outPullReplicationPass() {
 // groupPullReplicationMsg instances that can exist at any given time, capping
 // memory usage. Once the limit is reached, this method will block until a
 // groupPullReplicationMsg is available to return.
-func (vs *DefaultGroupStore) newOutPullReplicationMsg(ringVersion int64, partition uint32, cutoff uint64, rangeStart uint64, rangeStop uint64, ktbf *groupKTBloomFilter) *groupPullReplicationMsg {
-	prm := <-vs.pullReplicationState.outMsgChan
-	if vs.msgRing != nil {
-		if r := vs.msgRing.Ring(); r != nil {
+func (store *DefaultGroupStore) newOutPullReplicationMsg(ringVersion int64, partition uint32, cutoff uint64, rangeStart uint64, rangeStop uint64, ktbf *groupKTBloomFilter) *groupPullReplicationMsg {
+	prm := <-store.pullReplicationState.outMsgChan
+	if store.msgRing != nil {
+		if r := store.msgRing.Ring(); r != nil {
 			if n := r.LocalNode(); n != nil {
 				binary.BigEndian.PutUint64(prm.header, n.ID())
 			}
@@ -488,5 +488,5 @@ func (prm *groupPullReplicationMsg) WriteContent(w io.Writer) (uint64, error) {
 }
 
 func (prm *groupPullReplicationMsg) Free() {
-	prm.vs.pullReplicationState.outMsgChan <- prm
+	prm.store.pullReplicationState.outMsgChan <- prm
 }

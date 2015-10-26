@@ -188,141 +188,141 @@ type GroupStoreStats struct {
 // of GroupStore shouldn't be tied to this implementation's GroupStoreStats
 // struct. But, if it's known that DefaultGroupStore is in use, a quick cast
 // can be done to gain access to individual fields.
-func (vs *DefaultGroupStore) Stats(debug bool) fmt.Stringer {
-	vs.statsLock.Lock()
+func (store *DefaultGroupStore) Stats(debug bool) fmt.Stringer {
+	store.statsLock.Lock()
 	stats := &GroupStoreStats{
-		Lookups:                      atomic.LoadInt32(&vs.lookups),
-		LookupErrors:                 atomic.LoadInt32(&vs.lookupErrors),
-		LookupGroups:                 atomic.LoadInt32(&vs.lookupGroups),
-		LookupGroupItems:             atomic.LoadInt32(&vs.lookupGroupItems),
-		Reads:                        atomic.LoadInt32(&vs.reads),
-		ReadErrors:                   atomic.LoadInt32(&vs.readErrors),
-		ReadGroups:                   atomic.LoadInt32(&vs.readGroups),
-		ReadGroupItems:               atomic.LoadInt32(&vs.readGroupItems),
-		Writes:                       atomic.LoadInt32(&vs.writes),
-		WriteErrors:                  atomic.LoadInt32(&vs.writeErrors),
-		WritesOverridden:             atomic.LoadInt32(&vs.writesOverridden),
-		Deletes:                      atomic.LoadInt32(&vs.deletes),
-		DeleteErrors:                 atomic.LoadInt32(&vs.deleteErrors),
-		DeletesOverridden:            atomic.LoadInt32(&vs.deletesOverridden),
-		OutBulkSets:                  atomic.LoadInt32(&vs.outBulkSets),
-		OutBulkSetValues:             atomic.LoadInt32(&vs.outBulkSetValues),
-		OutBulkSetPushes:             atomic.LoadInt32(&vs.outBulkSetPushes),
-		OutBulkSetPushValues:         atomic.LoadInt32(&vs.outBulkSetPushValues),
-		InBulkSets:                   atomic.LoadInt32(&vs.inBulkSets),
-		InBulkSetDrops:               atomic.LoadInt32(&vs.inBulkSetDrops),
-		InBulkSetInvalids:            atomic.LoadInt32(&vs.inBulkSetInvalids),
-		InBulkSetWrites:              atomic.LoadInt32(&vs.inBulkSetWrites),
-		InBulkSetWriteErrors:         atomic.LoadInt32(&vs.inBulkSetWriteErrors),
-		InBulkSetWritesOverridden:    atomic.LoadInt32(&vs.inBulkSetWritesOverridden),
-		OutBulkSetAcks:               atomic.LoadInt32(&vs.outBulkSetAcks),
-		InBulkSetAcks:                atomic.LoadInt32(&vs.inBulkSetAcks),
-		InBulkSetAckDrops:            atomic.LoadInt32(&vs.inBulkSetAckDrops),
-		InBulkSetAckInvalids:         atomic.LoadInt32(&vs.inBulkSetAckInvalids),
-		InBulkSetAckWrites:           atomic.LoadInt32(&vs.inBulkSetAckWrites),
-		InBulkSetAckWriteErrors:      atomic.LoadInt32(&vs.inBulkSetAckWriteErrors),
-		InBulkSetAckWritesOverridden: atomic.LoadInt32(&vs.inBulkSetAckWritesOverridden),
-		OutPullReplications:          atomic.LoadInt32(&vs.outPullReplications),
-		InPullReplications:           atomic.LoadInt32(&vs.inPullReplications),
-		InPullReplicationDrops:       atomic.LoadInt32(&vs.inPullReplicationDrops),
-		InPullReplicationInvalids:    atomic.LoadInt32(&vs.inPullReplicationInvalids),
-		ExpiredDeletions:             atomic.LoadInt32(&vs.expiredDeletions),
-		Compactions:                  atomic.LoadInt32(&vs.compactions),
-		SmallFileCompactions:         atomic.LoadInt32(&vs.smallFileCompactions),
-		Free:                         atomic.LoadUint64(&vs.diskWatcherState.free),
-		Used:                         atomic.LoadUint64(&vs.diskWatcherState.used),
-		Size:                         atomic.LoadUint64(&vs.diskWatcherState.size),
-		FreeTOC:                      atomic.LoadUint64(&vs.diskWatcherState.freetoc),
-		UsedTOC:                      atomic.LoadUint64(&vs.diskWatcherState.usedtoc),
-		SizeTOC:                      atomic.LoadUint64(&vs.diskWatcherState.sizetoc),
+		Lookups:                      atomic.LoadInt32(&store.lookups),
+		LookupErrors:                 atomic.LoadInt32(&store.lookupErrors),
+		LookupGroups:                 atomic.LoadInt32(&store.lookupGroups),
+		LookupGroupItems:             atomic.LoadInt32(&store.lookupGroupItems),
+		Reads:                        atomic.LoadInt32(&store.reads),
+		ReadErrors:                   atomic.LoadInt32(&store.readErrors),
+		ReadGroups:                   atomic.LoadInt32(&store.readGroups),
+		ReadGroupItems:               atomic.LoadInt32(&store.readGroupItems),
+		Writes:                       atomic.LoadInt32(&store.writes),
+		WriteErrors:                  atomic.LoadInt32(&store.writeErrors),
+		WritesOverridden:             atomic.LoadInt32(&store.writesOverridden),
+		Deletes:                      atomic.LoadInt32(&store.deletes),
+		DeleteErrors:                 atomic.LoadInt32(&store.deleteErrors),
+		DeletesOverridden:            atomic.LoadInt32(&store.deletesOverridden),
+		OutBulkSets:                  atomic.LoadInt32(&store.outBulkSets),
+		OutBulkSetValues:             atomic.LoadInt32(&store.outBulkSetValues),
+		OutBulkSetPushes:             atomic.LoadInt32(&store.outBulkSetPushes),
+		OutBulkSetPushValues:         atomic.LoadInt32(&store.outBulkSetPushValues),
+		InBulkSets:                   atomic.LoadInt32(&store.inBulkSets),
+		InBulkSetDrops:               atomic.LoadInt32(&store.inBulkSetDrops),
+		InBulkSetInvalids:            atomic.LoadInt32(&store.inBulkSetInvalids),
+		InBulkSetWrites:              atomic.LoadInt32(&store.inBulkSetWrites),
+		InBulkSetWriteErrors:         atomic.LoadInt32(&store.inBulkSetWriteErrors),
+		InBulkSetWritesOverridden:    atomic.LoadInt32(&store.inBulkSetWritesOverridden),
+		OutBulkSetAcks:               atomic.LoadInt32(&store.outBulkSetAcks),
+		InBulkSetAcks:                atomic.LoadInt32(&store.inBulkSetAcks),
+		InBulkSetAckDrops:            atomic.LoadInt32(&store.inBulkSetAckDrops),
+		InBulkSetAckInvalids:         atomic.LoadInt32(&store.inBulkSetAckInvalids),
+		InBulkSetAckWrites:           atomic.LoadInt32(&store.inBulkSetAckWrites),
+		InBulkSetAckWriteErrors:      atomic.LoadInt32(&store.inBulkSetAckWriteErrors),
+		InBulkSetAckWritesOverridden: atomic.LoadInt32(&store.inBulkSetAckWritesOverridden),
+		OutPullReplications:          atomic.LoadInt32(&store.outPullReplications),
+		InPullReplications:           atomic.LoadInt32(&store.inPullReplications),
+		InPullReplicationDrops:       atomic.LoadInt32(&store.inPullReplicationDrops),
+		InPullReplicationInvalids:    atomic.LoadInt32(&store.inPullReplicationInvalids),
+		ExpiredDeletions:             atomic.LoadInt32(&store.expiredDeletions),
+		Compactions:                  atomic.LoadInt32(&store.compactions),
+		SmallFileCompactions:         atomic.LoadInt32(&store.smallFileCompactions),
+		Free:                         atomic.LoadUint64(&store.diskWatcherState.free),
+		Used:                         atomic.LoadUint64(&store.diskWatcherState.used),
+		Size:                         atomic.LoadUint64(&store.diskWatcherState.size),
+		FreeTOC:                      atomic.LoadUint64(&store.diskWatcherState.freetoc),
+		UsedTOC:                      atomic.LoadUint64(&store.diskWatcherState.usedtoc),
+		SizeTOC:                      atomic.LoadUint64(&store.diskWatcherState.sizetoc),
 	}
-	atomic.AddInt32(&vs.lookups, -stats.Lookups)
-	atomic.AddInt32(&vs.lookupErrors, -stats.LookupErrors)
-	atomic.AddInt32(&vs.lookupGroups, -stats.LookupGroups)
-	atomic.AddInt32(&vs.lookupGroupItems, -stats.LookupGroupItems)
-	atomic.AddInt32(&vs.reads, -stats.Reads)
-	atomic.AddInt32(&vs.readErrors, -stats.ReadErrors)
-	atomic.AddInt32(&vs.readGroups, -stats.ReadGroups)
-	atomic.AddInt32(&vs.readGroupItems, -stats.ReadGroupItems)
-	atomic.AddInt32(&vs.writes, -stats.Writes)
-	atomic.AddInt32(&vs.writeErrors, -stats.WriteErrors)
-	atomic.AddInt32(&vs.writesOverridden, -stats.WritesOverridden)
-	atomic.AddInt32(&vs.writes, -stats.Deletes)
-	atomic.AddInt32(&vs.writeErrors, -stats.DeleteErrors)
-	atomic.AddInt32(&vs.writesOverridden, -stats.DeletesOverridden)
-	atomic.AddInt32(&vs.outBulkSets, -stats.OutBulkSets)
-	atomic.AddInt32(&vs.outBulkSetValues, -stats.OutBulkSetValues)
-	atomic.AddInt32(&vs.outBulkSetPushes, -stats.OutBulkSetPushes)
-	atomic.AddInt32(&vs.outBulkSetPushValues, -stats.OutBulkSetPushValues)
-	atomic.AddInt32(&vs.inBulkSets, -stats.InBulkSets)
-	atomic.AddInt32(&vs.inBulkSetDrops, -stats.InBulkSetDrops)
-	atomic.AddInt32(&vs.inBulkSetInvalids, -stats.InBulkSetInvalids)
-	atomic.AddInt32(&vs.inBulkSetWrites, -stats.InBulkSetWrites)
-	atomic.AddInt32(&vs.inBulkSetWriteErrors, -stats.InBulkSetWriteErrors)
-	atomic.AddInt32(&vs.inBulkSetWritesOverridden, -stats.InBulkSetWritesOverridden)
-	atomic.AddInt32(&vs.outBulkSetAcks, -stats.OutBulkSetAcks)
-	atomic.AddInt32(&vs.inBulkSetAcks, -stats.InBulkSetAcks)
-	atomic.AddInt32(&vs.inBulkSetAckDrops, -stats.InBulkSetAckDrops)
-	atomic.AddInt32(&vs.inBulkSetAckInvalids, -stats.InBulkSetAckInvalids)
-	atomic.AddInt32(&vs.inBulkSetAckWrites, -stats.InBulkSetAckWrites)
-	atomic.AddInt32(&vs.inBulkSetAckWriteErrors, -stats.InBulkSetAckWriteErrors)
-	atomic.AddInt32(&vs.inBulkSetAckWritesOverridden, -stats.InBulkSetAckWritesOverridden)
-	atomic.AddInt32(&vs.outPullReplications, -stats.OutPullReplications)
-	atomic.AddInt32(&vs.inPullReplications, -stats.InPullReplications)
-	atomic.AddInt32(&vs.inPullReplicationDrops, -stats.InPullReplicationDrops)
-	atomic.AddInt32(&vs.inPullReplicationInvalids, -stats.InPullReplicationInvalids)
-	atomic.AddInt32(&vs.expiredDeletions, -stats.ExpiredDeletions)
-	atomic.AddInt32(&vs.compactions, -stats.Compactions)
-	atomic.AddInt32(&vs.smallFileCompactions, -stats.SmallFileCompactions)
-	vs.statsLock.Unlock()
+	atomic.AddInt32(&store.lookups, -stats.Lookups)
+	atomic.AddInt32(&store.lookupErrors, -stats.LookupErrors)
+	atomic.AddInt32(&store.lookupGroups, -stats.LookupGroups)
+	atomic.AddInt32(&store.lookupGroupItems, -stats.LookupGroupItems)
+	atomic.AddInt32(&store.reads, -stats.Reads)
+	atomic.AddInt32(&store.readErrors, -stats.ReadErrors)
+	atomic.AddInt32(&store.readGroups, -stats.ReadGroups)
+	atomic.AddInt32(&store.readGroupItems, -stats.ReadGroupItems)
+	atomic.AddInt32(&store.writes, -stats.Writes)
+	atomic.AddInt32(&store.writeErrors, -stats.WriteErrors)
+	atomic.AddInt32(&store.writesOverridden, -stats.WritesOverridden)
+	atomic.AddInt32(&store.writes, -stats.Deletes)
+	atomic.AddInt32(&store.writeErrors, -stats.DeleteErrors)
+	atomic.AddInt32(&store.writesOverridden, -stats.DeletesOverridden)
+	atomic.AddInt32(&store.outBulkSets, -stats.OutBulkSets)
+	atomic.AddInt32(&store.outBulkSetValues, -stats.OutBulkSetValues)
+	atomic.AddInt32(&store.outBulkSetPushes, -stats.OutBulkSetPushes)
+	atomic.AddInt32(&store.outBulkSetPushValues, -stats.OutBulkSetPushValues)
+	atomic.AddInt32(&store.inBulkSets, -stats.InBulkSets)
+	atomic.AddInt32(&store.inBulkSetDrops, -stats.InBulkSetDrops)
+	atomic.AddInt32(&store.inBulkSetInvalids, -stats.InBulkSetInvalids)
+	atomic.AddInt32(&store.inBulkSetWrites, -stats.InBulkSetWrites)
+	atomic.AddInt32(&store.inBulkSetWriteErrors, -stats.InBulkSetWriteErrors)
+	atomic.AddInt32(&store.inBulkSetWritesOverridden, -stats.InBulkSetWritesOverridden)
+	atomic.AddInt32(&store.outBulkSetAcks, -stats.OutBulkSetAcks)
+	atomic.AddInt32(&store.inBulkSetAcks, -stats.InBulkSetAcks)
+	atomic.AddInt32(&store.inBulkSetAckDrops, -stats.InBulkSetAckDrops)
+	atomic.AddInt32(&store.inBulkSetAckInvalids, -stats.InBulkSetAckInvalids)
+	atomic.AddInt32(&store.inBulkSetAckWrites, -stats.InBulkSetAckWrites)
+	atomic.AddInt32(&store.inBulkSetAckWriteErrors, -stats.InBulkSetAckWriteErrors)
+	atomic.AddInt32(&store.inBulkSetAckWritesOverridden, -stats.InBulkSetAckWritesOverridden)
+	atomic.AddInt32(&store.outPullReplications, -stats.OutPullReplications)
+	atomic.AddInt32(&store.inPullReplications, -stats.InPullReplications)
+	atomic.AddInt32(&store.inPullReplicationDrops, -stats.InPullReplicationDrops)
+	atomic.AddInt32(&store.inPullReplicationInvalids, -stats.InPullReplicationInvalids)
+	atomic.AddInt32(&store.expiredDeletions, -stats.ExpiredDeletions)
+	atomic.AddInt32(&store.compactions, -stats.Compactions)
+	atomic.AddInt32(&store.smallFileCompactions, -stats.SmallFileCompactions)
+	store.statsLock.Unlock()
 	if !debug {
-		vlmStats := vs.vlm.Stats(false)
+		vlmStats := store.vlm.Stats(false)
 		stats.Values = vlmStats.ActiveCount
 		stats.ValueBytes = vlmStats.ActiveBytes
 		stats.vlmDebugInfo = vlmStats
 	} else {
 		stats.debug = debug
-		for i := 0; i < len(vs.freeableVMChans); i++ {
-			stats.freeableVMChansCap += cap(vs.freeableVMChans[i])
-			stats.freeableVMChansIn += len(vs.freeableVMChans[i])
+		for i := 0; i < len(store.freeableVMChans); i++ {
+			stats.freeableVMChansCap += cap(store.freeableVMChans[i])
+			stats.freeableVMChansIn += len(store.freeableVMChans[i])
 		}
-		stats.freeVMChanCap = cap(vs.freeVMChan)
-		stats.freeVMChanIn = len(vs.freeVMChan)
-		stats.freeVWRChans = len(vs.freeVWRChans)
-		for i := 0; i < len(vs.freeVWRChans); i++ {
-			stats.freeVWRChansCap += cap(vs.freeVWRChans[i])
-			stats.freeVWRChansIn += len(vs.freeVWRChans[i])
+		stats.freeVMChanCap = cap(store.freeVMChan)
+		stats.freeVMChanIn = len(store.freeVMChan)
+		stats.freeVWRChans = len(store.freeVWRChans)
+		for i := 0; i < len(store.freeVWRChans); i++ {
+			stats.freeVWRChansCap += cap(store.freeVWRChans[i])
+			stats.freeVWRChansIn += len(store.freeVWRChans[i])
 		}
-		stats.pendingVWRChans = len(vs.pendingVWRChans)
-		for i := 0; i < len(vs.pendingVWRChans); i++ {
-			stats.pendingVWRChansCap += cap(vs.pendingVWRChans[i])
-			stats.pendingVWRChansIn += len(vs.pendingVWRChans[i])
+		stats.pendingVWRChans = len(store.pendingVWRChans)
+		for i := 0; i < len(store.pendingVWRChans); i++ {
+			stats.pendingVWRChansCap += cap(store.pendingVWRChans[i])
+			stats.pendingVWRChansIn += len(store.pendingVWRChans[i])
 		}
-		stats.vfVMChanCap = cap(vs.vfVMChan)
-		stats.vfVMChanIn = len(vs.vfVMChan)
-		stats.freeTOCBlockChanCap = cap(vs.freeTOCBlockChan)
-		stats.freeTOCBlockChanIn = len(vs.freeTOCBlockChan)
-		stats.pendingTOCBlockChanCap = cap(vs.pendingTOCBlockChan)
-		stats.pendingTOCBlockChanIn = len(vs.pendingTOCBlockChan)
-		stats.maxLocBlockID = atomic.LoadUint64(&vs.locBlockIDer)
-		stats.path = vs.path
-		stats.pathtoc = vs.pathtoc
-		stats.workers = vs.workers
-		stats.tombstoneDiscardInterval = vs.tombstoneDiscardState.interval
-		stats.outPullReplicationWorkers = vs.pullReplicationState.outWorkers
-		stats.outPullReplicationInterval = vs.pullReplicationState.outInterval
-		stats.outPushReplicationWorkers = vs.pushReplicationState.outWorkers
-		stats.outPushReplicationInterval = vs.pushReplicationState.outInterval
-		stats.valueCap = vs.valueCap
-		stats.pageSize = vs.pageSize
-		stats.minValueAlloc = vs.minValueAlloc
-		stats.writePagesPerWorker = vs.writePagesPerWorker
-		stats.tombstoneAge = int((vs.tombstoneDiscardState.age >> _TSB_UTIL_BITS) * 1000 / uint64(time.Second))
-		stats.fileCap = vs.fileCap
-		stats.fileReaders = vs.fileReaders
-		stats.checksumInterval = vs.checksumInterval
-		stats.replicationIgnoreRecent = int(vs.replicationIgnoreRecent / uint64(time.Second))
-		vlmStats := vs.vlm.Stats(true)
+		stats.vfVMChanCap = cap(store.vfVMChan)
+		stats.vfVMChanIn = len(store.vfVMChan)
+		stats.freeTOCBlockChanCap = cap(store.freeTOCBlockChan)
+		stats.freeTOCBlockChanIn = len(store.freeTOCBlockChan)
+		stats.pendingTOCBlockChanCap = cap(store.pendingTOCBlockChan)
+		stats.pendingTOCBlockChanIn = len(store.pendingTOCBlockChan)
+		stats.maxLocBlockID = atomic.LoadUint64(&store.locBlockIDer)
+		stats.path = store.path
+		stats.pathtoc = store.pathtoc
+		stats.workers = store.workers
+		stats.tombstoneDiscardInterval = store.tombstoneDiscardState.interval
+		stats.outPullReplicationWorkers = store.pullReplicationState.outWorkers
+		stats.outPullReplicationInterval = store.pullReplicationState.outInterval
+		stats.outPushReplicationWorkers = store.pushReplicationState.outWorkers
+		stats.outPushReplicationInterval = store.pushReplicationState.outInterval
+		stats.valueCap = store.valueCap
+		stats.pageSize = store.pageSize
+		stats.minValueAlloc = store.minValueAlloc
+		stats.writePagesPerWorker = store.writePagesPerWorker
+		stats.tombstoneAge = int((store.tombstoneDiscardState.age >> _TSB_UTIL_BITS) * 1000 / uint64(time.Second))
+		stats.fileCap = store.fileCap
+		stats.fileReaders = store.fileReaders
+		stats.checksumInterval = store.checksumInterval
+		stats.replicationIgnoreRecent = int(store.replicationIgnoreRecent / uint64(time.Second))
+		vlmStats := store.vlm.Stats(true)
 		stats.Values = vlmStats.ActiveCount
 		stats.ValueBytes = vlmStats.ActiveBytes
 		stats.vlmDebugInfo = vlmStats

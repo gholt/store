@@ -19,44 +19,44 @@ type {{.t}}DiskWatcherState struct {
     sizetoc                uint64
 }
 
-func (vs *Default{{.T}}Store) diskWatcherConfig(cfg *{{.T}}StoreConfig) {
-    vs.diskWatcherState.freeDisableThreshold = cfg.FreeDisableThreshold
-    vs.diskWatcherState.freeReenableThreshold = cfg.FreeReenableThreshold
-    vs.diskWatcherState.usageDisableThreshold = cfg.UsageDisableThreshold
-    vs.diskWatcherState.usageReenableThreshold = cfg.UsageReenableThreshold
+func (store *Default{{.T}}Store) diskWatcherConfig(cfg *{{.T}}StoreConfig) {
+    store.diskWatcherState.freeDisableThreshold = cfg.FreeDisableThreshold
+    store.diskWatcherState.freeReenableThreshold = cfg.FreeReenableThreshold
+    store.diskWatcherState.usageDisableThreshold = cfg.UsageDisableThreshold
+    store.diskWatcherState.usageReenableThreshold = cfg.UsageReenableThreshold
 }
 
-func (vs *Default{{.T}}Store) diskWatcherLaunch() {
-    go vs.diskWatcher()
+func (store *Default{{.T}}Store) diskWatcherLaunch() {
+    go store.diskWatcher()
 }
 
-func (vs *Default{{.T}}Store) diskWatcher() {
+func (store *Default{{.T}}Store) diskWatcher() {
     disabled := false
     for {
         time.Sleep(time.Minute)
-        u := du.NewDiskUsage(vs.path)
+        u := du.NewDiskUsage(store.path)
         utoc := u
-        if vs.pathtoc != vs.path {
-            utoc = du.NewDiskUsage(vs.pathtoc)
+        if store.pathtoc != store.path {
+            utoc = du.NewDiskUsage(store.pathtoc)
         }
-        vs.diskWatcherState.free = u.Free()
-        vs.diskWatcherState.used = u.Used()
-        vs.diskWatcherState.size = u.Size()
+        store.diskWatcherState.free = u.Free()
+        store.diskWatcherState.used = u.Used()
+        store.diskWatcherState.size = u.Size()
         usage := u.Usage()
-        vs.diskWatcherState.freetoc = utoc.Free()
-        vs.diskWatcherState.usedtoc = utoc.Used()
-        vs.diskWatcherState.sizetoc = utoc.Size()
+        store.diskWatcherState.freetoc = utoc.Free()
+        store.diskWatcherState.usedtoc = utoc.Used()
+        store.diskWatcherState.sizetoc = utoc.Size()
         usagetoc := utoc.Usage()
         if disabled {
-            if (vs.diskWatcherState.freeReenableThreshold == 0 || (vs.diskWatcherState.free >= vs.diskWatcherState.freeReenableThreshold && vs.diskWatcherState.freetoc >= vs.diskWatcherState.freeReenableThreshold)) && (vs.diskWatcherState.usageReenableThreshold == 0 || (usage <= vs.diskWatcherState.usageReenableThreshold && usagetoc <= vs.diskWatcherState.usageReenableThreshold)) {
-                vs.logCritical("passed the free/usage threshold for automatic re-enabling\n")
-                vs.enableWrites(false) // false indicates non-user call
+            if (store.diskWatcherState.freeReenableThreshold == 0 || (store.diskWatcherState.free >= store.diskWatcherState.freeReenableThreshold && store.diskWatcherState.freetoc >= store.diskWatcherState.freeReenableThreshold)) && (store.diskWatcherState.usageReenableThreshold == 0 || (usage <= store.diskWatcherState.usageReenableThreshold && usagetoc <= store.diskWatcherState.usageReenableThreshold)) {
+                store.logCritical("passed the free/usage threshold for automatic re-enabling\n")
+                store.enableWrites(false) // false indicates non-user call
                 disabled = false
             }
         } else {
-            if (vs.diskWatcherState.freeDisableThreshold != 0 && (vs.diskWatcherState.free <= vs.diskWatcherState.freeDisableThreshold || vs.diskWatcherState.freetoc <= vs.diskWatcherState.freeDisableThreshold)) || (vs.diskWatcherState.usageDisableThreshold != 0 && (usage >= vs.diskWatcherState.usageDisableThreshold || usagetoc >= vs.diskWatcherState.usageDisableThreshold)) {
-                vs.logCritical("passed the free/usage threshold for automatic disabling\n")
-                vs.disableWrites(false) // false indicates non-user call
+            if (store.diskWatcherState.freeDisableThreshold != 0 && (store.diskWatcherState.free <= store.diskWatcherState.freeDisableThreshold || store.diskWatcherState.freetoc <= store.diskWatcherState.freeDisableThreshold)) || (store.diskWatcherState.usageDisableThreshold != 0 && (usage >= store.diskWatcherState.usageDisableThreshold || usagetoc >= store.diskWatcherState.usageDisableThreshold)) {
+                store.logCritical("passed the free/usage threshold for automatic disabling\n")
+                store.disableWrites(false) // false indicates non-user call
                 disabled = true
             }
         }

@@ -11,26 +11,26 @@ import (
 func TestValueBulkSetAckRead(t *testing.T) {
 	cfg := lowMemValueStoreConfig()
 	cfg.MsgRing = &msgRingPlaceholder{}
-	vs, err := NewValueStore(cfg)
+	store, err := NewValueStore(cfg)
 	if err != nil {
 		t.Fatal("")
 	}
-	for i := 0; i < len(vs.bulkSetAckState.inBulkSetAckDoneChans); i++ {
-		vs.bulkSetAckState.inMsgChan <- nil
+	for i := 0; i < len(store.bulkSetAckState.inBulkSetAckDoneChans); i++ {
+		store.bulkSetAckState.inMsgChan <- nil
 	}
-	for _, doneChan := range vs.bulkSetAckState.inBulkSetAckDoneChans {
+	for _, doneChan := range store.bulkSetAckState.inBulkSetAckDoneChans {
 		<-doneChan
 	}
-	n, err := vs.newInBulkSetAckMsg(bytes.NewBuffer(make([]byte, 100)), 100)
+	n, err := store.newInBulkSetAckMsg(bytes.NewBuffer(make([]byte, 100)), 100)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if n != 100 {
 		t.Fatal(n)
 	}
-	<-vs.bulkSetAckState.inMsgChan
+	<-store.bulkSetAckState.inMsgChan
 	// Once again, but with an error in the body.
-	n, err = vs.newInBulkSetAckMsg(bytes.NewBuffer(make([]byte, 10)), 100)
+	n, err = store.newInBulkSetAckMsg(bytes.NewBuffer(make([]byte, 10)), 100)
 	if err != io.EOF {
 		t.Fatal(err)
 	}
@@ -38,7 +38,7 @@ func TestValueBulkSetAckRead(t *testing.T) {
 		t.Fatal(n)
 	}
 	select {
-	case bsam := <-vs.bulkSetAckState.inMsgChan:
+	case bsam := <-store.bulkSetAckState.inMsgChan:
 		t.Fatal(bsam)
 	default:
 	}
@@ -48,24 +48,24 @@ func TestValueBulkSetAckReadLowSendCap(t *testing.T) {
 	cfg := lowMemValueStoreConfig()
 	cfg.MsgRing = &msgRingPlaceholder{}
 	cfg.BulkSetAckMsgCap = 1
-	vs, err := NewValueStore(cfg)
+	store, err := NewValueStore(cfg)
 	if err != nil {
 		t.Fatal("")
 	}
-	for i := 0; i < len(vs.bulkSetAckState.inBulkSetAckDoneChans); i++ {
-		vs.bulkSetAckState.inMsgChan <- nil
+	for i := 0; i < len(store.bulkSetAckState.inBulkSetAckDoneChans); i++ {
+		store.bulkSetAckState.inMsgChan <- nil
 	}
-	for _, doneChan := range vs.bulkSetAckState.inBulkSetAckDoneChans {
+	for _, doneChan := range store.bulkSetAckState.inBulkSetAckDoneChans {
 		<-doneChan
 	}
-	n, err := vs.newInBulkSetAckMsg(bytes.NewBuffer(make([]byte, 100)), 100)
+	n, err := store.newInBulkSetAckMsg(bytes.NewBuffer(make([]byte, 100)), 100)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if n != 100 {
 		t.Fatal(n)
 	}
-	<-vs.bulkSetAckState.inMsgChan
+	<-store.bulkSetAckState.inMsgChan
 }
 
 func TestValueBulkSetAckMsgIncoming(t *testing.T) {
@@ -81,13 +81,13 @@ func TestValueBulkSetAckMsgIncoming(t *testing.T) {
 	cfg.MsgRing = m
 	cfg.InBulkSetAckWorkers = 1
 	cfg.InBulkSetAckMsgs = 1
-	vs, err := NewValueStore(cfg)
+	store, err := NewValueStore(cfg)
 	if err != nil {
 		t.Fatal("")
 	}
-	vs.EnableAll()
-	defer vs.DisableAll()
-	ts, err := vs.write(1, 2, 0x500, []byte("testing"), true)
+	store.EnableAll()
+	defer store.DisableAll()
+	ts, err := store.write(1, 2, 0x500, []byte("testing"), true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -95,7 +95,7 @@ func TestValueBulkSetAckMsgIncoming(t *testing.T) {
 		t.Fatal(ts)
 	}
 	// just double check the item is there
-	ts2, v, err := vs.read(1, 2, nil)
+	ts2, v, err := store.read(1, 2, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -105,17 +105,17 @@ func TestValueBulkSetAckMsgIncoming(t *testing.T) {
 	if string(v) != "testing" {
 		t.Fatal(string(v))
 	}
-	bsam := <-vs.bulkSetAckState.inFreeMsgChan
+	bsam := <-store.bulkSetAckState.inFreeMsgChan
 	bsam.body = bsam.body[:0]
 	if !bsam.add(1, 2, 0x500) {
 		t.Fatal("")
 	}
-	vs.bulkSetAckState.inMsgChan <- bsam
+	store.bulkSetAckState.inMsgChan <- bsam
 	// only one of these, so if we get it back we know the previous data was
 	// processed
-	<-vs.bulkSetAckState.inFreeMsgChan
+	<-store.bulkSetAckState.inFreeMsgChan
 	// Make sure the item is gone
-	ts2, v, err = vs.read(1, 2, nil)
+	ts2, v, err = store.read(1, 2, nil)
 	if err != ErrNotFound {
 		t.Fatal(err)
 	}
@@ -133,13 +133,13 @@ func TestValueBulkSetAckMsgIncomingNoRing(t *testing.T) {
 	cfg.MsgRing = m
 	cfg.InBulkSetAckWorkers = 1
 	cfg.InBulkSetAckMsgs = 1
-	vs, err := NewValueStore(cfg)
+	store, err := NewValueStore(cfg)
 	if err != nil {
 		t.Fatal("")
 	}
-	vs.EnableAll()
-	defer vs.DisableAll()
-	ts, err := vs.write(1, 2, 0x500, []byte("testing"), true)
+	store.EnableAll()
+	defer store.DisableAll()
+	ts, err := store.write(1, 2, 0x500, []byte("testing"), true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -147,7 +147,7 @@ func TestValueBulkSetAckMsgIncomingNoRing(t *testing.T) {
 		t.Fatal(ts)
 	}
 	// just double check the item is there
-	ts2, v, err := vs.read(1, 2, nil)
+	ts2, v, err := store.read(1, 2, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -157,18 +157,18 @@ func TestValueBulkSetAckMsgIncomingNoRing(t *testing.T) {
 	if string(v) != "testing" {
 		t.Fatal(string(v))
 	}
-	bsam := <-vs.bulkSetAckState.inFreeMsgChan
+	bsam := <-store.bulkSetAckState.inFreeMsgChan
 	bsam.body = bsam.body[:0]
 	if !bsam.add(1, 2, 0x500) {
 		t.Fatal("")
 	}
-	vs.bulkSetAckState.inMsgChan <- bsam
+	store.bulkSetAckState.inMsgChan <- bsam
 	// only one of these, so if we get it back we know the previous data was
 	// processed
-	<-vs.bulkSetAckState.inFreeMsgChan
+	<-store.bulkSetAckState.inFreeMsgChan
 	// Make sure the item is not gone since we don't know if we're responsible
 	// or not since we don't have a ring
-	ts2, v, err = vs.read(1, 2, nil)
+	ts2, v, err = store.read(1, 2, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -183,11 +183,11 @@ func TestValueBulkSetAckMsgIncomingNoRing(t *testing.T) {
 func TestValueBulkSetAckMsgOut(t *testing.T) {
 	cfg := lowMemValueStoreConfig()
 	cfg.MsgRing = &msgRingPlaceholder{}
-	vs, err := NewValueStore(cfg)
+	store, err := NewValueStore(cfg)
 	if err != nil {
 		t.Fatal("")
 	}
-	bsam := vs.newOutBulkSetAckMsg()
+	bsam := store.newOutBulkSetAckMsg()
 	if bsam.MsgType() != _VALUE_BULK_SET_ACK_MSG_TYPE {
 		t.Fatal(bsam.MsgType())
 	}
@@ -206,7 +206,7 @@ func TestValueBulkSetAckMsgOut(t *testing.T) {
 		t.Fatal(buf.Bytes())
 	}
 	bsam.Free()
-	bsam = vs.newOutBulkSetAckMsg()
+	bsam = store.newOutBulkSetAckMsg()
 	bsam.add(1, 2, 0x500)
 	bsam.add(6, 7, 0xa00)
 	if bsam.MsgType() != _VALUE_BULK_SET_ACK_MSG_TYPE {
@@ -241,11 +241,11 @@ func TestValueBulkSetAckMsgOut(t *testing.T) {
 func TestValueBulkSetAckMsgOutWriteError(t *testing.T) {
 	cfg := lowMemValueStoreConfig()
 	cfg.MsgRing = &msgRingPlaceholder{}
-	vs, err := NewValueStore(cfg)
+	store, err := NewValueStore(cfg)
 	if err != nil {
 		t.Fatal("")
 	}
-	bsam := vs.newOutBulkSetAckMsg()
+	bsam := store.newOutBulkSetAckMsg()
 	bsam.add(1, 2, 0x500)
 	_, err = bsam.WriteContent(&testErrorWriter{})
 	if err == nil {
@@ -258,11 +258,11 @@ func TestValueBulkSetAckMsgOutHitCap(t *testing.T) {
 	cfg := lowMemValueStoreConfig()
 	cfg.MsgRing = &msgRingPlaceholder{}
 	cfg.BulkSetAckMsgCap = _VALUE_BULK_SET_ACK_MSG_ENTRY_LENGTH + 3
-	vs, err := NewValueStore(cfg)
+	store, err := NewValueStore(cfg)
 	if err != nil {
 		t.Fatal("")
 	}
-	bsam := vs.newOutBulkSetAckMsg()
+	bsam := store.newOutBulkSetAckMsg()
 	if !bsam.add(1, 2, 0x500) {
 		t.Fatal("")
 	}

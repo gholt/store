@@ -51,7 +51,7 @@ func TestValueKTBloomFilterPersistence(t *testing.T) {
 		f.add(i, i, i)
 	}
 	m := &valuePullReplicationMsg{
-		vs:     nil,
+		store:  nil,
 		header: make([]byte, _VALUE_KT_BLOOM_FILTER_HEADER_BYTES+_VALUE_PULL_REPLICATION_MSG_HEADER_BYTES),
 		body:   make([]byte, len(f.bits)),
 	}

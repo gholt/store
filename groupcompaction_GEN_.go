@@ -27,24 +27,24 @@ type groupCompactionState struct {
 	notifyChan   chan *backgroundNotification
 }
 
-func (vs *DefaultGroupStore) compactionConfig(cfg *GroupStoreConfig) {
-	vs.compactionState.interval = cfg.CompactionInterval
-	vs.compactionState.threshold = cfg.CompactionThreshold
-	vs.compactionState.ageThreshold = int64(cfg.CompactionAgeThreshold * 1000000000)
-	vs.compactionState.notifyChan = make(chan *backgroundNotification, 1)
-	vs.compactionState.workerCount = cfg.CompactionWorkers
+func (store *DefaultGroupStore) compactionConfig(cfg *GroupStoreConfig) {
+	store.compactionState.interval = cfg.CompactionInterval
+	store.compactionState.threshold = cfg.CompactionThreshold
+	store.compactionState.ageThreshold = int64(cfg.CompactionAgeThreshold * 1000000000)
+	store.compactionState.notifyChan = make(chan *backgroundNotification, 1)
+	store.compactionState.workerCount = cfg.CompactionWorkers
 }
 
-func (vs *DefaultGroupStore) compactionLaunch() {
-	go vs.compactionLauncher()
+func (store *DefaultGroupStore) compactionLaunch() {
+	go store.compactionLauncher()
 }
 
 // DisableCompaction will stop any compaction passes until
 // EnableCompaction is called. A compaction pass searches for files
 // with a percentage of XX deleted entries.
-func (vs *DefaultGroupStore) DisableCompaction() {
+func (store *DefaultGroupStore) DisableCompaction() {
 	c := make(chan struct{}, 1)
-	vs.compactionState.notifyChan <- &backgroundNotification{
+	store.compactionState.notifyChan <- &backgroundNotification{
 		disable:  true,
 		doneChan: c,
 	}
@@ -54,9 +54,9 @@ func (vs *DefaultGroupStore) DisableCompaction() {
 // EnableCompaction will resume compaction passes.
 // A compaction pass searches for files with a percentage of XX deleted
 // entries.
-func (vs *DefaultGroupStore) EnableCompaction() {
+func (store *DefaultGroupStore) EnableCompaction() {
 	c := make(chan struct{}, 1)
-	vs.compactionState.notifyChan <- &backgroundNotification{
+	store.compactionState.notifyChan <- &backgroundNotification{
 		enable:   true,
 		doneChan: c,
 	}
@@ -64,36 +64,36 @@ func (vs *DefaultGroupStore) EnableCompaction() {
 }
 
 // CompactionPass will immediately execute a compaction pass to compact stale files.
-func (vs *DefaultGroupStore) CompactionPass() {
-	atomic.StoreUint32(&vs.compactionState.abort, 1)
+func (store *DefaultGroupStore) CompactionPass() {
+	atomic.StoreUint32(&store.compactionState.abort, 1)
 	c := make(chan struct{}, 1)
-	vs.compactionState.notifyChan <- &backgroundNotification{doneChan: c}
+	store.compactionState.notifyChan <- &backgroundNotification{doneChan: c}
 	<-c
 }
 
-func (vs *DefaultGroupStore) compactionLauncher() {
+func (store *DefaultGroupStore) compactionLauncher() {
 	var enabled bool
-	interval := float64(vs.compactionState.interval) * float64(time.Second)
-	vs.randMutex.Lock()
-	nextRun := time.Now().Add(time.Duration(interval + interval*vs.rand.NormFloat64()*0.1))
-	vs.randMutex.Unlock()
+	interval := float64(store.compactionState.interval) * float64(time.Second)
+	store.randMutex.Lock()
+	nextRun := time.Now().Add(time.Duration(interval + interval*store.rand.NormFloat64()*0.1))
+	store.randMutex.Unlock()
 	for {
 		var notification *backgroundNotification
 		sleep := nextRun.Sub(time.Now())
 		if sleep > 0 {
 			select {
-			case notification = <-vs.compactionState.notifyChan:
+			case notification = <-store.compactionState.notifyChan:
 			case <-time.After(sleep):
 			}
 		} else {
 			select {
-			case notification = <-vs.compactionState.notifyChan:
+			case notification = <-store.compactionState.notifyChan:
 			default:
 			}
 		}
-		vs.randMutex.Lock()
-		nextRun = time.Now().Add(time.Duration(interval + interval*vs.rand.NormFloat64()*0.1))
-		vs.randMutex.Unlock()
+		store.randMutex.Lock()
+		nextRun = time.Now().Add(time.Duration(interval + interval*store.rand.NormFloat64()*0.1))
+		store.randMutex.Unlock()
 		if notification != nil {
 			if notification.enable {
 				enabled = true
@@ -101,17 +101,17 @@ func (vs *DefaultGroupStore) compactionLauncher() {
 				continue
 			}
 			if notification.disable {
-				atomic.StoreUint32(&vs.compactionState.abort, 1)
+				atomic.StoreUint32(&store.compactionState.abort, 1)
 				enabled = false
 				notification.doneChan <- struct{}{}
 				continue
 			}
-			atomic.StoreUint32(&vs.compactionState.abort, 0)
-			vs.compactionPass()
+			atomic.StoreUint32(&store.compactionState.abort, 0)
+			store.compactionPass()
 			notification.doneChan <- struct{}{}
 		} else if enabled {
-			atomic.StoreUint32(&vs.compactionState.abort, 0)
-			vs.compactionPass()
+			atomic.StoreUint32(&store.compactionState.abort, 0)
+			store.compactionPass()
 		}
 	}
 }
@@ -121,35 +121,35 @@ type groupCompactionJob struct {
 	candidateBlockID uint32
 }
 
-func (vs *DefaultGroupStore) compactionPass() {
-	if vs.logDebug != nil {
+func (store *DefaultGroupStore) compactionPass() {
+	if store.logDebug != nil {
 		begin := time.Now()
 		defer func() {
-			vs.logDebug("compaction pass took %s\n", time.Now().Sub(begin))
+			store.logDebug("compaction pass took %s\n", time.Now().Sub(begin))
 		}()
 	}
-	fp, err := os.Open(vs.pathtoc)
+	fp, err := os.Open(store.pathtoc)
 	if err != nil {
-		vs.logError("%s\n", err)
+		store.logError("%s\n", err)
 		return
 	}
 	names, err := fp.Readdirnames(-1)
 	fp.Close()
 	if err != nil {
-		vs.logError("%s\n", err)
+		store.logError("%s\n", err)
 		return
 	}
 	sort.Strings(names)
 	jobChan := make(chan *groupCompactionJob, len(names))
 	wg := &sync.WaitGroup{}
-	for i := 0; i < vs.compactionState.workerCount; i++ {
+	for i := 0; i < store.compactionState.workerCount; i++ {
 		wg.Add(1)
-		go vs.compactionWorker(jobChan, wg)
+		go store.compactionWorker(jobChan, wg)
 	}
 	for _, name := range names {
-		namets, valid := vs.compactionCandidate(path.Join(vs.pathtoc, name))
+		namets, valid := store.compactionCandidate(path.Join(store.pathtoc, name))
 		if valid {
-			jobChan <- &groupCompactionJob{path.Join(vs.pathtoc, name), vs.locBlockIDFromTimestampnano(namets)}
+			jobChan <- &groupCompactionJob{path.Join(store.pathtoc, name), store.locBlockIDFromTimestampnano(namets)}
 		}
 	}
 	close(jobChan)
@@ -159,7 +159,7 @@ func (vs *DefaultGroupStore) compactionPass() {
 // compactionCandidate verifies that the given toc is a valid candidate for
 // compaction and also returns the extracted namets.
 // TODO: This doesn't need to be its own func anymore
-func (vs *DefaultGroupStore) compactionCandidate(name string) (int64, bool) {
+func (store *DefaultGroupStore) compactionCandidate(name string) (int64, bool) {
 	if !strings.HasSuffix(name, ".grouptoc") {
 		return 0, false
 	}
@@ -167,97 +167,97 @@ func (vs *DefaultGroupStore) compactionCandidate(name string) (int64, bool) {
 	_, n := path.Split(name)
 	namets, err := strconv.ParseInt(n[:len(n)-len(".grouptoc")], 10, 64)
 	if err != nil {
-		vs.logError("bad timestamp in name: %#v\n", name)
+		store.logError("bad timestamp in name: %#v\n", name)
 		return 0, false
 	}
 	if namets == 0 {
-		vs.logError("bad timestamp in name: %#v\n", name)
+		store.logError("bad timestamp in name: %#v\n", name)
 		return namets, false
 	}
-	if namets == int64(atomic.LoadUint64(&vs.activeTOCA)) || namets == int64(atomic.LoadUint64(&vs.activeTOCB)) {
+	if namets == int64(atomic.LoadUint64(&store.activeTOCA)) || namets == int64(atomic.LoadUint64(&store.activeTOCB)) {
 		return namets, false
 	}
-	if namets >= time.Now().UnixNano()-vs.compactionState.ageThreshold {
+	if namets >= time.Now().UnixNano()-store.compactionState.ageThreshold {
 		return namets, false
 	}
 	return namets, true
 }
 
-func (vs *DefaultGroupStore) compactionWorker(jobChan chan *groupCompactionJob, wg *sync.WaitGroup) {
+func (store *DefaultGroupStore) compactionWorker(jobChan chan *groupCompactionJob, wg *sync.WaitGroup) {
 	for c := range jobChan {
 		fstat, err := os.Stat(c.name)
 		if err != nil {
-			vs.logError("Unable to stat %s because: %v\n", c.name, err)
+			store.logError("Unable to stat %s because: %v\n", c.name, err)
 			continue
 		}
 		total := int(fstat.Size()) / 34
 		// TODO: This 100 should be in the Config.
 		if total < 100 {
-			atomic.AddInt32(&vs.smallFileCompactions, 1)
-			result, err := vs.compactFile(c.name, c.candidateBlockID)
+			atomic.AddInt32(&store.smallFileCompactions, 1)
+			result, err := store.compactFile(c.name, c.candidateBlockID)
 			if err != nil {
-				vs.logCritical("%s\n", err)
+				store.logCritical("%s\n", err)
 				continue
 			}
 			if (result.rewrote + result.stale) == result.count {
 				err = os.Remove(c.name)
 				if err != nil {
-					vs.logCritical("Unable to remove %s %s\n", c.name, err)
+					store.logCritical("Unable to remove %s %s\n", c.name, err)
 					continue
 				}
 				err = os.Remove(c.name[:len(c.name)-len("toc")])
 				if err != nil {
-					vs.logCritical("Unable to remove %s %s\n", c.name[:len(c.name)-len("toc")], err)
+					store.logCritical("Unable to remove %s %s\n", c.name[:len(c.name)-len("toc")], err)
 					continue
 				}
-				err = vs.closeLocBlock(c.candidateBlockID)
+				err = store.closeLocBlock(c.candidateBlockID)
 				if err != nil {
-					vs.logCritical("error closing in-memory block for %s: %s\n", c.name, err)
+					store.logCritical("error closing in-memory block for %s: %s\n", c.name, err)
 				}
-				if vs.logDebug != nil {
-					vs.logDebug("Compacted %s (total %d, rewrote %d, stale %d)\n", c.name, result.count, result.rewrote, result.stale)
+				if store.logDebug != nil {
+					store.logDebug("Compacted %s (total %d, rewrote %d, stale %d)\n", c.name, result.count, result.rewrote, result.stale)
 				}
 			}
 		} else {
 			rand.Seed(time.Now().UnixNano())
 			skipOffset := rand.Intn(int(float64(total) * 0.01)) //randomly skip up to the first 1% of entries
 			skipTotal := total - skipOffset
-			staleTarget := int(float64(skipTotal) * vs.compactionState.threshold)
+			staleTarget := int(float64(skipTotal) * store.compactionState.threshold)
 			skip := skipTotal/staleTarget - 1
-			count, stale, err := vs.sampleTOC(c.name, c.candidateBlockID, skipOffset, skip)
+			count, stale, err := store.sampleTOC(c.name, c.candidateBlockID, skipOffset, skip)
 			if err != nil {
 				continue
 			}
-			if vs.logDebug != nil {
-				vs.logDebug("%s sample result: %d %d %d\n", c.name, count, stale, staleTarget)
+			if store.logDebug != nil {
+				store.logDebug("%s sample result: %d %d %d\n", c.name, count, stale, staleTarget)
 			}
 			if stale >= staleTarget {
-				atomic.AddInt32(&vs.compactions, 1)
-				if vs.logDebug != nil {
-					vs.logDebug("Triggering compaction for %s with %d entries.\n", c.name, count)
+				atomic.AddInt32(&store.compactions, 1)
+				if store.logDebug != nil {
+					store.logDebug("Triggering compaction for %s with %d entries.\n", c.name, count)
 				}
-				result, err := vs.compactFile(c.name, c.candidateBlockID)
+				result, err := store.compactFile(c.name, c.candidateBlockID)
 				if err != nil {
-					vs.logCritical("%s\n", err)
+					store.logCritical("%s\n", err)
 					continue
 				}
 				if (result.rewrote + result.stale) == result.count {
 					err = os.Remove(c.name)
 					if err != nil {
-						vs.logCritical("Unable to remove %s %s\n", c.name, err)
+						store.logCritical("Unable to remove %s %s\n", c.name, err)
 						continue
 					}
 					err = os.Remove(c.name[:len(c.name)-len("toc")])
 					if err != nil {
-						vs.logCritical("Unable to remove %s %s\n", c.name[:len(c.name)-len("toc")], err)
+						store.logCritical("Unable to remove %s %s\n", c.name[:len(c.name)-len("toc")], err)
 						continue
 					}
-					err = vs.closeLocBlock(c.candidateBlockID)
+					err = store.closeLocBlock(c.candidateBlockID)
 					if err != nil {
-						vs.logCritical("error closing in-memory block for %s: %s\n", c.name, err)
+						store.logCritical("error closing in-memory block for %s: %s\n", c.name, err)
 					}
-					if vs.logDebug != nil {
-						vs.logDebug("Compacted %s: (total %d, rewrote %d, stale %d)\n", c.name, result.count, result.rewrote, result.stale)
+					if store.logDebug != nil {
+						store.logDebug("Compacted %s: (total %d, rewrote %d, stale %d)\n", c.name, result.count, result.rewrote, result.stale)
 					}
 				}
 			}
@@ -266,14 +266,14 @@ func (vs *DefaultGroupStore) compactionWorker(jobChan chan *groupCompactionJob, 
 	wg.Done()
 }
 
-func (vs *DefaultGroupStore) sampleTOC(name string, candidateBlockID uint32, skipOffset, skipCount int) (int, int, error) {
+func (store *DefaultGroupStore) sampleTOC(name string, candidateBlockID uint32, skipOffset, skipCount int) (int, int, error) {
 	count := 0
 	stale := 0
-	fromDiskBuf := make([]byte, vs.checksumInterval+4)
+	fromDiskBuf := make([]byte, store.checksumInterval+4)
 	fromDiskOverflow := make([]byte, 0, _GROUP_FILE_ENTRY_SIZE)
 	fp, err := os.Open(name)
 	if err != nil {
-		vs.logError("error opening %s: %s\n", name, err)
+		store.logError("error opening %s: %s\n", name, err)
 		return 0, 0, err
 	}
 	checksumFailures := 0
@@ -285,7 +285,7 @@ func (vs *DefaultGroupStore) sampleTOC(name string, candidateBlockID uint32, ski
 		n, err := io.ReadFull(fp, fromDiskBuf)
 		if n < 4 {
 			if err != io.EOF && err != io.ErrUnexpectedEOF {
-				vs.logError("error reading %s: %s\n", name, err)
+				store.logError("error reading %s: %s\n", name, err)
 			}
 			break
 		}
@@ -296,23 +296,23 @@ func (vs *DefaultGroupStore) sampleTOC(name string, candidateBlockID uint32, ski
 			j := 0
 			if first {
 				if !bytes.Equal(fromDiskBuf[:_GROUP_FILE_HEADER_SIZE-4], []byte("GROUPSTORETOC v0            ")) {
-					vs.logError("bad header: %s\n", name)
+					store.logError("bad header: %s\n", name)
 					break
 				}
-				if binary.BigEndian.Uint32(fromDiskBuf[_GROUP_FILE_HEADER_SIZE-4:]) != vs.checksumInterval {
-					vs.logError("bad header checksum interval: %s\n", name)
+				if binary.BigEndian.Uint32(fromDiskBuf[_GROUP_FILE_HEADER_SIZE-4:]) != store.checksumInterval {
+					store.logError("bad header checksum interval: %s\n", name)
 					break
 				}
 				j += _GROUP_FILE_HEADER_SIZE
 				first = false
 			}
-			if n < int(vs.checksumInterval) {
+			if n < int(store.checksumInterval) {
 				if binary.BigEndian.Uint32(fromDiskBuf[n-_GROUP_FILE_TRAILER_SIZE:]) != 0 {
-					vs.logError("bad terminator size marker: %s\n", name)
+					store.logError("bad terminator size marker: %s\n", name)
 					break
 				}
 				if !bytes.Equal(fromDiskBuf[n-4:n], []byte("TERM")) {
-					vs.logError("bad terminator: %s\n", name)
+					store.logError("bad terminator: %s\n", name)
 					break
 				}
 				n -= _GROUP_FILE_TRAILER_SIZE
@@ -331,7 +331,7 @@ func (vs *DefaultGroupStore) sampleTOC(name string, candidateBlockID uint32, ski
 				fromDiskOverflow = fromDiskOverflow[:0]
 				count++
 				if skipCounter == skipCount {
-					tsm, blockid, _, _ := vs.lookup(keyA, keyB, nameKeyA, nameKeyB)
+					tsm, blockid, _, _ := store.lookup(keyA, keyB, nameKeyA, nameKeyB)
 					if tsm>>_TSB_UTIL_BITS != timestampbits>>_TSB_UTIL_BITS && blockid != candidateBlockID || tsm&_TSB_DELETION != 0 {
 						stale++
 					}
@@ -349,7 +349,7 @@ func (vs *DefaultGroupStore) sampleTOC(name string, candidateBlockID uint32, ski
 				nameKeyB := binary.BigEndian.Uint64(fromDiskBuf[j+24:])
 				timestampbits := binary.BigEndian.Uint64(fromDiskBuf[j+32:])
 
-				tsm, blockid, _, _ := vs.lookup(keyA, keyB, nameKeyA, nameKeyB)
+				tsm, blockid, _, _ := store.lookup(keyA, keyB, nameKeyA, nameKeyB)
 				count++
 				if skipCounter == skipCount {
 					if tsm>>_TSB_UTIL_BITS != timestampbits>>_TSB_UTIL_BITS && blockid != candidateBlockID || tsm&_TSB_DELETION != 0 {
@@ -366,16 +366,16 @@ func (vs *DefaultGroupStore) sampleTOC(name string, candidateBlockID uint32, ski
 			}
 		}
 		if err != nil && err != io.EOF && err != io.ErrUnexpectedEOF {
-			vs.logError("error reading %s: %s\n", name, err)
+			store.logError("error reading %s: %s\n", name, err)
 			break
 		}
 	}
 	fp.Close()
 	if !terminated {
-		vs.logError("early end of file: %s\n", name)
+		store.logError("early end of file: %s\n", name)
 	}
 	if checksumFailures > 0 {
-		vs.logWarning("%d checksum failures for %s\n", checksumFailures, name)
+		store.logWarning("%d checksum failures for %s\n", checksumFailures, name)
 	}
 	return count, stale, nil
 
@@ -388,9 +388,9 @@ type groupCompactionResult struct {
 	stale            int
 }
 
-func (vs *DefaultGroupStore) compactFile(name string, candidateBlockID uint32) (groupCompactionResult, error) {
+func (store *DefaultGroupStore) compactFile(name string, candidateBlockID uint32) (groupCompactionResult, error) {
 	var cr groupCompactionResult
-	fromDiskBuf := make([]byte, vs.checksumInterval+4)
+	fromDiskBuf := make([]byte, store.checksumInterval+4)
 	fromDiskOverflow := make([]byte, 0, _GROUP_FILE_ENTRY_SIZE)
 	fp, err := os.Open(name)
 	if err != nil {
@@ -418,14 +418,14 @@ func (vs *DefaultGroupStore) compactFile(name string, candidateBlockID uint32) (
 					fp.Close()
 					return cr, fmt.Errorf("bad header %s: %s", name, err)
 				}
-				if binary.BigEndian.Uint32(fromDiskBuf[_GROUP_FILE_HEADER_SIZE-4:]) != vs.checksumInterval {
+				if binary.BigEndian.Uint32(fromDiskBuf[_GROUP_FILE_HEADER_SIZE-4:]) != store.checksumInterval {
 					fp.Close()
 					return cr, fmt.Errorf("bad header checksum interval %s: %s", name, err)
 				}
 				j += _GROUP_FILE_HEADER_SIZE
 				first = false
 			}
-			if n < int(vs.checksumInterval) {
+			if n < int(store.checksumInterval) {
 				if binary.BigEndian.Uint32(fromDiskBuf[n-_GROUP_FILE_TRAILER_SIZE:]) != 0 {
 					fp.Close()
 					return cr, fmt.Errorf("bad terminator size %s: %s", name, err)
@@ -448,18 +448,18 @@ func (vs *DefaultGroupStore) compactFile(name string, candidateBlockID uint32) (
 				timestampbits := binary.BigEndian.Uint64(fromDiskOverflow[32:])
 
 				fromDiskOverflow = fromDiskOverflow[:0]
-				tsm, blockid, _, _ := vs.lookup(keyA, keyB, nameKeyA, nameKeyB)
+				tsm, blockid, _, _ := store.lookup(keyA, keyB, nameKeyA, nameKeyB)
 				if tsm>>_TSB_UTIL_BITS != timestampbits>>_TSB_UTIL_BITS && blockid != candidateBlockID || tsm&_TSB_DELETION != 0 {
 					cr.count++
 					cr.stale++
 				} else {
 					var value []byte
-					_, value, err := vs.read(keyA, keyB, nameKeyA, nameKeyB, value)
+					_, value, err := store.read(keyA, keyB, nameKeyA, nameKeyB, value)
 					if err != nil {
 						fp.Close()
 						return cr, fmt.Errorf("error on read for compaction rewrite: %s", err)
 					}
-					_, err = vs.write(keyA, keyB, nameKeyA, nameKeyB, timestampbits|_TSB_COMPACTION_REWRITE, value, true)
+					_, err = store.write(keyA, keyB, nameKeyA, nameKeyB, timestampbits|_TSB_COMPACTION_REWRITE, value, true)
 					if err != nil {
 						fp.Close()
 						return cr, fmt.Errorf("error on write for compaction rewrite: %s", err)
@@ -476,18 +476,18 @@ func (vs *DefaultGroupStore) compactFile(name string, candidateBlockID uint32) (
 				nameKeyB := binary.BigEndian.Uint64(fromDiskBuf[j+24:])
 				timestampbits := binary.BigEndian.Uint64(fromDiskBuf[j+32:])
 
-				tsm, blockid, _, _ := vs.lookup(keyA, keyB, nameKeyA, nameKeyB)
+				tsm, blockid, _, _ := store.lookup(keyA, keyB, nameKeyA, nameKeyB)
 				if tsm>>_TSB_UTIL_BITS != timestampbits>>_TSB_UTIL_BITS && blockid != candidateBlockID || tsm&_TSB_DELETION != 0 {
 					cr.count++
 					cr.stale++
 				} else {
 					var value []byte
-					_, value, err := vs.read(keyA, keyB, nameKeyA, nameKeyB, value)
+					_, value, err := store.read(keyA, keyB, nameKeyA, nameKeyB, value)
 					if err != nil {
 						fp.Close()
 						return cr, fmt.Errorf("error on read for compaction rewrite: %s", err)
 					}
-					_, err = vs.write(keyA, keyB, nameKeyA, nameKeyB, timestampbits|_TSB_COMPACTION_REWRITE, value, true)
+					_, err = store.write(keyA, keyB, nameKeyA, nameKeyB, timestampbits|_TSB_COMPACTION_REWRITE, value, true)
 					if err != nil {
 						fp.Close()
 						return cr, fmt.Errorf("error on write for compaction rewrite: %s", err)
@@ -508,12 +508,12 @@ func (vs *DefaultGroupStore) compactFile(name string, candidateBlockID uint32) (
 	}
 	fp.Close()
 	if !terminated {
-		vs.logError("early end of file: %s\n", name)
+		store.logError("early end of file: %s\n", name)
 		return cr, nil
 
 	}
 	if cr.checksumFailures > 0 {
-		vs.logWarning("%d checksum failures for %s\n", cr.checksumFailures, name)
+		store.logWarning("%d checksum failures for %s\n", cr.checksumFailures, name)
 		return cr, nil
 
 	}
