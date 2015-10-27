@@ -106,6 +106,7 @@ package valuestore
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"math"
 	"os"
@@ -150,4 +151,58 @@ type backgroundNotification struct {
 	enable   bool
 	disable  bool
 	doneChan chan struct{}
+}
+
+// Store is an interface for a disk-backed data structure that stores
+// []byte values referenced by keys with options for replication.
+//
+// For documentation on each of these functions, see the DefaultValueStore and
+// DefaultGroupStore.
+type Store interface {
+	EnableAll()
+	DisableAll()
+	DisableAllBackground()
+	EnableTombstoneDiscard()
+	DisableTombstoneDiscard()
+	TombstoneDiscardPass()
+	EnableCompaction()
+	DisableCompaction()
+	CompactionPass()
+	EnableOutPullReplication()
+	DisableOutPullReplication()
+	OutPullReplicationPass()
+	EnableOutPushReplication()
+	DisableOutPushReplication()
+	OutPushReplicationPass()
+	EnableWrites()
+	DisableWrites()
+	Flush()
+	Stats(debug bool) fmt.Stringer
+	ValueCap() uint32
+}
+
+// ValueStore is an interface for a disk-backed data structure that stores
+// []byte values referenced by 128 bit keys with options for replication.
+//
+// For documentation on each of these functions, see the DefaultValueStore.
+type ValueStore interface {
+	Store
+	Lookup(keyA uint64, keyB uint64) (int64, uint32, error)
+	Read(keyA uint64, keyB uint64, value []byte) (int64, []byte, error)
+	Write(keyA uint64, keyB uint64, timestamp int64, value []byte) (int64, error)
+	Delete(keyA uint64, keyB uint64, timestamp int64) (int64, error)
+}
+
+// GroupStore is an interface for a disk-backed data structure that stores
+// []byte values referenced by 128 bit key pairs with options for replication.
+//
+// For documentation on each of these functions, see the DefaultGroupStore.
+type GroupStore interface {
+	Store
+	Lookup(keyA uint64, keyB uint64, nameKeyA uint64, nameKeyB uint64) (int64, uint32, error)
+	LookupGroup(keyA uint64, keyB uint64) []LookupGroupItem
+	Read(keyA uint64, keyB uint64, nameKeyA uint64, nameKeyB uint64, value []byte) (int64, []byte, error)
+	ReadGroup(keyA uint64, keyB uint64) (int, chan *ReadGroupItem)
+	Write(keyA uint64, keyB uint64, nameKeyA uint64, nameKeyB uint64, timestamp int64, value []byte) (int64, error)
+	Delete(keyA uint64, keyB uint64, nameKeyA uint64, nameKeyB uint64, timestamp int64) (int64, error)
 }

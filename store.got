@@ -23,43 +23,6 @@ import (
     "gopkg.in/gholt/brimutil.v1"
 )
 
-// {{.T}}Store is an interface for a disk-backed data structure that stores
-// []byte values referenced by 128 bit keys with options for replication.
-//
-// For documentation on each of these functions, see the Default{{.T}}Store.
-type {{.T}}Store interface {
-    Lookup(keyA uint64, keyB uint64{{if eq .t "group"}}, nameKeyA uint64, nameKeyB uint64{{end}}) (int64, uint32, error)
-    {{if eq .t "group"}}
-    LookupGroup(keyA uint64, keyB uint64) []LookupGroupItem
-    {{end}}
-    Read(keyA uint64, keyB uint64{{if eq .t "group"}}, nameKeyA uint64, nameKeyB uint64{{end}}, value []byte) (int64, []byte, error)
-    {{if eq .t "group"}}
-    ReadGroup(keyA uint64, keyB uint64) (int, chan *ReadGroupItem)
-    {{end}}
-    Write(keyA uint64, keyB uint64{{if eq .t "group"}}, nameKeyA uint64, nameKeyB uint64{{end}}, timestamp int64, value []byte) (int64, error)
-    Delete(keyA uint64, keyB uint64{{if eq .t "group"}}, nameKeyA uint64, nameKeyB uint64{{end}}, timestamp int64) (int64, error)
-    EnableAll()
-    DisableAll()
-    DisableAllBackground()
-    EnableTombstoneDiscard()
-    DisableTombstoneDiscard()
-    TombstoneDiscardPass()
-    EnableCompaction()
-    DisableCompaction()
-    CompactionPass()
-    EnableOutPullReplication()
-    DisableOutPullReplication()
-    OutPullReplicationPass()
-    EnableOutPushReplication()
-    DisableOutPushReplication()
-    OutPushReplicationPass()
-    EnableWrites()
-    DisableWrites()
-    Flush()
-    Stats(debug bool) fmt.Stringer
-    ValueCap() uint32
-}
-
 // Default{{.T}}Store instances are created with New{{.T}}Store.
 type Default{{.T}}Store struct {
     logCritical             LogFunc
@@ -598,8 +561,13 @@ func (store *Default{{.T}}Store) memClearer(freeableMemBlockChan chan *{{.t}}Mem
             var length uint32
             if timestampbits&_TSB_LOCAL_REMOVAL == 0 {
                 blockID = memBlock.fileID
+                {{if eq .t "value"}}
                 offset = memBlock.fileOffset + binary.BigEndian.Uint32(memBlock.toc[memBlockTOCOffset+24:])
                 length = binary.BigEndian.Uint32(memBlock.toc[memBlockTOCOffset+28:])
+                {{else}}
+                offset = memBlock.fileOffset + binary.BigEndian.Uint32(memBlock.toc[memBlockTOCOffset+40:])
+                length = binary.BigEndian.Uint32(memBlock.toc[memBlockTOCOffset+44:])
+                {{end}}
             }
             if store.locmap.Set(keyA, keyB{{if eq .t "group"}}, nameKeyA, nameKeyB{{end}}, timestampbits, blockID, offset, length, true) > timestampbits {
                 continue
@@ -616,11 +584,21 @@ func (store *Default{{.T}}Store) memClearer(freeableMemBlockChan chan *{{.t}}Mem
                 tbOffset = 8
             }
             tb = tb[:tbOffset+_{{.TT}}_FILE_ENTRY_SIZE]
+            {{if eq .t "value"}}
             binary.BigEndian.PutUint64(tb[tbOffset:], keyA)
             binary.BigEndian.PutUint64(tb[tbOffset+8:], keyB)
             binary.BigEndian.PutUint64(tb[tbOffset+16:], timestampbits)
             binary.BigEndian.PutUint32(tb[tbOffset+24:], offset)
             binary.BigEndian.PutUint32(tb[tbOffset+28:], length)
+            {{else}}
+            binary.BigEndian.PutUint64(tb[tbOffset:], keyA)
+            binary.BigEndian.PutUint64(tb[tbOffset+8:], keyB)
+            binary.BigEndian.PutUint64(tb[tbOffset+16:], nameKeyA)
+            binary.BigEndian.PutUint64(tb[tbOffset+24:], nameKeyB)
+            binary.BigEndian.PutUint64(tb[tbOffset+32:], timestampbits)
+            binary.BigEndian.PutUint32(tb[tbOffset+40:], offset)
+            binary.BigEndian.PutUint32(tb[tbOffset+44:], length)
+            {{end}}
             tbOffset += _{{.TT}}_FILE_ENTRY_SIZE
         }
         memBlock.discardLock.Lock()
@@ -730,7 +708,7 @@ func (store *Default{{.T}}Store) fileWriter() {
                 continue
             }
             if fl != nil {
-                err := fl.close()
+                err := fl.closeWriting()
                 if err != nil {
                     store.logCritical("error closing %s: %s\n", fl.name, err)
                 }
@@ -743,7 +721,7 @@ func (store *Default{{.T}}Store) fileWriter() {
             continue
         }
         if fl != nil && (tocLen+uint64(len(memBlock.toc)) >= uint64(store.fileCap) || valueLen+uint64(len(memBlock.values)) > uint64(store.fileCap)) {
-            err := fl.close()
+            err := fl.closeWriting()
             if err != nil {
                 store.logCritical("error closing %s: %s\n", fl.name, err)
             }

@@ -184,7 +184,10 @@ func (fl *groupFile) write(memBlock *groupMemBlock) {
 	}
 }
 
-func (fl *groupFile) close() error {
+func (fl *groupFile) closeWriting() error {
+	if fl.checksumChan == nil {
+		return nil
+	}
 	var reterr error
 	close(fl.checksumChan)
 	for i := 0; i < cap(fl.checksumChan); i++ {
@@ -227,10 +230,19 @@ func (fl *groupFile) close() error {
 	fl.writeChan = nil
 	fl.doneChan = nil
 	fl.buf = nil
+	return reterr
+}
+
+func (fl *groupFile) close() error {
+	reterr := fl.closeWriting()
 	for i, fp := range fl.readerFPs {
 		// This will let any ongoing reads complete.
 		fl.readerLocks[i].Lock()
-		fp.Close()
+		if err := fp.Close(); err != nil {
+			if reterr == nil {
+				reterr = err
+			}
+		}
 		// This will release any pending reads, which will get errors
 		// immediately. Essentially, there is a race between compaction
 		// accomplishing its goal of rewriting all entries of a file to a new

@@ -23,43 +23,6 @@ import (
 	"gopkg.in/gholt/brimutil.v1"
 )
 
-// GroupStore is an interface for a disk-backed data structure that stores
-// []byte values referenced by 128 bit keys with options for replication.
-//
-// For documentation on each of these functions, see the DefaultGroupStore.
-type GroupStore interface {
-	Lookup(keyA uint64, keyB uint64, nameKeyA uint64, nameKeyB uint64) (int64, uint32, error)
-
-	LookupGroup(keyA uint64, keyB uint64) []LookupGroupItem
-
-	Read(keyA uint64, keyB uint64, nameKeyA uint64, nameKeyB uint64, value []byte) (int64, []byte, error)
-
-	ReadGroup(keyA uint64, keyB uint64) (int, chan *ReadGroupItem)
-
-	Write(keyA uint64, keyB uint64, nameKeyA uint64, nameKeyB uint64, timestamp int64, value []byte) (int64, error)
-	Delete(keyA uint64, keyB uint64, nameKeyA uint64, nameKeyB uint64, timestamp int64) (int64, error)
-	EnableAll()
-	DisableAll()
-	DisableAllBackground()
-	EnableTombstoneDiscard()
-	DisableTombstoneDiscard()
-	TombstoneDiscardPass()
-	EnableCompaction()
-	DisableCompaction()
-	CompactionPass()
-	EnableOutPullReplication()
-	DisableOutPullReplication()
-	OutPullReplicationPass()
-	EnableOutPushReplication()
-	DisableOutPushReplication()
-	OutPushReplicationPass()
-	EnableWrites()
-	DisableWrites()
-	Flush()
-	Stats(debug bool) fmt.Stringer
-	ValueCap() uint32
-}
-
 // DefaultGroupStore instances are created with NewGroupStore.
 type DefaultGroupStore struct {
 	logCritical             LogFunc
@@ -590,8 +553,10 @@ func (store *DefaultGroupStore) memClearer(freeableMemBlockChan chan *groupMemBl
 			var length uint32
 			if timestampbits&_TSB_LOCAL_REMOVAL == 0 {
 				blockID = memBlock.fileID
-				offset = memBlock.fileOffset + binary.BigEndian.Uint32(memBlock.toc[memBlockTOCOffset+24:])
-				length = binary.BigEndian.Uint32(memBlock.toc[memBlockTOCOffset+28:])
+
+				offset = memBlock.fileOffset + binary.BigEndian.Uint32(memBlock.toc[memBlockTOCOffset+40:])
+				length = binary.BigEndian.Uint32(memBlock.toc[memBlockTOCOffset+44:])
+
 			}
 			if store.locmap.Set(keyA, keyB, nameKeyA, nameKeyB, timestampbits, blockID, offset, length, true) > timestampbits {
 				continue
@@ -608,11 +573,15 @@ func (store *DefaultGroupStore) memClearer(freeableMemBlockChan chan *groupMemBl
 				tbOffset = 8
 			}
 			tb = tb[:tbOffset+_GROUP_FILE_ENTRY_SIZE]
+
 			binary.BigEndian.PutUint64(tb[tbOffset:], keyA)
 			binary.BigEndian.PutUint64(tb[tbOffset+8:], keyB)
-			binary.BigEndian.PutUint64(tb[tbOffset+16:], timestampbits)
-			binary.BigEndian.PutUint32(tb[tbOffset+24:], offset)
-			binary.BigEndian.PutUint32(tb[tbOffset+28:], length)
+			binary.BigEndian.PutUint64(tb[tbOffset+16:], nameKeyA)
+			binary.BigEndian.PutUint64(tb[tbOffset+24:], nameKeyB)
+			binary.BigEndian.PutUint64(tb[tbOffset+32:], timestampbits)
+			binary.BigEndian.PutUint32(tb[tbOffset+40:], offset)
+			binary.BigEndian.PutUint32(tb[tbOffset+44:], length)
+
 			tbOffset += _GROUP_FILE_ENTRY_SIZE
 		}
 		memBlock.discardLock.Lock()
@@ -716,7 +685,7 @@ func (store *DefaultGroupStore) fileWriter() {
 				continue
 			}
 			if fl != nil {
-				err := fl.close()
+				err := fl.closeWriting()
 				if err != nil {
 					store.logCritical("error closing %s: %s\n", fl.name, err)
 				}
@@ -729,7 +698,7 @@ func (store *DefaultGroupStore) fileWriter() {
 			continue
 		}
 		if fl != nil && (tocLen+uint64(len(memBlock.toc)) >= uint64(store.fileCap) || valueLen+uint64(len(memBlock.values)) > uint64(store.fileCap)) {
-			err := fl.close()
+			err := fl.closeWriting()
 			if err != nil {
 				store.logCritical("error closing %s: %s\n", fl.name, err)
 			}

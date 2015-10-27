@@ -23,39 +23,6 @@ import (
 	"gopkg.in/gholt/brimutil.v1"
 )
 
-// ValueStore is an interface for a disk-backed data structure that stores
-// []byte values referenced by 128 bit keys with options for replication.
-//
-// For documentation on each of these functions, see the DefaultValueStore.
-type ValueStore interface {
-	Lookup(keyA uint64, keyB uint64) (int64, uint32, error)
-
-	Read(keyA uint64, keyB uint64, value []byte) (int64, []byte, error)
-
-	Write(keyA uint64, keyB uint64, timestamp int64, value []byte) (int64, error)
-	Delete(keyA uint64, keyB uint64, timestamp int64) (int64, error)
-	EnableAll()
-	DisableAll()
-	DisableAllBackground()
-	EnableTombstoneDiscard()
-	DisableTombstoneDiscard()
-	TombstoneDiscardPass()
-	EnableCompaction()
-	DisableCompaction()
-	CompactionPass()
-	EnableOutPullReplication()
-	DisableOutPullReplication()
-	OutPullReplicationPass()
-	EnableOutPushReplication()
-	DisableOutPushReplication()
-	OutPushReplicationPass()
-	EnableWrites()
-	DisableWrites()
-	Flush()
-	Stats(debug bool) fmt.Stringer
-	ValueCap() uint32
-}
-
 // DefaultValueStore instances are created with NewValueStore.
 type DefaultValueStore struct {
 	logCritical             LogFunc
@@ -512,8 +479,10 @@ func (store *DefaultValueStore) memClearer(freeableMemBlockChan chan *valueMemBl
 			var length uint32
 			if timestampbits&_TSB_LOCAL_REMOVAL == 0 {
 				blockID = memBlock.fileID
+
 				offset = memBlock.fileOffset + binary.BigEndian.Uint32(memBlock.toc[memBlockTOCOffset+24:])
 				length = binary.BigEndian.Uint32(memBlock.toc[memBlockTOCOffset+28:])
+
 			}
 			if store.locmap.Set(keyA, keyB, timestampbits, blockID, offset, length, true) > timestampbits {
 				continue
@@ -530,11 +499,13 @@ func (store *DefaultValueStore) memClearer(freeableMemBlockChan chan *valueMemBl
 				tbOffset = 8
 			}
 			tb = tb[:tbOffset+_VALUE_FILE_ENTRY_SIZE]
+
 			binary.BigEndian.PutUint64(tb[tbOffset:], keyA)
 			binary.BigEndian.PutUint64(tb[tbOffset+8:], keyB)
 			binary.BigEndian.PutUint64(tb[tbOffset+16:], timestampbits)
 			binary.BigEndian.PutUint32(tb[tbOffset+24:], offset)
 			binary.BigEndian.PutUint32(tb[tbOffset+28:], length)
+
 			tbOffset += _VALUE_FILE_ENTRY_SIZE
 		}
 		memBlock.discardLock.Lock()
@@ -636,7 +607,7 @@ func (store *DefaultValueStore) fileWriter() {
 				continue
 			}
 			if fl != nil {
-				err := fl.close()
+				err := fl.closeWriting()
 				if err != nil {
 					store.logCritical("error closing %s: %s\n", fl.name, err)
 				}
@@ -649,7 +620,7 @@ func (store *DefaultValueStore) fileWriter() {
 			continue
 		}
 		if fl != nil && (tocLen+uint64(len(memBlock.toc)) >= uint64(store.fileCap) || valueLen+uint64(len(memBlock.values)) > uint64(store.fileCap)) {
-			err := fl.close()
+			err := fl.closeWriting()
 			if err != nil {
 				store.logCritical("error closing %s: %s\n", fl.name, err)
 			}
