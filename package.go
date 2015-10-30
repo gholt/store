@@ -1,4 +1,4 @@
-// Package valuestore provides a disk-backed data structure for use in storing
+// Package store provides a disk-backed data structure for use in storing
 // []byte values referenced by 128 bit keys with options for replication.
 //
 // It can handle billions of keys (as memory allows) and full concurrent access
@@ -60,7 +60,7 @@
 // There is also a modified form of ValueStore called GroupStore that expands
 // the primary key to two 128 bit keys and offers a Lookup methods which
 // retrieves all matching items for the first key.
-package valuestore
+package store
 
 // got is at https://github.com/gholt/got
 //go:generate got store.got valuestore_GEN_.go TT=VALUE T=Value t=value

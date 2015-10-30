@@ -1,8 +1,8 @@
 # ValueStore
 ## Development Repository
 
-Package valuestore provides a disk-backed data structure for use in storing
-[]byte values referenced by 128 bit keys with options for replication.
+Package store provides a disk-backed data structure for use in storing []byte
+values referenced by 128 bit keys with options for replication.
 
 It can handle billions of keys (as memory allows) and full concurrent access
 across many cores. All location information about each key is stored in memory
@@ -63,7 +63,7 @@ There is also a modified form of ValueStore called GroupStore that expands the
 primary key to two 128 bit keys and offers a Lookup methods which retrieves all
 matching items for the first key.
 
-[API Documentation](http://godoc.org/github.com/gholt/valuestore)
+[API Documentation](http://godoc.org/github.com/gholt/store)
 
 This is the latest development area for the package.  
 Eventually a stable version of the package will be established but, for now,

@@ -1,4 +1,4 @@
-package valuestore
+package store
 
 import (
 	"log"
@@ -9,8 +9,8 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/gholt/locmap"
 	"github.com/gholt/ring"
-	"github.com/gholt/valuelocmap"
 )
 
 // Absolute minimum: timestampnano:8 leader plus at least one TOC entry
@@ -77,8 +77,8 @@ type ValueStoreConfig struct {
 	// ValueLocMap allows overriding the default ValueLocMap, an interface
 	// used by ValueStore for tracking the mappings from keys to the locations
 	// of their values. Defaults to
-	// github.com/gholt/valuelocmap.NewValueLocMap().
-	ValueLocMap valuelocmap.ValueLocMap
+	// github.com/gholt/locmap.NewValueLocMap().
+	ValueLocMap locmap.ValueLocMap
 	// MsgRing sets the ring.MsgRing to use for determining the key ranges the
 	// ValueStore is responsible for as well as providing methods to send
 	// messages to other nodes.

@@ -1,9 +1,9 @@
-package valuestore
+package store
 
-import "github.com/gholt/valuelocmap"
+import "github.com/gholt/locmap"
 
 func lowMem{{.T}}StoreConfig() *{{.T}}StoreConfig {
-    locmap := valuelocmap.New{{.T}}LocMap(&valuelocmap.{{.T}}LocMapConfig{
+    locmap := locmap.New{{.T}}LocMap(&locmap.{{.T}}LocMapConfig{
         Roots:      1,
         PageSize:   1,
     })

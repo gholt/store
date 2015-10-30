@@ -1,4 +1,4 @@
-package valuestore
+package store
 
 import (
 	"bytes"
@@ -17,8 +17,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/gholt/locmap"
 	"github.com/gholt/ring"
-	"github.com/gholt/valuelocmap"
 	"github.com/spaolacci/murmur3"
 	"gopkg.in/gholt/brimutil.v1"
 )
@@ -46,7 +46,7 @@ type DefaultGroupStore struct {
 	locBlockIDer            uint64
 	path                    string
 	pathtoc                 string
-	locmap                  valuelocmap.GroupLocMap
+	locmap                  locmap.GroupLocMap
 	workers                 int
 	recoveryBatchSize       int
 	valueCap                uint32
@@ -140,11 +140,11 @@ type groupLocBlock interface {
 // flushed.
 func NewGroupStore(c *GroupStoreConfig) (*DefaultGroupStore, error) {
 	cfg := resolveGroupStoreConfig(c)
-	locmap := cfg.GroupLocMap
-	if locmap == nil {
-		locmap = valuelocmap.NewGroupLocMap(nil)
+	lcmap := cfg.GroupLocMap
+	if lcmap == nil {
+		lcmap = locmap.NewGroupLocMap(nil)
 	}
-	locmap.SetInactiveMask(_TSB_INACTIVE)
+	lcmap.SetInactiveMask(_TSB_INACTIVE)
 	store := &DefaultGroupStore{
 		logCritical:             cfg.LogCritical,
 		logError:                cfg.LogError,
@@ -155,7 +155,7 @@ func NewGroupStore(c *GroupStoreConfig) (*DefaultGroupStore, error) {
 		locBlocks:               make([]groupLocBlock, math.MaxUint16),
 		path:                    cfg.Path,
 		pathtoc:                 cfg.PathTOC,
-		locmap:                  locmap,
+		locmap:                  lcmap,
 		workers:                 cfg.Workers,
 		recoveryBatchSize:       cfg.RecoveryBatchSize,
 		replicationIgnoreRecent: (uint64(cfg.ReplicationIgnoreRecent) * uint64(time.Second) / 1000) << _TSB_UTIL_BITS,

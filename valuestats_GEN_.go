@@ -1,4 +1,4 @@
-package valuestore
+package store
 
 import (
 	"fmt"
@@ -108,7 +108,7 @@ type ValueStoreStats struct {
 	Compactions int32
 	// SmallFileCompactions is the number of disk file sets compacted due to
 	// the entire file size being too small. For example, this may happen when
-	// the valuestore is shutdown and restarted.
+	// the store is shutdown and restarted.
 	SmallFileCompactions int32
 	// Free is the number of bytes free on the device containing the
 	// Config.Path for the DefaultValueStore.

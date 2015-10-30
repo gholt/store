@@ -1,4 +1,4 @@
-package valuestore
+package store
 
 import (
 	"bytes"
@@ -17,8 +17,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/gholt/locmap"
 	"github.com/gholt/ring"
-	"github.com/gholt/valuelocmap"
 	"github.com/spaolacci/murmur3"
 	"gopkg.in/gholt/brimutil.v1"
 )
@@ -46,7 +46,7 @@ type DefaultValueStore struct {
 	locBlockIDer            uint64
 	path                    string
 	pathtoc                 string
-	locmap                  valuelocmap.ValueLocMap
+	locmap                  locmap.ValueLocMap
 	workers                 int
 	recoveryBatchSize       int
 	valueCap                uint32
@@ -137,11 +137,11 @@ type valueLocBlock interface {
 // flushed.
 func NewValueStore(c *ValueStoreConfig) (*DefaultValueStore, error) {
 	cfg := resolveValueStoreConfig(c)
-	locmap := cfg.ValueLocMap
-	if locmap == nil {
-		locmap = valuelocmap.NewValueLocMap(nil)
+	lcmap := cfg.ValueLocMap
+	if lcmap == nil {
+		lcmap = locmap.NewValueLocMap(nil)
 	}
-	locmap.SetInactiveMask(_TSB_INACTIVE)
+	lcmap.SetInactiveMask(_TSB_INACTIVE)
 	store := &DefaultValueStore{
 		logCritical:             cfg.LogCritical,
 		logError:                cfg.LogError,
@@ -152,7 +152,7 @@ func NewValueStore(c *ValueStoreConfig) (*DefaultValueStore, error) {
 		locBlocks:               make([]valueLocBlock, math.MaxUint16),
 		path:                    cfg.Path,
 		pathtoc:                 cfg.PathTOC,
-		locmap:                  locmap,
+		locmap:                  lcmap,
 		workers:                 cfg.Workers,
 		recoveryBatchSize:       cfg.RecoveryBatchSize,
 		replicationIgnoreRecent: (uint64(cfg.ReplicationIgnoreRecent) * uint64(time.Second) / 1000) << _TSB_UTIL_BITS,

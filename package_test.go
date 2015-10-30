@@ -1,4 +1,4 @@
-package valuestore
+package store
 
 import (
 	"io"

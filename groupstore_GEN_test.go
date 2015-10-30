@@ -1,9 +1,9 @@
-package valuestore
+package store
 
-import "github.com/gholt/valuelocmap"
+import "github.com/gholt/locmap"
 
 func lowMemGroupStoreConfig() *GroupStoreConfig {
-	locmap := valuelocmap.NewGroupLocMap(&valuelocmap.GroupLocMapConfig{
+	locmap := locmap.NewGroupLocMap(&locmap.GroupLocMapConfig{
 		Roots:    1,
 		PageSize: 1,
 	})
