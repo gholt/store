@@ -58,8 +58,8 @@
 // continue.
 //
 // There is also a modified form of ValueStore called GroupStore that expands
-// the primary key to two 128 bit keys and offers a Lookup/ReadGroup methods
-// which retrieves all matching items for the first key.
+// the primary key to two 128 bit keys and offers a Lookup methods which
+// retrieves all matching items for the first key.
 package valuestore
 
 // got is at https://github.com/gholt/got
@@ -202,7 +202,6 @@ type GroupStore interface {
 	Lookup(keyA uint64, keyB uint64, nameKeyA uint64, nameKeyB uint64) (int64, uint32, error)
 	LookupGroup(keyA uint64, keyB uint64) []LookupGroupItem
 	Read(keyA uint64, keyB uint64, nameKeyA uint64, nameKeyB uint64, value []byte) (int64, []byte, error)
-	ReadGroup(keyA uint64, keyB uint64) (int, chan *ReadGroupItem)
 	Write(keyA uint64, keyB uint64, nameKeyA uint64, nameKeyB uint64, timestamp int64, value []byte) (int64, error)
 	Delete(keyA uint64, keyB uint64, nameKeyA uint64, nameKeyB uint64, timestamp int64) (int64, error)
 }

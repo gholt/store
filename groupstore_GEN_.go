@@ -75,8 +75,6 @@ type DefaultGroupStore struct {
 	lookupGroupItems             int32
 	reads                        int32
 	readErrors                   int32
-	readGroups                   int32
-	readGroupItems               int32
 	writes                       int32
 	writeErrors                  int32
 	writesOverridden             int32
@@ -335,6 +333,7 @@ type LookupGroupItem struct {
 	NameKeyA       uint64
 	NameKeyB       uint64
 	TimestampMicro uint64
+	Length         uint32
 }
 
 // LookupGroup returns all the nameKeyA, nameKeyB, TimestampMicro items
@@ -351,6 +350,7 @@ func (store *DefaultGroupStore) LookupGroup(keyA uint64, keyB uint64) []LookupGr
 		rv[i].NameKeyA = item.NameKeyA
 		rv[i].NameKeyB = item.NameKeyB
 		rv[i].TimestampMicro = item.Timestamp >> _TSB_UTIL_BITS
+		rv[i].Length = item.Length
 	}
 	return rv
 }
@@ -377,48 +377,6 @@ func (store *DefaultGroupStore) read(keyA uint64, keyB uint64, nameKeyA uint64, 
 		return timestampbits, value, ErrNotFound
 	}
 	return store.locBlock(id).read(keyA, keyB, nameKeyA, nameKeyB, timestampbits, offset, length, value)
-}
-
-type ReadGroupItem struct {
-	Error          error
-	NameKeyA       uint64
-	NameKeyB       uint64
-	TimestampMicro uint64
-	Value          []byte
-}
-
-// ReadGroup returns all the items with keyA, keyB; the returned int indicates
-// a an estimate of the item count and the items are return through the
-// channel. Note that the int is just an estimate; a different number of items
-// may be returned.
-func (store *DefaultGroupStore) ReadGroup(keyA uint64, keyB uint64) (int, chan *ReadGroupItem) {
-	atomic.AddInt32(&store.readGroups, 1)
-	items := store.locmap.GetGroup(keyA, keyB)
-	c := make(chan *ReadGroupItem, store.workers)
-	if len(items) == 0 {
-		close(c)
-		return 0, c
-	}
-	atomic.AddInt32(&store.readGroupItems, int32(len(items)))
-	go func() {
-		for _, item := range items {
-			t, v, err := store.read(keyA, keyB, item.NameKeyA, item.NameKeyB, nil)
-			if err != nil {
-				if err != ErrNotFound {
-					c <- &ReadGroupItem{Error: err}
-					break
-				}
-			}
-			c <- &ReadGroupItem{
-				NameKeyA:       item.NameKeyA,
-				NameKeyB:       item.NameKeyB,
-				TimestampMicro: t,
-				Value:          v,
-			}
-		}
-		close(c)
-	}()
-	return len(items), c
 }
 
 // Write stores timestampmicro, value for keyA, keyB, nameKeyA, nameKeyB

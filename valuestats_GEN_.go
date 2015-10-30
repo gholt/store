@@ -25,10 +25,6 @@ type ValueStoreStats struct {
 	Reads            int32
 	// ReadErrors is the number of errors returned by Read.
 	ReadErrors int32
-	// ReadGroups is the number of calls to ReadGroup.
-	ReadGroups int32
-	// ReadGroupItems is the number of items ReadGroup has encountered.
-	ReadGroupItems int32
 	// Writes is the number of calls to Write.
 	Writes int32
 	// WriteErrors is the number of errors returned by Write.
@@ -197,8 +193,6 @@ func (store *DefaultValueStore) Stats(debug bool) fmt.Stringer {
 		LookupGroupItems:             atomic.LoadInt32(&store.lookupGroupItems),
 		Reads:                        atomic.LoadInt32(&store.reads),
 		ReadErrors:                   atomic.LoadInt32(&store.readErrors),
-		ReadGroups:                   atomic.LoadInt32(&store.readGroups),
-		ReadGroupItems:               atomic.LoadInt32(&store.readGroupItems),
 		Writes:                       atomic.LoadInt32(&store.writes),
 		WriteErrors:                  atomic.LoadInt32(&store.writeErrors),
 		WritesOverridden:             atomic.LoadInt32(&store.writesOverridden),
@@ -242,8 +236,6 @@ func (store *DefaultValueStore) Stats(debug bool) fmt.Stringer {
 	atomic.AddInt32(&store.lookupGroupItems, -stats.LookupGroupItems)
 	atomic.AddInt32(&store.reads, -stats.Reads)
 	atomic.AddInt32(&store.readErrors, -stats.ReadErrors)
-	atomic.AddInt32(&store.readGroups, -stats.ReadGroups)
-	atomic.AddInt32(&store.readGroupItems, -stats.ReadGroupItems)
 	atomic.AddInt32(&store.writes, -stats.Writes)
 	atomic.AddInt32(&store.writeErrors, -stats.WriteErrors)
 	atomic.AddInt32(&store.writesOverridden, -stats.WritesOverridden)
@@ -340,8 +332,6 @@ func (stats *ValueStoreStats) String() string {
 		{"LookupGroupItems", fmt.Sprintf("%d", stats.LookupGroupItems)},
 		{"Reads", fmt.Sprintf("%d", stats.Reads)},
 		{"ReadErrors", fmt.Sprintf("%d", stats.ReadErrors)},
-		{"ReadGroups", fmt.Sprintf("%d", stats.ReadGroups)},
-		{"ReadGroupItems", fmt.Sprintf("%d", stats.ReadGroupItems)},
 		{"Writes", fmt.Sprintf("%d", stats.Writes)},
 		{"WriteErrors", fmt.Sprintf("%d", stats.WriteErrors)},
 		{"WritesOverridden", fmt.Sprintf("%d", stats.WritesOverridden)},
