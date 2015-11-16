@@ -892,6 +892,11 @@ func (store *DefaultGroupStore) recovery() error {
 			n -= 4
 			if murmur3.Sum32(fromDiskBuf[:n]) != binary.BigEndian.Uint32(fromDiskBuf[n:]) {
 				checksumFailures++
+				// TODO: There's an issue here. The entry size is not
+				// guaranteed to align with the checksum interval and we
+				// probably need to throw away x bytes from the next read block
+				// as well to get aligned again. This issue is also in
+				// compaction.
 			} else {
 				j := 0
 				if first {

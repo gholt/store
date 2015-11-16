@@ -292,6 +292,10 @@ func (store *DefaultGroupStore) sampleTOC(name string, candidateBlockID uint32, 
 		n -= 4
 		if murmur3.Sum32(fromDiskBuf[:n]) != binary.BigEndian.Uint32(fromDiskBuf[n:]) {
 			checksumFailures++
+			// TODO: There's an issue here. The entry size is not guaranteed to
+			// align with the checksum interval and we probably need to throw
+			// away x bytes from the next read block as well to get aligned
+			// again. This issue is also in recovery.
 		} else {
 			j := 0
 			if first {
