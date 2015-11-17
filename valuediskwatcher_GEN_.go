@@ -1,6 +1,7 @@
 package store
 
 import (
+	"sync/atomic"
 	"time"
 
 	"github.com/ricochet2200/go-disk-usage/du"
@@ -39,22 +40,28 @@ func (store *DefaultValueStore) diskWatcher() {
 		if store.pathtoc != store.path {
 			utoc = du.NewDiskUsage(store.pathtoc)
 		}
-		store.diskWatcherState.free = u.Free()
-		store.diskWatcherState.used = u.Used()
-		store.diskWatcherState.size = u.Size()
+		free := u.Free()
+		used := u.Used()
+		size := u.Size()
 		usage := u.Usage()
-		store.diskWatcherState.freetoc = utoc.Free()
-		store.diskWatcherState.usedtoc = utoc.Used()
-		store.diskWatcherState.sizetoc = utoc.Size()
+		freetoc := utoc.Free()
+		usedtoc := utoc.Used()
+		sizetoc := utoc.Size()
 		usagetoc := utoc.Usage()
+		atomic.StoreUint64(&store.diskWatcherState.free, free)
+		atomic.StoreUint64(&store.diskWatcherState.used, used)
+		atomic.StoreUint64(&store.diskWatcherState.size, size)
+		atomic.StoreUint64(&store.diskWatcherState.freetoc, freetoc)
+		atomic.StoreUint64(&store.diskWatcherState.usedtoc, usedtoc)
+		atomic.StoreUint64(&store.diskWatcherState.sizetoc, sizetoc)
 		if disabled {
-			if (store.diskWatcherState.freeReenableThreshold == 0 || (store.diskWatcherState.free >= store.diskWatcherState.freeReenableThreshold && store.diskWatcherState.freetoc >= store.diskWatcherState.freeReenableThreshold)) && (store.diskWatcherState.usageReenableThreshold == 0 || (usage <= store.diskWatcherState.usageReenableThreshold && usagetoc <= store.diskWatcherState.usageReenableThreshold)) {
+			if (store.diskWatcherState.freeReenableThreshold == 0 || (free >= store.diskWatcherState.freeReenableThreshold && freetoc >= store.diskWatcherState.freeReenableThreshold)) && (store.diskWatcherState.usageReenableThreshold == 0 || (usage <= store.diskWatcherState.usageReenableThreshold && usagetoc <= store.diskWatcherState.usageReenableThreshold)) {
 				store.logCritical("passed the free/usage threshold for automatic re-enabling\n")
 				store.enableWrites(false) // false indicates non-user call
 				disabled = false
 			}
 		} else {
-			if (store.diskWatcherState.freeDisableThreshold != 0 && (store.diskWatcherState.free <= store.diskWatcherState.freeDisableThreshold || store.diskWatcherState.freetoc <= store.diskWatcherState.freeDisableThreshold)) || (store.diskWatcherState.usageDisableThreshold != 0 && (usage >= store.diskWatcherState.usageDisableThreshold || usagetoc >= store.diskWatcherState.usageDisableThreshold)) {
+			if (store.diskWatcherState.freeDisableThreshold != 0 && (free <= store.diskWatcherState.freeDisableThreshold || freetoc <= store.diskWatcherState.freeDisableThreshold)) || (store.diskWatcherState.usageDisableThreshold != 0 && (usage >= store.diskWatcherState.usageDisableThreshold || usagetoc >= store.diskWatcherState.usageDisableThreshold)) {
 				store.logCritical("passed the free/usage threshold for automatic disabling\n")
 				store.disableWrites(false) // false indicates non-user call
 				disabled = true
