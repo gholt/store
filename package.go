@@ -101,6 +101,8 @@ package store
 //go:generate got compaction.got groupcompaction_GEN_.go TT=GROUP T=Group t=group
 //go:generate got diskwatcher.got valuediskwatcher_GEN_.go TT=VALUE T=Value t=value
 //go:generate got diskwatcher.got groupdiskwatcher_GEN_.go TT=GROUP T=Group t=group
+//go:generate got flusher.got valueflusher_GEN_.go TT=VALUE T=Value t=value
+//go:generate got flusher.got groupflusher_GEN_.go TT=GROUP T=Group t=group
 //go:generate got stats.got valuestats_GEN_.go TT=VALUE T=Value t=value
 //go:generate got stats.got groupstats_GEN_.go TT=GROUP T=Group t=group
 

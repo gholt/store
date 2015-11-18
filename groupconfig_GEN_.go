@@ -205,27 +205,46 @@ type GroupStoreConfig struct {
 	// is considered for compaction. Defaults to 300 seconds.
 	CompactionAgeThreshold int
 	// FreeDisableThreshold controls when to automatically disable writes; the
-	// number is in bytes, 0 will turn off this check. If the number of free
-	// bytes on either the Path or TOCPath device falls below this threshold,
-	// writes will be automatically disabled.
+	// number is in bytes. If the number of free bytes on either the Path or
+	// TOCPath device falls below this threshold, writes will be automatically
+	// disabled.
+	// 0 will use the default; 1 will disable the check.
+	// Default: 8,589,934,592 (8G)
 	FreeDisableThreshold uint64
 	// FreeReenableThreshold controls when to automatically re-enable writes;
-	// the number is in bytes, 0 will turn off this check. If writes are
-	// automatically disabled and the number of free bytes on each of the Path
-	// or TOCPath devices rises above this threshold, writes will be
-	// automatically re-enabled.
+	// the number is in bytes. If writes are automatically disabled and the
+	// number of free bytes on each of the Path or TOCPath devices rises above
+	// this threshold, writes will be automatically re-enabled. A negative
+	// value will turn off this check.
+	// 0 will use the default; 1 will disable the check.
+	// Default: 17,179,869,184 (16G)
 	FreeReenableThreshold uint64
 	// UsageDisableThreshold controls when to automatically disable writes; the
-	// number is a percentage (1 == 100%), 0 will turn off this check. If the
-	// percentage used on either the Path or TOCPath device grows above this
-	// threshold, writes will be automatically disabled.
+	// number is a percentage (1 == 100%). If the percentage used on either the
+	// Path or TOCPath device grows above this threshold, writes will be
+	// automatically disabled.
+	// 0 will use the default; a negative value will disable the check.
+	// Default: 95%
 	UsageDisableThreshold float32
 	// UsageReenableThreshold controls when to automatically re-enable writes;
-	// the number is a percentage (1 == 100%), 0 will turn off this check. If
-	// writes are automatically disabled and the percentage used on each of the
-	// Path or TOCPath devices falls below this threshold, writes will be
-	// automatically re-enabled.
+	// the number is a percentage (1 == 100%). If writes are automatically
+	// disabled and the percentage used on each of the Path or TOCPath devices
+	// falls below this threshold, writes will be automatically re-enabled.
+	// 0 will use the default; a negative value will disable the check.
+	// Default: 90%
 	UsageReenableThreshold float32
+	// FlusherThreshold sets the number of to-disk modifications controlling
+	// the once-a-minute automatic flusher. If there are less than this
+	// setting's number of modifications for a minute, the store's Flush method
+	// will be called. This is so relatively idle stores won't just leave the
+	// last few modifications sitting only in memory for too long, but without
+	// penalizing active stores that will already be sending recent
+	// modifications to disk as ever more recent modifications occur.
+	// 0 will use the default; a negative value will disable the check.
+	// Default is the number of entries that are guaranteed to fill a memory
+	// page; this depends on the PageSize value and the internal struct size
+	// for the store.
+	FlusherThreshold int32
 }
 
 func resolveGroupStoreConfig(c *GroupStoreConfig) *GroupStoreConfig {
@@ -734,6 +753,57 @@ func resolveGroupStoreConfig(c *GroupStoreConfig) *GroupStoreConfig {
 	}
 	if cfg.CompactionAgeThreshold < 1 {
 		cfg.CompactionAgeThreshold = 1
+	}
+	if env := os.Getenv("GROUPSTORE_FREE_DISABLE_THRESHOLD"); env != "" {
+		if val, err := strconv.ParseUint(env, 10, 64); err == nil {
+			cfg.FreeDisableThreshold = val
+		}
+	}
+	// NOTE: If the value is 1, that will disable the check
+	if cfg.FreeDisableThreshold == 0 {
+		cfg.FreeDisableThreshold = 8589934592
+	}
+	if env := os.Getenv("GROUPSTORE_FREE_REENABLE_THRESHOLD"); env != "" {
+		if val, err := strconv.ParseUint(env, 10, 64); err == nil {
+			cfg.FreeReenableThreshold = val
+		}
+	}
+	// NOTE: If the value is 1, that will disable the check
+	if cfg.FreeReenableThreshold == 0 {
+		cfg.FreeReenableThreshold = 17179869184
+	}
+	if env := os.Getenv("GROUPSTORE_USAGE_DISABLE_THRESHOLD"); env != "" {
+		if val, err := strconv.ParseFloat(env, 32); err == nil {
+			cfg.UsageDisableThreshold = float32(val)
+		}
+	}
+	if cfg.UsageDisableThreshold == 0 {
+		cfg.UsageDisableThreshold = 95
+	}
+	if cfg.UsageDisableThreshold < 0 {
+		cfg.UsageDisableThreshold = 0
+	}
+	if env := os.Getenv("GROUPSTORE_USAGE_REENABLE_THRESHOLD"); env != "" {
+		if val, err := strconv.ParseFloat(env, 32); err == nil {
+			cfg.UsageReenableThreshold = float32(val)
+		}
+	}
+	if cfg.UsageReenableThreshold == 0 {
+		cfg.UsageReenableThreshold = 90
+	}
+	if cfg.UsageReenableThreshold < 0 {
+		cfg.UsageReenableThreshold = 0
+	}
+	if env := os.Getenv("GROUPSTORE_FLUSHER_THRESHOLD"); env != "" {
+		if val, err := strconv.Atoi(env); err == nil {
+			cfg.FlusherThreshold = int32(val)
+		}
+	}
+	if cfg.FlusherThreshold == 0 {
+		cfg.FlusherThreshold = int32(cfg.PageSize) / _GROUP_FILE_ENTRY_SIZE
+	}
+	if cfg.FlusherThreshold < 0 {
+		cfg.FlusherThreshold = 0
 	}
 	return cfg
 }

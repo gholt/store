@@ -66,6 +66,7 @@ type DefaultValueStore struct {
 	bulkSetAckState         valueBulkSetAckState
 	disableEnableWritesLock sync.Mutex
 	userDisabled            bool
+	flusherState            valueFlusherState
 	diskWatcherState        valueDiskWatcherState
 
 	statsLock                    sync.Mutex
@@ -105,6 +106,9 @@ type DefaultValueStore struct {
 	expiredDeletions             int32
 	compactions                  int32
 	smallFileCompactions         int32
+
+	// Used by the flusher only
+	modifications int32
 }
 
 type valueWriteReq struct {
@@ -219,6 +223,7 @@ func NewValueStore(c *ValueStoreConfig) (*DefaultValueStore, error) {
 	store.pushReplicationConfig(cfg)
 	store.bulkSetConfig(cfg)
 	store.bulkSetAckConfig(cfg)
+	store.flusherConfig(cfg)
 	store.diskWatcherConfig(cfg)
 	store.tombstoneDiscardLaunch()
 	store.compactionLaunch()
@@ -226,6 +231,7 @@ func NewValueStore(c *ValueStoreConfig) (*DefaultValueStore, error) {
 	store.pushReplicationLaunch()
 	store.bulkSetLaunch()
 	store.bulkSetAckLaunch()
+	store.flusherLaunch()
 	store.diskWatcherLaunch()
 	return store, nil
 }
@@ -368,8 +374,7 @@ func (store *DefaultValueStore) Write(keyA uint64, keyB uint64, timestampmicro i
 	timestampbits, err := store.write(keyA, keyB, uint64(timestampmicro)<<_TSB_UTIL_BITS, value, false)
 	if err != nil {
 		atomic.AddInt32(&store.writeErrors, 1)
-	}
-	if timestampmicro <= int64(timestampbits>>_TSB_UTIL_BITS) {
+	} else if timestampmicro <= int64(timestampbits>>_TSB_UTIL_BITS) {
 		atomic.AddInt32(&store.writesOverridden, 1)
 	}
 	return int64(timestampbits >> _TSB_UTIL_BITS), err
@@ -389,6 +394,10 @@ func (store *DefaultValueStore) write(keyA uint64, keyB uint64, timestampbits ui
 	ptimestampbits := writeReq.timestampbits
 	writeReq.value = nil
 	store.freeWriteReqChans[i] <- writeReq
+	// This is for the flusher
+	if err == nil && ptimestampbits < timestampbits {
+		atomic.AddInt32(&store.modifications, 1)
+	}
 	return ptimestampbits, err
 }
 
@@ -410,8 +419,7 @@ func (store *DefaultValueStore) Delete(keyA uint64, keyB uint64, timestampmicro 
 	ptimestampbits, err := store.write(keyA, keyB, (uint64(timestampmicro)<<_TSB_UTIL_BITS)|_TSB_DELETION, nil, true)
 	if err != nil {
 		atomic.AddInt32(&store.deleteErrors, 1)
-	}
-	if timestampmicro <= int64(ptimestampbits>>_TSB_UTIL_BITS) {
+	} else if timestampmicro <= int64(ptimestampbits>>_TSB_UTIL_BITS) {
 		atomic.AddInt32(&store.deletesOverridden, 1)
 	}
 	return int64(ptimestampbits >> _TSB_UTIL_BITS), err
