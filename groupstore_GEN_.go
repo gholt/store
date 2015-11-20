@@ -651,7 +651,7 @@ func (store *DefaultGroupStore) memWriter(pendingWriteReqChan chan *groupWriteRe
 }
 
 func (store *DefaultGroupStore) fileWriter() {
-	var fl *groupFile
+	var fl *groupStoreFile
 	memWritersFlushLeft := len(store.pendingWriteReqChans)
 	var tocLen uint64
 	var valueLen uint64

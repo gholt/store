@@ -23,33 +23,33 @@ const _GROUP_FILE_ENTRY_SIZE = 48
 // 0:4, offsetWhereTrailerOccurs:4, "TERM":4
 const _GROUP_FILE_TRAILER_SIZE = 16
 
-type groupFile struct {
+type groupStoreFile struct {
 	store                     *DefaultGroupStore
 	name                      string
 	id                        uint32
 	bts                       int64
 	writerFP                  io.WriteCloser
 	atOffset                  uint32
-	freeChan                  chan *groupFileWriteBuf
-	checksumChan              chan *groupFileWriteBuf
-	writeChan                 chan *groupFileWriteBuf
+	freeChan                  chan *groupStoreFileWriteBuf
+	checksumChan              chan *groupStoreFileWriteBuf
+	writeChan                 chan *groupStoreFileWriteBuf
 	doneChan                  chan struct{}
-	buf                       *groupFileWriteBuf
+	buf                       *groupStoreFileWriteBuf
 	freeableMemBlockChanIndex int
 	readerFPs                 []brimutil.ChecksummedReader
 	readerLocks               []sync.Mutex
 	readerLens                [][]byte
 }
 
-type groupFileWriteBuf struct {
+type groupStoreFileWriteBuf struct {
 	seq       int
 	buf       []byte
 	offset    uint32
 	memBlocks []*groupMemBlock
 }
 
-func newGroupFile(store *DefaultGroupStore, bts int64, openReadSeeker func(name string) (io.ReadSeeker, error)) (*groupFile, error) {
-	fl := &groupFile{store: store, bts: bts}
+func newGroupFile(store *DefaultGroupStore, bts int64, openReadSeeker func(name string) (io.ReadSeeker, error)) (*groupStoreFile, error) {
+	fl := &groupStoreFile{store: store, bts: bts}
 	fl.name = path.Join(store.path, fmt.Sprintf("%019d.group", fl.bts))
 	fl.readerFPs = make([]brimutil.ChecksummedReader, store.fileReaders)
 	fl.readerLocks = make([]sync.Mutex, len(fl.readerFPs))
@@ -71,20 +71,20 @@ func newGroupFile(store *DefaultGroupStore, bts int64, openReadSeeker func(name 
 	return fl, nil
 }
 
-func createGroupFile(store *DefaultGroupStore, createWriteCloser func(name string) (io.WriteCloser, error), openReadSeeker func(name string) (io.ReadSeeker, error)) (*groupFile, error) {
-	fl := &groupFile{store: store, bts: time.Now().UnixNano()}
+func createGroupFile(store *DefaultGroupStore, createWriteCloser func(name string) (io.WriteCloser, error), openReadSeeker func(name string) (io.ReadSeeker, error)) (*groupStoreFile, error) {
+	fl := &groupStoreFile{store: store, bts: time.Now().UnixNano()}
 	fl.name = path.Join(store.path, fmt.Sprintf("%019d.group", fl.bts))
 	fp, err := createWriteCloser(fl.name)
 	if err != nil {
 		return nil, err
 	}
 	fl.writerFP = fp
-	fl.freeChan = make(chan *groupFileWriteBuf, store.workers)
+	fl.freeChan = make(chan *groupStoreFileWriteBuf, store.workers)
 	for i := 0; i < store.workers; i++ {
-		fl.freeChan <- &groupFileWriteBuf{buf: make([]byte, store.checksumInterval+4)}
+		fl.freeChan <- &groupStoreFileWriteBuf{buf: make([]byte, store.checksumInterval+4)}
 	}
-	fl.checksumChan = make(chan *groupFileWriteBuf, store.workers)
-	fl.writeChan = make(chan *groupFileWriteBuf, store.workers)
+	fl.checksumChan = make(chan *groupStoreFileWriteBuf, store.workers)
+	fl.writeChan = make(chan *groupStoreFileWriteBuf, store.workers)
 	fl.doneChan = make(chan struct{})
 	fl.buf = <-fl.freeChan
 	head := []byte("GROUPSTORE v0                   ")
@@ -117,11 +117,11 @@ func createGroupFile(store *DefaultGroupStore, createWriteCloser func(name strin
 	return fl, nil
 }
 
-func (fl *groupFile) timestampnano() int64 {
+func (fl *groupStoreFile) timestampnano() int64 {
 	return fl.bts
 }
 
-func (fl *groupFile) read(keyA uint64, keyB uint64, nameKeyA uint64, nameKeyB uint64, timestampbits uint64, offset uint32, length uint32, value []byte) (uint64, []byte, error) {
+func (fl *groupStoreFile) read(keyA uint64, keyB uint64, nameKeyA uint64, nameKeyB uint64, timestampbits uint64, offset uint32, length uint32, value []byte) (uint64, []byte, error) {
 	// TODO: Add calling Verify occasionally on the readerFPs, maybe randomly
 	// inside here or maybe randomly requested by the caller.
 	if timestampbits&_TSB_DELETION != 0 {
@@ -146,7 +146,7 @@ func (fl *groupFile) read(keyA uint64, keyB uint64, nameKeyA uint64, nameKeyB ui
 	return timestampbits, value, nil
 }
 
-func (fl *groupFile) write(memBlock *groupMemBlock) {
+func (fl *groupStoreFile) write(memBlock *groupMemBlock) {
 	if memBlock == nil {
 		return
 	}
@@ -184,7 +184,7 @@ func (fl *groupFile) write(memBlock *groupMemBlock) {
 	}
 }
 
-func (fl *groupFile) closeWriting() error {
+func (fl *groupStoreFile) closeWriting() error {
 	if fl.checksumChan == nil {
 		return nil
 	}
@@ -233,7 +233,7 @@ func (fl *groupFile) closeWriting() error {
 	return reterr
 }
 
-func (fl *groupFile) close() error {
+func (fl *groupStoreFile) close() error {
 	reterr := fl.closeWriting()
 	for i, fp := range fl.readerFPs {
 		// This will let any ongoing reads complete.
@@ -254,7 +254,7 @@ func (fl *groupFile) close() error {
 	return reterr
 }
 
-func (fl *groupFile) checksummer() {
+func (fl *groupStoreFile) checksummer() {
 	for {
 		buf := <-fl.checksumChan
 		if buf == nil {
@@ -266,7 +266,7 @@ func (fl *groupFile) checksummer() {
 	fl.doneChan <- struct{}{}
 }
 
-func (fl *groupFile) writer() {
+func (fl *groupStoreFile) writer() {
 	var seq int
 	lastWasNil := false
 	for {

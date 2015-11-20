@@ -672,7 +672,7 @@ func (store *Default{{.T}}Store) memWriter(pendingWriteReqChan chan *{{.t}}Write
 }
 
 func (store *Default{{.T}}Store) fileWriter() {
-    var fl *{{.t}}File
+    var fl *{{.t}}StoreFile
     memWritersFlushLeft := len(store.pendingWriteReqChans)
     var tocLen uint64
     var valueLen uint64

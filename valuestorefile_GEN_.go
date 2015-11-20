@@ -23,33 +23,33 @@ const _VALUE_FILE_ENTRY_SIZE = 32
 // 0:4, offsetWhereTrailerOccurs:4, "TERM":4
 const _VALUE_FILE_TRAILER_SIZE = 16
 
-type valueFile struct {
+type valueStoreFile struct {
 	store                     *DefaultValueStore
 	name                      string
 	id                        uint32
 	bts                       int64
 	writerFP                  io.WriteCloser
 	atOffset                  uint32
-	freeChan                  chan *valueFileWriteBuf
-	checksumChan              chan *valueFileWriteBuf
-	writeChan                 chan *valueFileWriteBuf
+	freeChan                  chan *valueStoreFileWriteBuf
+	checksumChan              chan *valueStoreFileWriteBuf
+	writeChan                 chan *valueStoreFileWriteBuf
 	doneChan                  chan struct{}
-	buf                       *valueFileWriteBuf
+	buf                       *valueStoreFileWriteBuf
 	freeableMemBlockChanIndex int
 	readerFPs                 []brimutil.ChecksummedReader
 	readerLocks               []sync.Mutex
 	readerLens                [][]byte
 }
 
-type valueFileWriteBuf struct {
+type valueStoreFileWriteBuf struct {
 	seq       int
 	buf       []byte
 	offset    uint32
 	memBlocks []*valueMemBlock
 }
 
-func newValueFile(store *DefaultValueStore, bts int64, openReadSeeker func(name string) (io.ReadSeeker, error)) (*valueFile, error) {
-	fl := &valueFile{store: store, bts: bts}
+func newValueFile(store *DefaultValueStore, bts int64, openReadSeeker func(name string) (io.ReadSeeker, error)) (*valueStoreFile, error) {
+	fl := &valueStoreFile{store: store, bts: bts}
 	fl.name = path.Join(store.path, fmt.Sprintf("%019d.value", fl.bts))
 	fl.readerFPs = make([]brimutil.ChecksummedReader, store.fileReaders)
 	fl.readerLocks = make([]sync.Mutex, len(fl.readerFPs))
@@ -71,20 +71,20 @@ func newValueFile(store *DefaultValueStore, bts int64, openReadSeeker func(name 
 	return fl, nil
 }
 
-func createValueFile(store *DefaultValueStore, createWriteCloser func(name string) (io.WriteCloser, error), openReadSeeker func(name string) (io.ReadSeeker, error)) (*valueFile, error) {
-	fl := &valueFile{store: store, bts: time.Now().UnixNano()}
+func createValueFile(store *DefaultValueStore, createWriteCloser func(name string) (io.WriteCloser, error), openReadSeeker func(name string) (io.ReadSeeker, error)) (*valueStoreFile, error) {
+	fl := &valueStoreFile{store: store, bts: time.Now().UnixNano()}
 	fl.name = path.Join(store.path, fmt.Sprintf("%019d.value", fl.bts))
 	fp, err := createWriteCloser(fl.name)
 	if err != nil {
 		return nil, err
 	}
 	fl.writerFP = fp
-	fl.freeChan = make(chan *valueFileWriteBuf, store.workers)
+	fl.freeChan = make(chan *valueStoreFileWriteBuf, store.workers)
 	for i := 0; i < store.workers; i++ {
-		fl.freeChan <- &valueFileWriteBuf{buf: make([]byte, store.checksumInterval+4)}
+		fl.freeChan <- &valueStoreFileWriteBuf{buf: make([]byte, store.checksumInterval+4)}
 	}
-	fl.checksumChan = make(chan *valueFileWriteBuf, store.workers)
-	fl.writeChan = make(chan *valueFileWriteBuf, store.workers)
+	fl.checksumChan = make(chan *valueStoreFileWriteBuf, store.workers)
+	fl.writeChan = make(chan *valueStoreFileWriteBuf, store.workers)
 	fl.doneChan = make(chan struct{})
 	fl.buf = <-fl.freeChan
 	head := []byte("VALUESTORE v0                   ")
@@ -117,11 +117,11 @@ func createValueFile(store *DefaultValueStore, createWriteCloser func(name strin
 	return fl, nil
 }
 
-func (fl *valueFile) timestampnano() int64 {
+func (fl *valueStoreFile) timestampnano() int64 {
 	return fl.bts
 }
 
-func (fl *valueFile) read(keyA uint64, keyB uint64, timestampbits uint64, offset uint32, length uint32, value []byte) (uint64, []byte, error) {
+func (fl *valueStoreFile) read(keyA uint64, keyB uint64, timestampbits uint64, offset uint32, length uint32, value []byte) (uint64, []byte, error) {
 	// TODO: Add calling Verify occasionally on the readerFPs, maybe randomly
 	// inside here or maybe randomly requested by the caller.
 	if timestampbits&_TSB_DELETION != 0 {
@@ -146,7 +146,7 @@ func (fl *valueFile) read(keyA uint64, keyB uint64, timestampbits uint64, offset
 	return timestampbits, value, nil
 }
 
-func (fl *valueFile) write(memBlock *valueMemBlock) {
+func (fl *valueStoreFile) write(memBlock *valueMemBlock) {
 	if memBlock == nil {
 		return
 	}
@@ -184,7 +184,7 @@ func (fl *valueFile) write(memBlock *valueMemBlock) {
 	}
 }
 
-func (fl *valueFile) closeWriting() error {
+func (fl *valueStoreFile) closeWriting() error {
 	if fl.checksumChan == nil {
 		return nil
 	}
@@ -233,7 +233,7 @@ func (fl *valueFile) closeWriting() error {
 	return reterr
 }
 
-func (fl *valueFile) close() error {
+func (fl *valueStoreFile) close() error {
 	reterr := fl.closeWriting()
 	for i, fp := range fl.readerFPs {
 		// This will let any ongoing reads complete.
@@ -254,7 +254,7 @@ func (fl *valueFile) close() error {
 	return reterr
 }
 
-func (fl *valueFile) checksummer() {
+func (fl *valueStoreFile) checksummer() {
 	for {
 		buf := <-fl.checksumChan
 		if buf == nil {
@@ -266,7 +266,7 @@ func (fl *valueFile) checksummer() {
 	fl.doneChan <- struct{}{}
 }
 
-func (fl *valueFile) writer() {
+func (fl *valueStoreFile) writer() {
 	var seq int
 	lastWasNil := false
 	for {

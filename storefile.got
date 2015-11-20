@@ -26,33 +26,33 @@ const _{{.TT}}_FILE_ENTRY_SIZE = 48
 // 0:4, offsetWhereTrailerOccurs:4, "TERM":4
 const _{{.TT}}_FILE_TRAILER_SIZE = 16
 
-type {{.t}}File struct {
+type {{.t}}StoreFile struct {
     store                       *Default{{.T}}Store
     name                        string
     id                          uint32
     bts                         int64
     writerFP                    io.WriteCloser
     atOffset                    uint32
-    freeChan                    chan *{{.t}}FileWriteBuf
-    checksumChan                chan *{{.t}}FileWriteBuf
-    writeChan                   chan *{{.t}}FileWriteBuf
+    freeChan                    chan *{{.t}}StoreFileWriteBuf
+    checksumChan                chan *{{.t}}StoreFileWriteBuf
+    writeChan                   chan *{{.t}}StoreFileWriteBuf
     doneChan                    chan struct{}
-    buf                         *{{.t}}FileWriteBuf
+    buf                         *{{.t}}StoreFileWriteBuf
     freeableMemBlockChanIndex   int
     readerFPs                   []brimutil.ChecksummedReader
     readerLocks                 []sync.Mutex
     readerLens                  [][]byte
 }
 
-type {{.t}}FileWriteBuf struct {
+type {{.t}}StoreFileWriteBuf struct {
     seq         int
     buf         []byte
     offset      uint32
     memBlocks   []*{{.t}}MemBlock
 }
 
-func new{{.T}}File(store *Default{{.T}}Store, bts int64, openReadSeeker func(name string) (io.ReadSeeker, error)) (*{{.t}}File, error) {
-    fl := &{{.t}}File{store: store, bts: bts}
+func new{{.T}}File(store *Default{{.T}}Store, bts int64, openReadSeeker func(name string) (io.ReadSeeker, error)) (*{{.t}}StoreFile, error) {
+    fl := &{{.t}}StoreFile{store: store, bts: bts}
     fl.name = path.Join(store.path, fmt.Sprintf("%019d.{{.t}}", fl.bts))
     fl.readerFPs = make([]brimutil.ChecksummedReader, store.fileReaders)
     fl.readerLocks = make([]sync.Mutex, len(fl.readerFPs))
@@ -74,20 +74,20 @@ func new{{.T}}File(store *Default{{.T}}Store, bts int64, openReadSeeker func(nam
     return fl, nil
 }
 
-func create{{.T}}File(store *Default{{.T}}Store, createWriteCloser func(name string) (io.WriteCloser, error), openReadSeeker func(name string) (io.ReadSeeker, error)) (*{{.t}}File, error) {
-    fl := &{{.t}}File{store: store, bts: time.Now().UnixNano()}
+func create{{.T}}File(store *Default{{.T}}Store, createWriteCloser func(name string) (io.WriteCloser, error), openReadSeeker func(name string) (io.ReadSeeker, error)) (*{{.t}}StoreFile, error) {
+    fl := &{{.t}}StoreFile{store: store, bts: time.Now().UnixNano()}
     fl.name = path.Join(store.path, fmt.Sprintf("%019d.{{.t}}", fl.bts))
     fp, err := createWriteCloser(fl.name)
     if err != nil {
         return nil, err
     }
     fl.writerFP = fp
-    fl.freeChan = make(chan *{{.t}}FileWriteBuf, store.workers)
+    fl.freeChan = make(chan *{{.t}}StoreFileWriteBuf, store.workers)
     for i := 0; i < store.workers; i++ {
-        fl.freeChan <- &{{.t}}FileWriteBuf{buf: make([]byte, store.checksumInterval+4)}
+        fl.freeChan <- &{{.t}}StoreFileWriteBuf{buf: make([]byte, store.checksumInterval+4)}
     }
-    fl.checksumChan = make(chan *{{.t}}FileWriteBuf, store.workers)
-    fl.writeChan = make(chan *{{.t}}FileWriteBuf, store.workers)
+    fl.checksumChan = make(chan *{{.t}}StoreFileWriteBuf, store.workers)
+    fl.writeChan = make(chan *{{.t}}StoreFileWriteBuf, store.workers)
     fl.doneChan = make(chan struct{})
     fl.buf = <-fl.freeChan
     head := []byte("{{.TT}}STORE v0                   ")
@@ -120,11 +120,11 @@ func create{{.T}}File(store *Default{{.T}}Store, createWriteCloser func(name str
     return fl, nil
 }
 
-func (fl *{{.t}}File) timestampnano() int64 {
+func (fl *{{.t}}StoreFile) timestampnano() int64 {
     return fl.bts
 }
 
-func (fl *{{.t}}File) read(keyA uint64, keyB uint64{{if eq .t "group"}}, nameKeyA uint64, nameKeyB uint64{{end}}, timestampbits uint64, offset uint32, length uint32, value []byte) (uint64, []byte, error) {
+func (fl *{{.t}}StoreFile) read(keyA uint64, keyB uint64{{if eq .t "group"}}, nameKeyA uint64, nameKeyB uint64{{end}}, timestampbits uint64, offset uint32, length uint32, value []byte) (uint64, []byte, error) {
     // TODO: Add calling Verify occasionally on the readerFPs, maybe randomly
     // inside here or maybe randomly requested by the caller.
     if timestampbits&_TSB_DELETION != 0 {
@@ -149,7 +149,7 @@ func (fl *{{.t}}File) read(keyA uint64, keyB uint64{{if eq .t "group"}}, nameKey
     return timestampbits, value, nil
 }
 
-func (fl *{{.t}}File) write(memBlock *{{.t}}MemBlock) {
+func (fl *{{.t}}StoreFile) write(memBlock *{{.t}}MemBlock) {
     if memBlock == nil {
         return
     }
@@ -187,7 +187,7 @@ func (fl *{{.t}}File) write(memBlock *{{.t}}MemBlock) {
     }
 }
 
-func (fl *{{.t}}File) closeWriting() error {
+func (fl *{{.t}}StoreFile) closeWriting() error {
     if fl.checksumChan == nil {
         return nil
     }
@@ -236,7 +236,7 @@ func (fl *{{.t}}File) closeWriting() error {
     return reterr
 }
 
-func (fl *{{.t}}File) close() error {
+func (fl *{{.t}}StoreFile) close() error {
     reterr := fl.closeWriting()
     for i, fp := range fl.readerFPs {
         // This will let any ongoing reads complete.
@@ -257,7 +257,7 @@ func (fl *{{.t}}File) close() error {
     return reterr
 }
 
-func (fl *{{.t}}File) checksummer() {
+func (fl *{{.t}}StoreFile) checksummer() {
     for {
         buf := <-fl.checksumChan
         if buf == nil {
@@ -269,7 +269,7 @@ func (fl *{{.t}}File) checksummer() {
     fl.doneChan <- struct{}{}
 }
 
-func (fl *{{.t}}File) writer() {
+func (fl *{{.t}}StoreFile) writer() {
     var seq int
     lastWasNil := false
     for {
