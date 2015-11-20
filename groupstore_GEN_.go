@@ -58,6 +58,7 @@ type DefaultGroupStore struct {
 	checksumInterval        uint32
 	msgRing                 ring.MsgRing
 	tombstoneDiscardState   groupTombstoneDiscardState
+	auditState              groupAuditState
 	replicationIgnoreRecent uint64
 	pullReplicationState    groupPullReplicationState
 	pushReplicationState    groupPushReplicationState
@@ -222,6 +223,7 @@ func NewGroupStore(c *GroupStoreConfig) (*DefaultGroupStore, error) {
 	}
 	store.tombstoneDiscardConfig(cfg)
 	store.compactionConfig(cfg)
+	store.auditConfig(cfg)
 	store.pullReplicationConfig(cfg)
 	store.pushReplicationConfig(cfg)
 	store.bulkSetConfig(cfg)
@@ -230,6 +232,7 @@ func NewGroupStore(c *GroupStoreConfig) (*DefaultGroupStore, error) {
 	store.diskWatcherConfig(cfg)
 	store.tombstoneDiscardLaunch()
 	store.compactionLaunch()
+	store.auditLaunch()
 	store.pullReplicationLaunch()
 	store.pushReplicationLaunch()
 	store.bulkSetLaunch()
@@ -251,23 +254,26 @@ func (store *DefaultGroupStore) DisableAll() {
 }
 
 // DisableAllBackground calls DisableTombstoneDiscard(), DisableCompaction(),
-// DisableOutPullReplication(), DisableOutPushReplication(), but does *not*
-// call DisableWrites().
+// DisableAudit(), DisableOutPullReplication(), DisableOutPushReplication(),
+// but does *not* call DisableWrites().
 func (store *DefaultGroupStore) DisableAllBackground() {
 	store.DisableTombstoneDiscard()
 	store.DisableCompaction()
+	store.DisableAudit()
 	store.DisableOutPullReplication()
 	store.DisableOutPushReplication()
 }
 
 // EnableAll calls EnableTombstoneDiscard(), EnableCompaction(),
-// EnableOutPullReplication(), EnableOutPushReplication(), and EnableWrites().
+// EnableAudit(), EnableOutPullReplication(), EnableOutPushReplication(), and
+// EnableWrites().
 func (store *DefaultGroupStore) EnableAll() {
 	store.EnableTombstoneDiscard()
 	store.EnableOutPullReplication()
 	store.EnableOutPushReplication()
 	store.EnableWrites()
 	store.EnableCompaction()
+	store.EnableAudit()
 }
 
 // DisableWrites will cause any incoming Write or Delete requests to respond
@@ -463,6 +469,12 @@ func (store *DefaultGroupStore) locBlock(locBlockID uint32) groupLocBlock {
 
 func (store *DefaultGroupStore) addLocBlock(block groupLocBlock) (uint32, error) {
 	id := atomic.AddUint64(&store.locBlockIDer, 1)
+	// TODO: We should probably issue a restart request if
+	// id >= math.MaxUint32 / 2 since it's almost certainly not the case that
+	// there are too many on-disk files, just that the process has been running
+	// long enough to chew through ids. Issuing the restart at half the true
+	// max would all but guarantee a restart occurs before reaching the true
+	// max.
 	if id >= math.MaxUint32 {
 		return 0, errors.New("too many loc blocks")
 	}

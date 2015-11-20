@@ -52,6 +52,17 @@
 // acknowledgements of the data they received, allowing the requester to
 // discard the out of place data.
 //
+// * Compaction: TODO description.
+//
+// * Audit: This will verify the data on disk has not been corrupted. It will
+// slowly read data over time and validate checksums. If it finds issues, it
+// will try to remove affected entries the in-memory location map so that
+// replication from other stores will send the information they have and the
+// values will get re-stored locally. In cases where the affected entries
+// cannot be determined, it will make a callback requesting the store be
+// shutdown and restarted; this restart will result in the affected keys being
+// missing and therefore replicated in by other stores.
+//
 // Note that if the disk gets filled past a configurable threshold, any
 // external writes other than deletes will result in error. Internal writes
 // such as compaction and removing successfully push-replicated data will
@@ -99,6 +110,8 @@ package store
 //go:generate got tombstonediscard.got grouptombstonediscard_GEN_.go TT=GROUP T=Group t=group
 //go:generate got compaction.got valuecompaction_GEN_.go TT=VALUE T=Value t=value
 //go:generate got compaction.got groupcompaction_GEN_.go TT=GROUP T=Group t=group
+//go:generate got audit.got valueaudit_GEN_.go TT=VALUE T=Value t=value
+//go:generate got audit.got groupaudit_GEN_.go TT=GROUP T=Group t=group
 //go:generate got diskwatcher.got valuediskwatcher_GEN_.go TT=VALUE T=Value t=value
 //go:generate got diskwatcher.got groupdiskwatcher_GEN_.go TT=GROUP T=Group t=group
 //go:generate got flusher.got valueflusher_GEN_.go TT=VALUE T=Value t=value
@@ -170,6 +183,9 @@ type Store interface {
 	EnableCompaction()
 	DisableCompaction()
 	CompactionPass()
+	EnableAudit()
+	DisableAudit()
+	AuditPass()
 	EnableOutPullReplication()
 	DisableOutPullReplication()
 	OutPullReplicationPass()
