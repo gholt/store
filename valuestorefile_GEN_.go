@@ -13,16 +13,6 @@ import (
 	"gopkg.in/gholt/brimutil.v1"
 )
 
-//    "VALUESTORETOC v0            ":28, checksumInterval:4
-// or "VALUESTORE v0               ":28, checksumInterval:4
-const _VALUE_FILE_HEADER_SIZE = 32
-
-// keyA:8, keyB:8, timestamp:8, offset:4, length:4
-const _VALUE_FILE_ENTRY_SIZE = 32
-
-// 0:4, offsetWhereTrailerOccurs:4, "TERM":4
-const _VALUE_FILE_TRAILER_SIZE = 16
-
 type valueStoreFile struct {
 	store                     *DefaultValueStore
 	name                      string
@@ -201,16 +191,19 @@ func (fl *valueStoreFile) closeWriting() error {
 	left := len(term)
 	for left > 0 {
 		n := copy(fl.buf.buf[fl.buf.offset:fl.store.checksumInterval], term[len(term)-left:])
+		left -= n
 		fl.buf.offset += uint32(n)
-		binary.BigEndian.PutUint32(fl.buf.buf[fl.buf.offset:], murmur3.Sum32(fl.buf.buf[:fl.buf.offset]))
-		if _, err := fl.writerFP.Write(fl.buf.buf[:fl.buf.offset+4]); err != nil {
+		if left > 0 {
+			binary.BigEndian.PutUint32(fl.buf.buf[fl.buf.offset:], murmur3.Sum32(fl.buf.buf[:fl.buf.offset]))
+			fl.buf.offset += 4
+		}
+		if _, err := fl.writerFP.Write(fl.buf.buf[:fl.buf.offset]); err != nil {
 			if reterr == nil {
 				reterr = err
 			}
 			break
 		}
 		fl.buf.offset = 0
-		left -= n
 	}
 	if err := fl.writerFP.Close(); err != nil {
 		if reterr == nil {

@@ -84,6 +84,8 @@ package store
 //go:generate got memblock.got groupmemblock_GEN_.go TT=GROUP T=Group t=group
 //go:generate got memblock_test.got valuememblock_GEN_test.go TT=VALUE T=Value t=value
 //go:generate got memblock_test.got groupmemblock_GEN_test.go TT=GROUP T=Group t=group
+//go:generate got directfile.got valuedirectfile_GEN_.go TT=VALUE T=Value t=value
+//go:generate got directfile.got groupdirectfile_GEN_.go TT=GROUP T=Group t=group
 //go:generate got storefile.got valuestorefile_GEN_.go TT=VALUE T=Value t=value
 //go:generate got storefile.got groupstorefile_GEN_.go TT=GROUP T=Group t=group
 //go:generate got storefile_test.got valuestorefile_GEN_test.go TT=VALUE T=Value t=value
@@ -222,4 +224,12 @@ type GroupStore interface {
 	Read(keyA uint64, keyB uint64, nameKeyA uint64, nameKeyB uint64, value []byte) (int64, []byte, error)
 	Write(keyA uint64, keyB uint64, nameKeyA uint64, nameKeyB uint64, timestamp int64, value []byte) (int64, error)
 	Delete(keyA uint64, keyB uint64, nameKeyA uint64, nameKeyB uint64, timestamp int64) (int64, error)
+}
+
+func closeIfCloser(thing interface{}) error {
+	closer, ok := thing.(io.Closer)
+	if ok {
+		return closer.Close()
+	}
+	return nil
 }

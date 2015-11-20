@@ -324,8 +324,8 @@ func resolveValueStoreConfig(c *ValueStoreConfig) *ValueStoreConfig {
 	if cfg.ChecksumInterval == 0 {
 		cfg.ChecksumInterval = 64*1024 - 4
 	}
-	if cfg.ChecksumInterval < 1 {
-		cfg.ChecksumInterval = 1
+	if cfg.ChecksumInterval < _VALUE_FILE_HEADER_SIZE {
+		cfg.ChecksumInterval = _VALUE_FILE_HEADER_SIZE
 	}
 	if env := os.Getenv("VALUESTORE_PAGE_SIZE"); env != "" {
 		if val, err := strconv.Atoi(env); err == nil {

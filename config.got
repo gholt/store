@@ -324,8 +324,8 @@ func resolve{{.T}}StoreConfig(c *{{.T}}StoreConfig) *{{.T}}StoreConfig {
     if cfg.ChecksumInterval == 0 {
         cfg.ChecksumInterval = 64*1024 - 4
     }
-    if cfg.ChecksumInterval < 1 {
-        cfg.ChecksumInterval = 1
+    if cfg.ChecksumInterval < _{{.TT}}_FILE_HEADER_SIZE {
+        cfg.ChecksumInterval = _{{.TT}}_FILE_HEADER_SIZE
     }
     if env := os.Getenv("{{.TT}}STORE_PAGE_SIZE"); env != "" {
         if val, err := strconv.Atoi(env); err == nil {

@@ -931,6 +931,14 @@ func (store *Default{{.T}}Store) recovery() error {
                 break
             }
             n -= 4
+            // TODO: This area is wrong, instead we should be reading the
+            // trailer at the outset and verifying the size of the included
+            // data; the last part of the file likely won't have a checksum.
+            // Perhaps quicker would be to use the file size to compute where
+            // the trailer should be. Anyway, I'll fix this later; I want to
+            // consolidate what recovery, compaction, and auditing all do. For
+            // now, the last few entries written to a file won't be readable.
+            // :(
             if murmur3.Sum32(fromDiskBuf[:n]) != binary.BigEndian.Uint32(fromDiskBuf[n:]) {
                 checksumFailures++
                 // TODO: There's an issue here. The entry size is not
