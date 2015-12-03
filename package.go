@@ -158,6 +158,10 @@ func osOpenReadSeeker(name string) (io.ReadSeeker, error) {
 	return os.Open(name)
 }
 
+func osOpenWriteSeeker(name string) (io.WriteSeeker, error) {
+	return os.OpenFile(name, os.O_RDWR, 0666)
+}
+
 func osCreateWriteCloser(name string) (io.WriteCloser, error) {
 	return os.Create(name)
 }

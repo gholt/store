@@ -15,7 +15,7 @@ import (
 // or "GROUPSTORE v0               ":28, checksumInterval:4
 const _GROUP_FILE_HEADER_SIZE = 32
 
-// keyA:8, keyB:8, nameKeyA:8, nameKeyB:8, timestamp:8, offset:4, length:4
+// keyA:8, keyB:8, nameKeyA:8, nameKeyB:8, timestampbits:8, offset:4, length:4
 const _GROUP_FILE_ENTRY_SIZE = 48
 
 // "TERM v0 ":8
@@ -34,6 +34,9 @@ type GroupDirectFile struct {
 	writerTOC           brimutil.ChecksummedWriter
 	checksumIntervalTOC int32
 	sizeTOC             int64
+	entryCount          int64
+	entryPos            int64
+	entryPosNeedsSeek   bool
 }
 
 func NewGroupDirectFile(path string, pathTOC string, openReadSeeker func(name string) (io.ReadSeeker, error), openWriteSeeker func(name string) (io.WriteSeeker, error)) *GroupDirectFile {
@@ -64,13 +67,16 @@ func (df *GroupDirectFile) DataSize() (int64, error) {
 }
 
 func (df *GroupDirectFile) EntryCount() (int64, error) {
-	if df.readerTOC == nil {
-		ok, errs := df.VerifyHeaderAndTrailerTOC()
-		if !ok {
-			return 0, errs[0]
+	if df.entryCount == 0 {
+		if df.readerTOC == nil {
+			ok, errs := df.VerifyHeaderAndTrailerTOC()
+			if !ok {
+				return 0, errs[0]
+			}
 		}
+		df.entryCount = (df.sizeTOC - _GROUP_FILE_HEADER_SIZE - _GROUP_FILE_TRAILER_SIZE) / _GROUP_FILE_ENTRY_SIZE
 	}
-	return (df.sizeTOC - _GROUP_FILE_HEADER_SIZE - _GROUP_FILE_TRAILER_SIZE) / _GROUP_FILE_ENTRY_SIZE, nil
+	return df.entryCount, nil
 }
 
 // VerifyHeaderAndTrailer returns true if the GroupDirectFile can continue to
@@ -204,6 +210,15 @@ func (df *GroupDirectFile) VerifyHeaderAndTrailerTOC() (bool, []error) {
 }
 
 func (df *GroupDirectFile) FirstEntry() (uint64, uint64, uint64, uint64, uint64, uint32, uint32, error) {
+	if df.entryCount == 0 {
+		if _, err := df.EntryCount(); err != nil {
+			return 0, 0, 0, 0, 0, 0, 0, err
+		}
+	}
+	df.entryPos = 0
+	if df.entryCount == 0 {
+		return 0, 0, 0, 0, 0, 0, 0, io.EOF
+	}
 	if df.readerTOC == nil {
 		ok, errs := df.VerifyHeaderAndTrailerTOC()
 		if !ok {
@@ -213,8 +228,10 @@ func (df *GroupDirectFile) FirstEntry() (uint64, uint64, uint64, uint64, uint64,
 	if _, err := df.readerTOC.Seek(_GROUP_FILE_HEADER_SIZE, 0); err != nil {
 		return 0, 0, 0, 0, 0, 0, 0, err
 	}
+	df.entryPos = 1
 	buf := make([]byte, _GROUP_FILE_ENTRY_SIZE)
 	if _, err := io.ReadFull(df.readerTOC, buf); err != nil {
+		df.entryPosNeedsSeek = true
 		return 0, 0, 0, 0, 0, 0, 0, err
 	}
 
@@ -222,10 +239,10 @@ func (df *GroupDirectFile) FirstEntry() (uint64, uint64, uint64, uint64, uint64,
 	keyB := binary.BigEndian.Uint64(buf[8:])
 	nameKeyA := binary.BigEndian.Uint64(buf[16:])
 	nameKeyB := binary.BigEndian.Uint64(buf[24:])
-	timestamp := binary.BigEndian.Uint64(buf[32:])
+	timestampbits := binary.BigEndian.Uint64(buf[32:])
 	offset := binary.BigEndian.Uint32(buf[40:])
 	length := binary.BigEndian.Uint32(buf[44:])
-	return keyA, keyB, nameKeyA, nameKeyB, timestamp, offset, length, nil
+	return keyA, keyB, nameKeyA, nameKeyB, timestampbits, offset, length, nil
 
 }
 
@@ -235,12 +252,27 @@ func (df *GroupDirectFile) NextEntry() (uint64, uint64, uint64, uint64, uint64, 
 		if !ok {
 			return 0, 0, 0, 0, 0, 0, 0, errs[0]
 		}
-		if _, err := df.readerTOC.Seek(_GROUP_FILE_HEADER_SIZE, 0); err != nil {
+		df.entryPosNeedsSeek = true
+	}
+	if df.entryCount == 0 {
+		if _, err := df.EntryCount(); err != nil {
 			return 0, 0, 0, 0, 0, 0, 0, err
 		}
 	}
+	if df.entryPos >= df.entryCount {
+		return 0, 0, 0, 0, 0, 0, 0, io.EOF
+	}
+	if df.entryPosNeedsSeek {
+		if _, err := df.readerTOC.Seek(_GROUP_FILE_HEADER_SIZE+df.entryPos*_GROUP_FILE_ENTRY_SIZE, 0); err != nil {
+			df.entryPos++
+			return 0, 0, 0, 0, 0, 0, 0, err
+		}
+		df.entryPosNeedsSeek = false
+	}
+	df.entryPos++
 	buf := make([]byte, _GROUP_FILE_ENTRY_SIZE)
 	if _, err := io.ReadFull(df.readerTOC, buf); err != nil {
+		df.entryPosNeedsSeek = true
 		return 0, 0, 0, 0, 0, 0, 0, err
 	}
 
@@ -248,9 +280,9 @@ func (df *GroupDirectFile) NextEntry() (uint64, uint64, uint64, uint64, uint64, 
 	keyB := binary.BigEndian.Uint64(buf[8:])
 	nameKeyA := binary.BigEndian.Uint64(buf[16:])
 	nameKeyB := binary.BigEndian.Uint64(buf[24:])
-	timestamp := binary.BigEndian.Uint64(buf[32:])
+	timestampbits := binary.BigEndian.Uint64(buf[32:])
 	offset := binary.BigEndian.Uint32(buf[40:])
 	length := binary.BigEndian.Uint32(buf[44:])
-	return keyA, keyB, nameKeyA, nameKeyB, timestamp, offset, length, nil
+	return keyA, keyB, nameKeyA, nameKeyB, timestampbits, offset, length, nil
 
 }

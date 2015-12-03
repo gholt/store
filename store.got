@@ -1,7 +1,6 @@
 package store
 
 import (
-    "bytes"
     "encoding/binary"
     "errors"
     "fmt"
@@ -877,8 +876,8 @@ func (store *Default{{.T}}Store) recovery() error {
             wg.Done()
         }(pendingBatchChans[i], freeBatchChans[i])
     }
-    fromDiskBuf := make([]byte, store.checksumInterval+4)
-    fromDiskOverflow := make([]byte, 0, _{{.TT}}_FILE_ENTRY_SIZE)
+    // fromDiskBuf := make([]byte, store.checksumInterval+4)
+    // fromDiskOverflow := make([]byte, 0, _{{.TT}}_FILE_ENTRY_SIZE)
     batches := make([][]writeReq, len(freeBatchChans))
     batchesPos := make([]int, len(batches))
     fp, err := os.Open(store.pathtoc)
@@ -909,6 +908,54 @@ func (store *Default{{.T}}Store) recovery() error {
             store.logError("error opening %s: %s\n", names[i], err)
             continue
         }
+        df := New{{.T}}DirectFile(names[i][:len(names[i])-3], names[i], osOpenReadSeeker, osOpenWriteSeeker)
+        run, errs := df.VerifyHeaderAndTrailer()
+        for _, err := range errs {
+            store.logError("error with %s: %s", names[i], err)
+        }
+        if run {
+            run, errs = df.VerifyHeaderAndTrailerTOC()
+            for _, err := range errs {
+                store.logError("error with %s: %s", names[i], err)
+            }
+        }
+        keyA, keyB{{if eq .t "group"}}, nameKeyA, nameKeyB{{end}}, timestampbits, offset, length, err := df.FirstEntry()
+        for run && err != io.EOF {
+            if err != nil {
+                store.logError("error with %s: %s", names[i], err)
+            } else if offset != 0 {
+                k := keyB % workers
+                if batches[k] == nil {
+                    batches[k] = <-freeBatchChans[k]
+                    batchesPos[k] = 0
+                }
+                wr := &batches[k][batchesPos[k]]
+                {{if eq .t "value"}}
+                wr.keyA = keyA
+                wr.keyB = keyB
+                wr.timestampbits = timestampbits
+                wr.blockID = fl.id
+                wr.offset = offset
+                wr.length = length
+                {{else}}
+                wr.keyA = keyA
+                wr.keyB = keyB
+                wr.nameKeyA = nameKeyA
+                wr.nameKeyB = nameKeyB
+                wr.timestampbits = timestampbits
+                wr.blockID = fl.id
+                wr.offset = offset
+                wr.length = length
+                {{end}}
+                batchesPos[k]++
+                if batchesPos[k] >= store.recoveryBatchSize {
+                    pendingBatchChans[k] <- batches[k]
+                    batches[k] = nil
+                }
+            }
+            keyA, keyB{{if eq .t "group"}}, nameKeyA, nameKeyB{{end}}, timestampbits, offset, length, err = df.NextEntry()
+        }
+        /*
         fp, err := os.Open(path.Join(store.pathtoc, names[i]))
         if err != nil {
             store.logError("error opening %s: %s\n", names[i], err)
@@ -1048,6 +1095,7 @@ func (store *Default{{.T}}Store) recovery() error {
         if checksumFailures > 0 {
             store.logWarning("%d checksum failures for %s\n", checksumFailures, names[i])
         }
+        */
     }
     for i := 0; i < len(batches); i++ {
         if batches[i] != nil {
