@@ -55,7 +55,7 @@ func (df *ValueDirectFile) PathTOC() string {
 
 func (df *ValueDirectFile) DataSize() (int64, error) {
 	if df.reader == nil {
-		ok, errs := df.VerifyHeadersAndTrailers()
+		ok, errs := df.VerifyHeaderAndTrailer()
 		if !ok {
 			return 0, errs[0]
 		}
@@ -65,7 +65,7 @@ func (df *ValueDirectFile) DataSize() (int64, error) {
 
 func (df *ValueDirectFile) EntryCount() (int64, error) {
 	if df.readerTOC == nil {
-		ok, errs := df.VerifyHeadersAndTrailers()
+		ok, errs := df.VerifyHeaderAndTrailerTOC()
 		if !ok {
 			return 0, errs[0]
 		}
@@ -73,11 +73,12 @@ func (df *ValueDirectFile) EntryCount() (int64, error) {
 	return (df.sizeTOC - _VALUE_FILE_HEADER_SIZE - _VALUE_FILE_TRAILER_SIZE) / _VALUE_FILE_ENTRY_SIZE, nil
 }
 
-// VerifyHeadersAndTrailers returns true if the ValueDirectFile can continue
-// to be used and a list of errors found in the headers and trailers, if any.
-// Some errors result in false being returned, but some errors (such as those
-// in the trailers) will allow for possible recovery of some of the data.
-func (df *ValueDirectFile) VerifyHeadersAndTrailers() (bool, []error) {
+// VerifyHeaderAndTrailer returns true if the ValueDirectFile can continue to
+// be used and a list of errors found (if any) in the header and trailer of the
+// data file. Some errors result in false being returned, but some errors (such
+// as those in the trailers) will allow for possible recovery of some of the
+// data.
+func (df *ValueDirectFile) VerifyHeaderAndTrailer() (bool, []error) {
 	var errs []error
 	if df.reader != nil {
 		df.reader.Close()
@@ -140,18 +141,27 @@ func (df *ValueDirectFile) VerifyHeadersAndTrailers() (bool, []error) {
 		return false, append(errs, err)
 	}
 	df.writer = brimutil.NewChecksummedWriter(fpw, int(df.checksumInterval), murmur3.New32)
+	return true, errs
+}
 
+// VerifyHeaderAndTrailerTOC returns true if the ValueDirectFile can continue
+// to be used and a list of errors (if any) found in the header and trailer of
+// the TOC file. Some errors result in false being returned, but some errors
+// (such as those in the trailer) will allow for possible recovery of some of
+// the data.
+func (df *ValueDirectFile) VerifyHeaderAndTrailerTOC() (bool, []error) {
+	var errs []error
 	if df.readerTOC != nil {
 		df.readerTOC.Close()
 	}
 	if df.writerTOC != nil {
 		df.writerTOC.Close()
 	}
-	fpr, err = df.openReadSeeker(df.pathTOC)
+	fpr, err := df.openReadSeeker(df.pathTOC)
 	if err != nil {
 		return false, append(errs, err)
 	}
-	buf = buf[:cap(buf)]
+	buf := make([]byte, _VALUE_FILE_HEADER_SIZE)
 	_, err = io.ReadFull(fpr, buf)
 	if err != nil {
 		closeIfCloser(fpr)
@@ -199,7 +209,7 @@ func (df *ValueDirectFile) VerifyHeadersAndTrailers() (bool, []error) {
 			}
 		}
 	}
-	fpw, err = df.openWriteSeeker(df.path)
+	fpw, err := df.openWriteSeeker(df.path)
 	if err != nil {
 		closeIfCloser(df.readerTOC)
 		closeIfCloser(fpr)
@@ -211,7 +221,7 @@ func (df *ValueDirectFile) VerifyHeadersAndTrailers() (bool, []error) {
 
 func (df *ValueDirectFile) FirstEntry() (uint64, uint64, uint64, uint32, uint32, error) {
 	if df.readerTOC == nil {
-		ok, errs := df.VerifyHeadersAndTrailers()
+		ok, errs := df.VerifyHeaderAndTrailerTOC()
 		if !ok {
 			return 0, 0, 0, 0, 0, errs[0]
 		}
@@ -235,7 +245,7 @@ func (df *ValueDirectFile) FirstEntry() (uint64, uint64, uint64, uint32, uint32,
 
 func (df *ValueDirectFile) NextEntry() (uint64, uint64, uint64, uint32, uint32, error) {
 	if df.readerTOC == nil {
-		ok, errs := df.VerifyHeadersAndTrailers()
+		ok, errs := df.VerifyHeaderAndTrailerTOC()
 		if !ok {
 			return 0, 0, 0, 0, 0, errs[0]
 		}
