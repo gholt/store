@@ -185,9 +185,7 @@ func (fl *groupStoreFile) closeWriting() error {
 	}
 	fl.writeChan <- nil
 	<-fl.doneChan
-	term := make([]byte, 16)
-	binary.BigEndian.PutUint64(term[4:], uint64(atomic.LoadUint32(&fl.atOffset)))
-	copy(term[12:], "TERM")
+	term := []byte("TERM v0 ")
 	left := len(term)
 	for left > 0 {
 		n := copy(fl.buf.buf[fl.buf.offset:fl.store.checksumInterval], term[len(term)-left:])

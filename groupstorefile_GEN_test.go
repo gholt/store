@@ -128,14 +128,8 @@ func TestGroupValuesFileWritingEmpty(t *testing.T) {
 	if binary.BigEndian.Uint32(buf.buf[28:]) != store.checksumInterval {
 		t.Fatal(binary.BigEndian.Uint32(buf.buf[28:]), store.checksumInterval)
 	}
-	if binary.BigEndian.Uint32(buf.buf[bl-20:]) != 0 { // unused at this time
-		t.Fatal(binary.BigEndian.Uint32(buf.buf[bl-20:]))
-	}
-	if binary.BigEndian.Uint64(buf.buf[bl-16:]) != 32 { // last offset, 0 past header
-		t.Fatal(binary.BigEndian.Uint64(buf.buf[bl-16:]))
-	}
-	if string(buf.buf[bl-8:bl-4]) != "TERM" {
-		t.Fatal(string(buf.buf[bl-8 : bl-4]))
+	if string(buf.buf[bl-8:]) != "TERM v0 " {
+		t.Fatal(string(buf.buf[bl-8:]))
 	}
 	if binary.BigEndian.Uint32(buf.buf[bl-4:]) != 0xc4f7a369 { // checksum
 		t.Fatal(binary.BigEndian.Uint32(buf.buf[bl-4:]))
@@ -183,14 +177,8 @@ func TestGroupValuesFileWritingEmpty2(t *testing.T) {
 	if binary.BigEndian.Uint32(buf.buf[28:]) != store.checksumInterval {
 		t.Fatal(binary.BigEndian.Uint32(buf.buf[28:]), store.checksumInterval)
 	}
-	if binary.BigEndian.Uint32(buf.buf[bl-20:]) != 0 { // unused at this time
-		t.Fatal(binary.BigEndian.Uint32(buf.buf[bl-20:]))
-	}
-	if binary.BigEndian.Uint64(buf.buf[bl-16:]) != 32 { // last offset
-		t.Fatal(binary.BigEndian.Uint64(buf.buf[bl-16:]))
-	}
-	if string(buf.buf[bl-8:bl-4]) != "TERM" {
-		t.Fatal(string(buf.buf[bl-8 : bl-4]))
+	if string(buf.buf[bl-8:]) != "TERM v0 " {
+		t.Fatal(string(buf.buf[bl-8:]))
 	}
 	if binary.BigEndian.Uint32(buf.buf[bl-4:]) != 0xc4f7a369 { // checksum
 		t.Fatal(binary.BigEndian.Uint32(buf.buf[bl-4:]))
@@ -243,8 +231,8 @@ func TestGroupValuesFileWriting(t *testing.T) {
 	if binary.BigEndian.Uint64(buf.buf[bl-16:]) != 1234+32 { // last offset
 		t.Fatal(binary.BigEndian.Uint64(buf.buf[bl-16:]))
 	}
-	if string(buf.buf[bl-8:bl-4]) != "TERM" {
-		t.Fatal(string(buf.buf[bl-8 : bl-4]))
+	if string(buf.buf[bl-8:]) != "TERM v0 " {
+		t.Fatal(string(buf.buf[bl-8:]))
 	}
 	if binary.BigEndian.Uint32(buf.buf[bl-4:]) != 0x584933ba { // checksum
 		t.Fatal(binary.BigEndian.Uint32(buf.buf[bl-4:]))
@@ -294,8 +282,8 @@ func TestGroupValuesFileWritingMore(t *testing.T) {
 	if binary.BigEndian.Uint64(buf.buf[bl-16:]) != 123456+32 { // last offset
 		t.Fatal(binary.BigEndian.Uint64(buf.buf[bl-16:]))
 	}
-	if string(buf.buf[bl-8:bl-4]) != "TERM" {
-		t.Fatal(string(buf.buf[bl-8 : bl-4]))
+	if string(buf.buf[bl-8:]) != "TERM v0 " {
+		t.Fatal(string(buf.buf[bl-8:]))
 	}
 	if binary.BigEndian.Uint32(buf.buf[bl-4:]) != 0x6aa30474 { // checksum
 		t.Fatal(binary.BigEndian.Uint32(buf.buf[bl-4:]))
@@ -357,8 +345,8 @@ func TestGroupValuesFileWritingMultiple(t *testing.T) {
 	if binary.BigEndian.Uint64(buf.buf[bl-16:]) != 12345+54321+32 { // last offset
 		t.Fatal(binary.BigEndian.Uint64(buf.buf[bl-16:]))
 	}
-	if string(buf.buf[bl-8:bl-4]) != "TERM" {
-		t.Fatal(string(buf.buf[bl-8 : bl-4]))
+	if string(buf.buf[bl-8:]) != "TERM v0 " {
+		t.Fatal(string(buf.buf[bl-8:]))
 	}
 	if binary.BigEndian.Uint32(buf.buf[bl-4:]) != 0xacac4386 { // checksum
 		t.Fatal(binary.BigEndian.Uint32(buf.buf[bl-4:]))

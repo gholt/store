@@ -18,8 +18,8 @@ const _GROUP_FILE_HEADER_SIZE = 32
 // keyA:8, keyB:8, nameKeyA:8, nameKeyB:8, timestamp:8, offset:4, length:4
 const _GROUP_FILE_ENTRY_SIZE = 48
 
-// 0:4 (reserved for versioning maybe), offsetWhereTrailerOccurs:8, "TERM":4
-const _GROUP_FILE_TRAILER_SIZE = 16
+// "TERM v0 ":8
+const _GROUP_FILE_TRAILER_SIZE = 8
 
 type GroupDirectFile struct {
 	path                string
@@ -120,16 +120,8 @@ func (df *GroupDirectFile) VerifyHeaderAndTrailer() (bool, []error) {
 			// Keep going, might be good data available
 			df.size, _ = df.reader.Seek(0, 2) // Guess on df.size
 		} else {
-			if !bytes.Equal(buf[:4], []byte{0, 0, 0, 0}) {
-				errs = append(errs, errors.New("first four bytes of trailer are not 0s"))
-				// Keep going, might be good data available
-			}
-			if int64(binary.BigEndian.Uint64(buf[4:])) > df.size-_GROUP_FILE_TRAILER_SIZE {
-				errs = append(errs, fmt.Errorf("data ending offset recorded %d is past actual term offset %d", binary.BigEndian.Uint64(buf[4:]), df.size-_GROUP_FILE_TRAILER_SIZE))
-				// Keep going, might be good data available
-			}
-			if !bytes.Equal(buf[12:], []byte("TERM")) {
-				errs = append(errs, errors.New("last four bytes of trailer are not TERM"))
+			if !bytes.Equal(buf, []byte("TERM v0 ")) {
+				errs = append(errs, errors.New("trailer is not TERM v0 "))
 				// Keep going, might be good data available
 			}
 		}
@@ -172,7 +164,7 @@ func (df *GroupDirectFile) VerifyHeaderAndTrailerTOC() (bool, []error) {
 		return false, append(errs, errors.New("unknown TOC file type in header"))
 	}
 	df.checksumIntervalTOC = int32(binary.BigEndian.Uint32(buf[28:]))
-	if df.checksumIntervalTOC < _GROUP_FILE_HEADER_SIZE || df.checksumIntervalTOC < _GROUP_FILE_TRAILER_SIZE {
+	if df.checksumIntervalTOC < _GROUP_FILE_HEADER_SIZE {
 		closeIfCloser(fpr)
 		return false, append(errs, fmt.Errorf("TOC checksum interval is too small %d", df.checksumIntervalTOC))
 	}
@@ -191,16 +183,8 @@ func (df *GroupDirectFile) VerifyHeaderAndTrailerTOC() (bool, []error) {
 			// Keep going, might be good data available
 			df.sizeTOC, _ = df.readerTOC.Seek(0, 2) // Guess on df.sizeTOC
 		} else {
-			if !bytes.Equal(buf[:4], []byte{0, 0, 0, 0}) {
-				errs = append(errs, errors.New("first four bytes of TOC trailer are not 0s"))
-				// Keep going, might be good data available
-			}
-			if int64(binary.BigEndian.Uint64(buf[4:])) > df.sizeTOC-_GROUP_FILE_TRAILER_SIZE {
-				errs = append(errs, fmt.Errorf("TOC data ending offset recorded %d is past actual term offset %d", binary.BigEndian.Uint64(buf[4:]), df.sizeTOC-_GROUP_FILE_TRAILER_SIZE))
-				// Keep going, might be good data available
-			}
-			if !bytes.Equal(buf[12:], []byte("TERM")) {
-				errs = append(errs, errors.New("last four bytes of TOC trailer are not TERM"))
+			if !bytes.Equal(buf, []byte("TERM v0 ")) {
+				errs = append(errs, errors.New("TOC trailer is not TERM v0 "))
 				// Keep going, might be good data available
 			}
 			if (df.sizeTOC-_GROUP_FILE_HEADER_SIZE-_GROUP_FILE_TRAILER_SIZE)%_GROUP_FILE_ENTRY_SIZE != 0 {

@@ -318,11 +318,7 @@ func (store *DefaultGroupStore) sampleTOC(name string, candidateBlockID uint32, 
 				first = false
 			}
 			if n < int(store.checksumInterval) {
-				if binary.BigEndian.Uint32(fromDiskBuf[n-_GROUP_FILE_TRAILER_SIZE:]) != 0 {
-					store.logError("bad terminator size marker: %s\n", name)
-					break
-				}
-				if !bytes.Equal(fromDiskBuf[n-4:n], []byte("TERM")) {
+				if !bytes.Equal(fromDiskBuf[n-_GROUP_FILE_TRAILER_SIZE:], []byte("TERM v0 ")) {
 					store.logError("bad terminator: %s\n", name)
 					break
 				}
@@ -437,11 +433,7 @@ func (store *DefaultGroupStore) compactFile(name string, candidateBlockID uint32
 				first = false
 			}
 			if n < int(store.checksumInterval) {
-				if binary.BigEndian.Uint32(fromDiskBuf[n-_GROUP_FILE_TRAILER_SIZE:]) != 0 {
-					fp.Close()
-					return cr, fmt.Errorf("bad terminator size %s: %s", name, err)
-				}
-				if !bytes.Equal(fromDiskBuf[n-4:n], []byte("TERM")) {
+				if !bytes.Equal(fromDiskBuf[n-_GROUP_FILE_TRAILER_SIZE:], []byte("TERM v0 ")) {
 					fp.Close()
 					return cr, fmt.Errorf("bad terminator marker %s: %s", name, err)
 				}

@@ -672,8 +672,7 @@ func (store *DefaultValueStore) tocWriter() {
 	var err error
 	head := []byte("VALUESTORETOC v0                ")
 	binary.BigEndian.PutUint32(head[28:], uint32(store.checksumInterval))
-	term := make([]byte, 16)
-	copy(term[12:], "TERM")
+	term := []byte("TERM v0 ")
 OuterLoop:
 	for {
 		t := <-store.pendingTOCBlockChan
@@ -683,7 +682,6 @@ OuterLoop:
 				continue
 			}
 			if writerB != nil {
-				binary.BigEndian.PutUint64(term[4:], offsetB)
 				if _, err = writerB.Write(term); err != nil {
 					break OuterLoop
 				}
@@ -695,7 +693,6 @@ OuterLoop:
 				offsetB = 0
 			}
 			if writerA != nil {
-				binary.BigEndian.PutUint64(term[4:], offsetA)
 				if _, err = writerA.Write(term); err != nil {
 					break OuterLoop
 				}
@@ -729,7 +726,6 @@ OuterLoop:
 				// then we expect no more toc blocks for the oldest
 				// timestampnano and can close that toc file.
 				if writerB != nil {
-					binary.BigEndian.PutUint64(term[4:], offsetB)
 					if _, err = writerB.Write(term); err != nil {
 						break OuterLoop
 					}
@@ -899,11 +895,7 @@ func (store *DefaultValueStore) recovery() error {
 					first = false
 				}
 				if n < int(store.checksumInterval) {
-					if binary.BigEndian.Uint32(fromDiskBuf[n-_VALUE_FILE_TRAILER_SIZE:]) != 0 {
-						store.logError("bad terminator size marker: %s\n", names[i])
-						break
-					}
-					if !bytes.Equal(fromDiskBuf[n-4:n], []byte("TERM")) {
+					if !bytes.Equal(fromDiskBuf[n-_VALUE_FILE_TRAILER_SIZE:], []byte("TERM v0 ")) {
 						store.logError("bad terminator: %s\n", names[i])
 						break
 					}
