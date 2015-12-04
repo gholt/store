@@ -12,7 +12,8 @@ func TestGroupValuesFileReading(t *testing.T) {
 	if err != nil {
 		t.Fatal("")
 	}
-	buf := &memBuf{buf: []byte("0123456789abcdef")}
+	buf := &memBuf{buf: []byte("GROUPSTORE v0                   0123456789abcdef")}
+	binary.BigEndian.PutUint32(buf.buf[28:], 65532)
 	openReadSeeker := func(name string) (io.ReadSeeker, error) {
 		return &memFile{buf: buf}, nil
 	}
@@ -27,7 +28,7 @@ func TestGroupValuesFileReading(t *testing.T) {
 	if tsn != 12345 {
 		t.Fatal(tsn)
 	}
-	ts, v, err := fl.read(1, 2, 0, 0, 0x300, 4, 5, nil)
+	ts, v, err := fl.read(1, 2, 0, 0, 0x300, _GROUP_FILE_HEADER_SIZE+4, 5, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -37,7 +38,7 @@ func TestGroupValuesFileReading(t *testing.T) {
 	if string(v) != "45678" {
 		t.Fatal(string(v))
 	}
-	ts, v, err = fl.read(1, 2, 0, 0, 0x300|_TSB_DELETION, 4, 5, nil)
+	ts, v, err = fl.read(1, 2, 0, 0, 0x300|_TSB_DELETION, _GROUP_FILE_HEADER_SIZE+4, 5, nil)
 	if err != ErrNotFound {
 		t.Fatal(err)
 	}
@@ -47,7 +48,7 @@ func TestGroupValuesFileReading(t *testing.T) {
 	if v != nil {
 		t.Fatal(v)
 	}
-	ts, v, err = fl.read(1, 2, 0, 0, 0x300, 4, 5, nil)
+	ts, v, err = fl.read(1, 2, 0, 0, 0x300, _GROUP_FILE_HEADER_SIZE+4, 5, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -57,12 +58,11 @@ func TestGroupValuesFileReading(t *testing.T) {
 	if string(v) != "45678" {
 		t.Fatal(string(v))
 	}
-	_, _, err = fl.read(1, 2, 0, 0, 0x300, 12, 5, nil)
-	if err != io.EOF {
-		return // TODO: Yeah, I know
-		// t.Fatal(err)
+	_, _, err = fl.read(1, 2, 0, 0, 0x300, _GROUP_FILE_HEADER_SIZE+12, 5, nil)
+	if err != io.ErrUnexpectedEOF {
+		t.Fatal(err)
 	}
-	ts, v, err = fl.read(1, 2, 0, 0, 0x300, 4, 5, []byte("testing"))
+	ts, v, err = fl.read(1, 2, 0, 0, 0x300, _GROUP_FILE_HEADER_SIZE+4, 5, []byte("testing"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -73,7 +73,7 @@ func TestGroupValuesFileReading(t *testing.T) {
 		t.Fatal(string(v))
 	}
 	v = make([]byte, 0, 50)
-	ts, v, err = fl.read(1, 2, 0, 0, 0x300, 4, 5, v)
+	ts, v, err = fl.read(1, 2, 0, 0, 0x300, _GROUP_FILE_HEADER_SIZE+4, 5, v)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -83,7 +83,7 @@ func TestGroupValuesFileReading(t *testing.T) {
 	if string(v) != "45678" {
 		t.Fatal(string(v))
 	}
-	ts, v, err = fl.read(1, 2, 0, 0, 0x300, 4, 5, v)
+	ts, v, err = fl.read(1, 2, 0, 0, 0x300, _GROUP_FILE_HEADER_SIZE+4, 5, v)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -118,9 +118,8 @@ func TestGroupValuesFileWritingEmpty(t *testing.T) {
 	}
 	fl.close()
 	bl := len(buf.buf)
-	if bl != 52 {
-		return // TODO: Yeah, I know
-		// t.Fatal(bl)
+	if bl != _GROUP_FILE_HEADER_SIZE+_GROUP_FILE_TRAILER_SIZE {
+		t.Fatal(bl)
 	}
 	if string(buf.buf[:28]) != "GROUPSTORE v0               " {
 		t.Fatal(string(buf.buf[:28]))
@@ -130,9 +129,6 @@ func TestGroupValuesFileWritingEmpty(t *testing.T) {
 	}
 	if string(buf.buf[bl-8:]) != "TERM v0 " {
 		t.Fatal(string(buf.buf[bl-8:]))
-	}
-	if binary.BigEndian.Uint32(buf.buf[bl-4:]) != 0xc4f7a369 { // checksum
-		t.Fatal(binary.BigEndian.Uint32(buf.buf[bl-4:]))
 	}
 }
 
@@ -167,9 +163,8 @@ func TestGroupValuesFileWritingEmpty2(t *testing.T) {
 		t.Fatal(memBlock.fileID, fl.id)
 	}
 	bl := len(buf.buf)
-	if bl != 52 {
-		return // TODO: Yeah, I know
-		// t.Fatal(bl)
+	if bl != _GROUP_FILE_HEADER_SIZE+_GROUP_FILE_TRAILER_SIZE {
+		t.Fatal(bl)
 	}
 	if string(buf.buf[:28]) != "GROUPSTORE v0               " {
 		t.Fatal(string(buf.buf[:28]))
@@ -179,9 +174,6 @@ func TestGroupValuesFileWritingEmpty2(t *testing.T) {
 	}
 	if string(buf.buf[bl-8:]) != "TERM v0 " {
 		t.Fatal(string(buf.buf[bl-8:]))
-	}
-	if binary.BigEndian.Uint32(buf.buf[bl-4:]) != 0xc4f7a369 { // checksum
-		t.Fatal(binary.BigEndian.Uint32(buf.buf[bl-4:]))
 	}
 }
 
@@ -212,9 +204,8 @@ func TestGroupValuesFileWriting(t *testing.T) {
 	fl.write(&groupMemBlock{values: values})
 	fl.close()
 	bl := len(buf.buf)
-	if bl != 1234+52 {
-		return // TODO: Yeah, I know
-		// t.Fatal(bl)
+	if bl != 1234+_GROUP_FILE_HEADER_SIZE+_GROUP_FILE_TRAILER_SIZE {
+		t.Fatal(bl)
 	}
 	if string(buf.buf[:28]) != "GROUPSTORE v0               " {
 		t.Fatal(string(buf.buf[:28]))
@@ -222,20 +213,11 @@ func TestGroupValuesFileWriting(t *testing.T) {
 	if binary.BigEndian.Uint32(buf.buf[28:]) != store.checksumInterval {
 		t.Fatal(binary.BigEndian.Uint32(buf.buf[28:]), store.checksumInterval)
 	}
-	if !bytes.Equal(buf.buf[32:bl-20], values) {
+	if !bytes.Equal(buf.buf[_GROUP_FILE_HEADER_SIZE:bl-_GROUP_FILE_TRAILER_SIZE], values) {
 		t.Fatal("")
 	}
-	if binary.BigEndian.Uint32(buf.buf[bl-20:]) != 0 { // unused at this time
-		t.Fatal(binary.BigEndian.Uint32(buf.buf[bl-20:]))
-	}
-	if binary.BigEndian.Uint64(buf.buf[bl-16:]) != 1234+32 { // last offset
-		t.Fatal(binary.BigEndian.Uint64(buf.buf[bl-16:]))
-	}
-	if string(buf.buf[bl-8:]) != "TERM v0 " {
-		t.Fatal(string(buf.buf[bl-8:]))
-	}
-	if binary.BigEndian.Uint32(buf.buf[bl-4:]) != 0x584933ba { // checksum
-		t.Fatal(binary.BigEndian.Uint32(buf.buf[bl-4:]))
+	if string(buf.buf[bl-_GROUP_FILE_TRAILER_SIZE:]) != "TERM v0 " {
+		t.Fatal(string(buf.buf[bl-_GROUP_FILE_TRAILER_SIZE:]))
 	}
 }
 
@@ -266,9 +248,8 @@ func TestGroupValuesFileWritingMore(t *testing.T) {
 	fl.write(&groupMemBlock{values: values})
 	fl.close()
 	bl := len(buf.buf)
-	if bl != 123456+int(123512/store.checksumInterval*4)+52 {
-		return // TODO: Yeah, I know
-		// t.Fatal(bl)
+	if bl != 123456+int(123512/store.checksumInterval*4)+_GROUP_FILE_HEADER_SIZE+_GROUP_FILE_TRAILER_SIZE {
+		t.Fatal(bl)
 	}
 	if string(buf.buf[:28]) != "GROUPSTORE v0               " {
 		t.Fatal(string(buf.buf[:28]))
@@ -276,17 +257,8 @@ func TestGroupValuesFileWritingMore(t *testing.T) {
 	if binary.BigEndian.Uint32(buf.buf[28:]) != store.checksumInterval {
 		t.Fatal(binary.BigEndian.Uint32(buf.buf[28:]), store.checksumInterval)
 	}
-	if binary.BigEndian.Uint32(buf.buf[bl-20:]) != 0 { // unused at this time
-		t.Fatal(binary.BigEndian.Uint32(buf.buf[bl-20:]))
-	}
-	if binary.BigEndian.Uint64(buf.buf[bl-16:]) != 123456+32 { // last offset
-		t.Fatal(binary.BigEndian.Uint64(buf.buf[bl-16:]))
-	}
-	if string(buf.buf[bl-8:]) != "TERM v0 " {
-		t.Fatal(string(buf.buf[bl-8:]))
-	}
-	if binary.BigEndian.Uint32(buf.buf[bl-4:]) != 0x6aa30474 { // checksum
-		t.Fatal(binary.BigEndian.Uint32(buf.buf[bl-4:]))
+	if string(buf.buf[bl-_GROUP_FILE_TRAILER_SIZE:]) != "TERM v0 " {
+		t.Fatal(string(buf.buf[bl-_GROUP_FILE_TRAILER_SIZE:]))
 	}
 }
 
@@ -329,9 +301,8 @@ func TestGroupValuesFileWritingMultiple(t *testing.T) {
 		t.Fatal(memBlock2.fileID, fl.id)
 	}
 	bl := len(buf.buf)
-	if bl != 12345+54321+int(123512/store.checksumInterval*4)+52 {
-		return // TODO: Yeah, I know
-		// t.Fatal(bl)
+	if bl != 12345+54321+int(123512/store.checksumInterval*4)+_GROUP_FILE_HEADER_SIZE+_GROUP_FILE_TRAILER_SIZE {
+		t.Fatal(bl)
 	}
 	if string(buf.buf[:28]) != "GROUPSTORE v0               " {
 		t.Fatal(string(buf.buf[:28]))
@@ -339,16 +310,7 @@ func TestGroupValuesFileWritingMultiple(t *testing.T) {
 	if binary.BigEndian.Uint32(buf.buf[28:]) != store.checksumInterval {
 		t.Fatal(binary.BigEndian.Uint32(buf.buf[28:]), store.checksumInterval)
 	}
-	if binary.BigEndian.Uint32(buf.buf[bl-20:]) != 0 { // unused at this time
-		t.Fatal(binary.BigEndian.Uint32(buf.buf[bl-20:]))
-	}
-	if binary.BigEndian.Uint64(buf.buf[bl-16:]) != 12345+54321+32 { // last offset
-		t.Fatal(binary.BigEndian.Uint64(buf.buf[bl-16:]))
-	}
-	if string(buf.buf[bl-8:]) != "TERM v0 " {
-		t.Fatal(string(buf.buf[bl-8:]))
-	}
-	if binary.BigEndian.Uint32(buf.buf[bl-4:]) != 0xacac4386 { // checksum
-		t.Fatal(binary.BigEndian.Uint32(buf.buf[bl-4:]))
+	if string(buf.buf[bl-_GROUP_FILE_TRAILER_SIZE:]) != "TERM v0 " {
+		t.Fatal(string(buf.buf[bl-_GROUP_FILE_TRAILER_SIZE:]))
 	}
 }

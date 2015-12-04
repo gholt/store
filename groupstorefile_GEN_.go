@@ -1,7 +1,9 @@
 package store
 
 import (
+	"bytes"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"path"
@@ -41,6 +43,13 @@ type groupStoreFileWriteBuf struct {
 func newGroupReadFile(store *DefaultGroupStore, nameTimestamp int64, openReadSeeker func(name string) (io.ReadSeeker, error)) (*groupStoreFile, error) {
 	fl := &groupStoreFile{store: store, nameTimestamp: nameTimestamp}
 	fl.name = path.Join(store.path, fmt.Sprintf("%019d.group", fl.nameTimestamp))
+	checksumInterval, errs := readGroupHeader(fl.name, openReadSeeker)
+	for _, err := range errs {
+		store.logError("%s: %s", fl.name, err)
+	}
+	if checksumInterval == 0 {
+		return nil, errors.New("header check failed")
+	}
 	fl.readerFPs = make([]brimutil.ChecksummedReader, store.fileReaders)
 	fl.readerLocks = make([]sync.Mutex, len(fl.readerFPs))
 	fl.readerLens = make([][]byte, len(fl.readerFPs))
@@ -49,7 +58,7 @@ func newGroupReadFile(store *DefaultGroupStore, nameTimestamp int64, openReadSee
 		if err != nil {
 			return nil, err
 		}
-		fl.readerFPs[i] = brimutil.NewChecksummedReader(fp, int(store.checksumInterval), murmur3.New32)
+		fl.readerFPs[i] = brimutil.NewChecksummedReader(fp, int(checksumInterval), murmur3.New32)
 		fl.readerLens[i] = make([]byte, 4)
 	}
 	var err error
@@ -292,4 +301,28 @@ func (fl *groupStoreFile) writer() {
 		seq++
 	}
 	fl.writerDoneChan <- struct{}{}
+}
+
+// Returns the checksum interval stored in the header and any errors
+// discovered.
+func readGroupHeader(path string, openReadSeeker func(name string) (io.ReadSeeker, error)) (uint32, []error) {
+	var errs []error
+	fpr, err := openReadSeeker(path)
+	if err != nil {
+		return 0, append(errs, err)
+	}
+	defer closeIfCloser(fpr)
+	buf := make([]byte, _GROUP_FILE_HEADER_SIZE)
+	_, err = io.ReadFull(fpr, buf)
+	if err != nil {
+		return 0, append(errs, err)
+	}
+	if !bytes.Equal(buf[:28], []byte("GROUPSTORE v0               ")) {
+		return 0, append(errs, errors.New("unknown file type in header"))
+	}
+	checksumInterval := binary.BigEndian.Uint32(buf[28:])
+	if checksumInterval < _GROUP_FILE_HEADER_SIZE {
+		return 0, append(errs, fmt.Errorf("checksum interval is too small %d", checksumInterval))
+	}
+	return checksumInterval, errs
 }
