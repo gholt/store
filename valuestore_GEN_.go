@@ -768,29 +768,20 @@ func (store *DefaultValueStore) recovery() error {
 	start := time.Now()
 	fromDiskCount := 0
 	causedChangeCount := int64(0)
-	type writeReq struct {
-		keyA uint64
-		keyB uint64
-
-		timestampbits uint64
-		blockID       uint32
-		offset        uint32
-		length        uint32
-	}
 	workers := uint64(store.workers)
-	pendingBatchChans := make([]chan []writeReq, workers)
-	freeBatchChans := make([]chan []writeReq, len(pendingBatchChans))
+	pendingBatchChans := make([]chan []ValueDirectFileEntry, workers)
+	freeBatchChans := make([]chan []ValueDirectFileEntry, len(pendingBatchChans))
 	for i := 0; i < len(pendingBatchChans); i++ {
-		pendingBatchChans[i] = make(chan []writeReq, 4)
-		freeBatchChans[i] = make(chan []writeReq, 4)
+		pendingBatchChans[i] = make(chan []ValueDirectFileEntry, 3)
+		freeBatchChans[i] = make(chan []ValueDirectFileEntry, cap(pendingBatchChans[i]))
 		for j := 0; j < cap(freeBatchChans[i]); j++ {
-			freeBatchChans[i] <- make([]writeReq, store.recoveryBatchSize)
+			freeBatchChans[i] <- make([]ValueDirectFileEntry, store.recoveryBatchSize)
 		}
 	}
 	wg := &sync.WaitGroup{}
 	wg.Add(len(pendingBatchChans))
 	for i := 0; i < len(pendingBatchChans); i++ {
-		go func(pendingBatchChan chan []writeReq, freeBatchChan chan []writeReq) {
+		go func(pendingBatchChan chan []ValueDirectFileEntry, freeBatchChan chan []ValueDirectFileEntry) {
 			for {
 				batch := <-pendingBatchChan
 				if batch == nil {
@@ -798,15 +789,15 @@ func (store *DefaultValueStore) recovery() error {
 				}
 				for j := 0; j < len(batch); j++ {
 					wr := &batch[j]
-					if wr.timestampbits&_TSB_LOCAL_REMOVAL != 0 {
-						wr.blockID = 0
+					if wr.TimestampBits&_TSB_LOCAL_REMOVAL != 0 {
+						wr.BlockID = 0
 					}
 					if store.logDebug != nil {
-						if store.locmap.Set(wr.keyA, wr.keyB, wr.timestampbits, wr.blockID, wr.offset, wr.length, true) < wr.timestampbits {
+						if store.locmap.Set(wr.KeyA, wr.KeyB, wr.TimestampBits, wr.BlockID, wr.Offset, wr.Length, true) < wr.TimestampBits {
 							atomic.AddInt64(&causedChangeCount, 1)
 						}
 					} else {
-						store.locmap.Set(wr.keyA, wr.keyB, wr.timestampbits, wr.blockID, wr.offset, wr.length, true)
+						store.locmap.Set(wr.KeyA, wr.KeyB, wr.TimestampBits, wr.BlockID, wr.Offset, wr.Length, true)
 					}
 				}
 				freeBatchChan <- batch
@@ -814,10 +805,6 @@ func (store *DefaultValueStore) recovery() error {
 			wg.Done()
 		}(pendingBatchChans[i], freeBatchChans[i])
 	}
-	// fromDiskBuf := make([]byte, store.checksumInterval+4)
-	// fromDiskOverflow := make([]byte, 0, _VALUE_FILE_ENTRY_SIZE)
-	batches := make([][]writeReq, len(freeBatchChans))
-	batchesPos := make([]int, len(batches))
 	fp, err := os.Open(store.pathtoc)
 	if err != nil {
 		return err
@@ -847,171 +834,11 @@ func (store *DefaultValueStore) recovery() error {
 			continue
 		}
 		df := NewValueDirectFile(names[i][:len(names[i])-3], names[i], osOpenReadSeeker, osOpenWriteSeeker)
-		run, errs := df.VerifyHeaderAndTrailer()
-		for _, err := range errs {
+		for _, err := range df.ReadEntriesBatched(fl.id, freeBatchChans, pendingBatchChans) {
 			store.logError("error with %s: %s", names[i], err)
 		}
-		if run {
-			run, errs = df.VerifyHeaderAndTrailerTOC()
-			for _, err := range errs {
-				store.logError("error with %s: %s", names[i], err)
-			}
-		}
-		keyA, keyB, timestampbits, offset, length, err := df.FirstEntry()
-		for run && err != io.EOF {
-			if err != nil {
-				store.logError("error with %s: %s", names[i], err)
-			} else if offset != 0 {
-				k := keyB % workers
-				if batches[k] == nil {
-					batches[k] = <-freeBatchChans[k]
-					batchesPos[k] = 0
-				}
-				wr := &batches[k][batchesPos[k]]
-
-				wr.keyA = keyA
-				wr.keyB = keyB
-				wr.timestampbits = timestampbits
-				wr.blockID = fl.id
-				wr.offset = offset
-				wr.length = length
-
-				batchesPos[k]++
-				if batchesPos[k] >= store.recoveryBatchSize {
-					pendingBatchChans[k] <- batches[k]
-					batches[k] = nil
-				}
-			}
-			keyA, keyB, timestampbits, offset, length, err = df.NextEntry()
-		}
-		/*
-		   fp, err := os.Open(path.Join(store.pathtoc, names[i]))
-		   if err != nil {
-		       store.logError("error opening %s: %s\n", names[i], err)
-		       continue
-		   }
-		   checksumFailures := 0
-		   first := true
-		   terminated := false
-		   fromDiskOverflow = fromDiskOverflow[:0]
-		   for {
-		       n, err := io.ReadFull(fp, fromDiskBuf)
-		       if n < 4 {
-		           if err != io.EOF && err != io.ErrUnexpectedEOF {
-		               store.logError("error reading %s: %s\n", names[i], err)
-		           }
-		           break
-		       }
-		       n -= 4
-		       // TODO: This area is wrong, instead we should be reading the
-		       // trailer at the outset and verifying the size of the included
-		       // data; the last part of the file likely won't have a checksum.
-		       // Perhaps quicker would be to use the file size to compute where
-		       // the trailer should be. Anyway, I'll fix this later; I want to
-		       // consolidate what recovery, compaction, and auditing all do. For
-		       // now, the last few entries written to a file won't be readable.
-		       // :(
-		       if murmur3.Sum32(fromDiskBuf[:n]) != binary.BigEndian.Uint32(fromDiskBuf[n:]) {
-		           checksumFailures++
-		           // TODO: There's an issue here. The entry size is not
-		           // guaranteed to align with the checksum interval and we
-		           // probably need to throw away x bytes from the next read block
-		           // as well to get aligned again. This issue is also in
-		           // compaction.
-		       } else {
-		           j := 0
-		           if first {
-		               if !bytes.Equal(fromDiskBuf[:_VALUE_FILE_HEADER_SIZE-4], []byte("VALUESTORETOC v0            ")) {
-		                   store.logError("bad header: %s\n", names[i])
-		                   break
-		               }
-		               if binary.BigEndian.Uint32(fromDiskBuf[_VALUE_FILE_HEADER_SIZE-4:]) != store.checksumInterval {
-		                   store.logError("bad header checksum interval: %s\n", names[i])
-		                   break
-		               }
-		               j += _VALUE_FILE_HEADER_SIZE
-		               first = false
-		           }
-		           if n < int(store.checksumInterval) {
-		               if !bytes.Equal(fromDiskBuf[n-_VALUE_FILE_TRAILER_SIZE:], []byte("TERM v0 ")) {
-		                   store.logError("bad terminator: %s\n", names[i])
-		                   break
-		               }
-		               n -= _VALUE_FILE_TRAILER_SIZE
-		               terminated = true
-		           }
-		           if len(fromDiskOverflow) > 0 {
-		               j += _VALUE_FILE_ENTRY_SIZE - len(fromDiskOverflow)
-		               fromDiskOverflow = append(fromDiskOverflow, fromDiskBuf[j-_VALUE_FILE_ENTRY_SIZE+len(fromDiskOverflow):j]...)
-		               keyB := binary.BigEndian.Uint64(fromDiskOverflow[8:])
-		               k := keyB % workers
-		               if batches[k] == nil {
-		                   batches[k] = <-freeBatchChans[k]
-		                   batchesPos[k] = 0
-		               }
-		               wr := &batches[k][batchesPos[k]]
-
-		               wr.keyA = binary.BigEndian.Uint64(fromDiskOverflow)
-		               wr.keyB = keyB
-		               wr.timestampbits = binary.BigEndian.Uint64(fromDiskOverflow[16:])
-		               wr.blockID = fl.id
-		               wr.offset = binary.BigEndian.Uint32(fromDiskOverflow[24:])
-		               wr.length = binary.BigEndian.Uint32(fromDiskOverflow[28:])
-
-		               batchesPos[k]++
-		               if batchesPos[k] >= store.recoveryBatchSize {
-		                   pendingBatchChans[k] <- batches[k]
-		                   batches[k] = nil
-		               }
-		               fromDiskCount++
-		               fromDiskOverflow = fromDiskOverflow[:0]
-		           }
-		           for ; j+_VALUE_FILE_ENTRY_SIZE <= n; j += _VALUE_FILE_ENTRY_SIZE {
-		               keyB := binary.BigEndian.Uint64(fromDiskBuf[j+8:])
-		               k := keyB % workers
-		               if batches[k] == nil {
-		                   batches[k] = <-freeBatchChans[k]
-		                   batchesPos[k] = 0
-		               }
-		               wr := &batches[k][batchesPos[k]]
-
-		               wr.keyA = binary.BigEndian.Uint64(fromDiskBuf[j:])
-		               wr.keyB = keyB
-		               wr.timestampbits = binary.BigEndian.Uint64(fromDiskBuf[j+16:])
-		               wr.blockID = fl.id
-		               wr.offset = binary.BigEndian.Uint32(fromDiskBuf[j+24:])
-		               wr.length = binary.BigEndian.Uint32(fromDiskBuf[j+28:])
-
-		               batchesPos[k]++
-		               if batchesPos[k] >= store.recoveryBatchSize {
-		                   pendingBatchChans[k] <- batches[k]
-		                   batches[k] = nil
-		               }
-		               fromDiskCount++
-		           }
-		           if j != n {
-		               fromDiskOverflow = fromDiskOverflow[:n-j]
-		               copy(fromDiskOverflow, fromDiskBuf[j:])
-		           }
-		       }
-		       if err != nil && err != io.EOF && err != io.ErrUnexpectedEOF {
-		           store.logError("error reading %s: %s\n", names[i], err)
-		           break
-		       }
-		   }
-		   fp.Close()
-		   if !terminated {
-		       store.logError("early end of file: %s\n", names[i])
-		   }
-		   if checksumFailures > 0 {
-		       store.logWarning("%d checksum failures for %s\n", checksumFailures, names[i])
-		   }
-		*/
 	}
-	for i := 0; i < len(batches); i++ {
-		if batches[i] != nil {
-			pendingBatchChans[i] <- batches[i][:batchesPos[i]]
-		}
+	for i := 0; i < len(pendingBatchChans); i++ {
 		pendingBatchChans[i] <- nil
 	}
 	wg.Wait()

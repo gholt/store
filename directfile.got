@@ -24,6 +24,19 @@ const _{{.TT}}_FILE_ENTRY_SIZE = 48
 // "TERM v0 ":8
 const _{{.TT}}_FILE_TRAILER_SIZE = 8
 
+type {{.T}}DirectFileEntry struct {
+    KeyA          uint64
+    KeyB          uint64
+    {{if eq .t "group"}}
+    NameKeyA      uint64
+    NameKeyB      uint64
+    {{end}}
+    TimestampBits uint64
+    BlockID       uint32
+    Offset        uint32
+    Length        uint32
+}
+
 type {{.T}}DirectFile struct {
     path                string
     pathTOC             string
@@ -302,4 +315,67 @@ func (df *{{.T}}DirectFile) NextEntry() (uint64, uint64{{if eq .t "group"}}, uin
         length := binary.BigEndian.Uint32(buf[44:])
         return keyA, keyB, nameKeyA, nameKeyB, timestampbits, offset, length, nil
     {{end}}
+}
+
+func (df *{{.T}}DirectFile) ReadEntriesBatched(blockID uint32, freeBatchChans []chan []{{.T}}DirectFileEntry, pendingBatchChans []chan []{{.T}}DirectFileEntry) []error {
+    ok, errs := df.VerifyHeaderAndTrailer()
+    if !ok {
+        return errs
+    }
+    if ok, verrs := df.VerifyHeaderAndTrailerTOC(); !ok {
+        return append(errs, verrs...)
+    } else if verrs != nil {
+        errs = append(errs, verrs...)
+    }
+    workers := uint64(len(freeBatchChans))
+    batches := make([][]{{.T}}DirectFileEntry, workers)
+    batches[0] = <-freeBatchChans[0]
+    batchSize := len(batches[0])
+    batchesPos := make([]int, len(batches))
+    keyA, keyB{{if eq .t "group"}}, nameKeyA, nameKeyB{{end}}, timestampbits, offset, length, err := df.FirstEntry()
+    for err != io.EOF {
+        if err != nil {
+            if len(errs) < 101 {
+                errs = append(errs, err)
+            } else if len(errs) < 100 {
+                errs = append(errs, errors.New("too many errors"))
+            }
+        } else if offset != 0 {
+            k := keyB % workers
+            if batches[k] == nil {
+                batches[k] = <-freeBatchChans[k]
+                batchesPos[k] = 0
+            }
+            wr := &batches[k][batchesPos[k]]
+            {{if eq .t "value"}}
+            wr.KeyA = keyA
+            wr.KeyB = keyB
+            wr.TimestampBits = timestampbits
+            wr.BlockID = blockID
+            wr.Offset = offset
+            wr.Length = length
+            {{else}}
+            wr.KeyA = keyA
+            wr.KeyB = keyB
+            wr.NameKeyA = nameKeyA
+            wr.NameKeyB = nameKeyB
+            wr.TimestampBits = timestampbits
+            wr.BlockID = blockID
+            wr.Offset = offset
+            wr.Length = length
+            {{end}}
+            batchesPos[k]++
+            if batchesPos[k] >= batchSize {
+                pendingBatchChans[k] <- batches[k]
+                batches[k] = nil
+            }
+        }
+        keyA, keyB{{if eq .t "group"}}, nameKeyA, nameKeyB{{end}}, timestampbits, offset, length, err = df.NextEntry()
+    }
+    for i := 0; i < len(batches); i++ {
+        if batches[i] != nil {
+            pendingBatchChans[i] <- batches[i][:batchesPos[i]]
+        }
+    }
+    return errs
 }

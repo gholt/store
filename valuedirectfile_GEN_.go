@@ -21,6 +21,16 @@ const _VALUE_FILE_ENTRY_SIZE = 32
 // "TERM v0 ":8
 const _VALUE_FILE_TRAILER_SIZE = 8
 
+type ValueDirectFileEntry struct {
+	KeyA uint64
+	KeyB uint64
+
+	TimestampBits uint64
+	BlockID       uint32
+	Offset        uint32
+	Length        uint32
+}
+
 type ValueDirectFile struct {
 	path                string
 	pathTOC             string
@@ -281,4 +291,58 @@ func (df *ValueDirectFile) NextEntry() (uint64, uint64, uint64, uint32, uint32, 
 	length := binary.BigEndian.Uint32(buf[28:])
 	return keyA, keyB, timestampbits, offset, length, nil
 
+}
+
+func (df *ValueDirectFile) ReadEntriesBatched(blockID uint32, freeBatchChans []chan []ValueDirectFileEntry, pendingBatchChans []chan []ValueDirectFileEntry) []error {
+	ok, errs := df.VerifyHeaderAndTrailer()
+	if !ok {
+		return errs
+	}
+	if ok, verrs := df.VerifyHeaderAndTrailerTOC(); !ok {
+		return append(errs, verrs...)
+	} else if verrs != nil {
+		errs = append(errs, verrs...)
+	}
+	workers := uint64(len(freeBatchChans))
+	batches := make([][]ValueDirectFileEntry, workers)
+	batches[0] = <-freeBatchChans[0]
+	batchSize := len(batches[0])
+	batchesPos := make([]int, len(batches))
+	keyA, keyB, timestampbits, offset, length, err := df.FirstEntry()
+	for err != io.EOF {
+		if err != nil {
+			if len(errs) < 101 {
+				errs = append(errs, err)
+			} else if len(errs) < 100 {
+				errs = append(errs, errors.New("too many errors"))
+			}
+		} else if offset != 0 {
+			k := keyB % workers
+			if batches[k] == nil {
+				batches[k] = <-freeBatchChans[k]
+				batchesPos[k] = 0
+			}
+			wr := &batches[k][batchesPos[k]]
+
+			wr.KeyA = keyA
+			wr.KeyB = keyB
+			wr.TimestampBits = timestampbits
+			wr.BlockID = blockID
+			wr.Offset = offset
+			wr.Length = length
+
+			batchesPos[k]++
+			if batchesPos[k] >= batchSize {
+				pendingBatchChans[k] <- batches[k]
+				batches[k] = nil
+			}
+		}
+		keyA, keyB, timestampbits, offset, length, err = df.NextEntry()
+	}
+	for i := 0; i < len(batches); i++ {
+		if batches[i] != nil {
+			pendingBatchChans[i] <- batches[i][:batchesPos[i]]
+		}
+	}
+	return errs
 }
