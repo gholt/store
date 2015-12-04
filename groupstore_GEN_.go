@@ -683,7 +683,7 @@ func (store *DefaultGroupStore) fileWriter() {
 		}
 		if fl == nil {
 			var err error
-			fl, err = createGroupFile(store, osCreateWriteCloser, osOpenReadSeeker)
+			fl, err = createGroupReadWriteFile(store, osCreateWriteCloser, osOpenReadSeeker)
 			if err != nil {
 				store.logCritical("fileWriter: %s\n", err)
 				break
@@ -866,7 +866,7 @@ func (store *DefaultGroupStore) recovery() error {
 			store.logError("bad timestamp in name: %#v\n", names[i])
 			continue
 		}
-		fl, err := newGroupFile(store, namets, osOpenReadSeeker)
+		fl, err := newGroupReadFile(store, namets, osOpenReadSeeker)
 		if err != nil {
 			store.logError("error opening %s: %s\n", names[i], err)
 			continue

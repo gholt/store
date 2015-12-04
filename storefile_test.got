@@ -16,7 +16,7 @@ func Test{{.T}}ValuesFileReading(t *testing.T) {
     openReadSeeker := func(name string) (io.ReadSeeker, error) {
         return &memFile{buf: buf}, nil
     }
-    fl, err := new{{.T}}File(store, 12345, openReadSeeker)
+    fl, err := new{{.T}}ReadFile(store, 12345, openReadSeeker)
     if err != nil {
         t.Fatal("")
     }
@@ -109,7 +109,7 @@ func Test{{.T}}ValuesFileWritingEmpty(t *testing.T) {
     openReadSeeker := func(name string) (io.ReadSeeker, error) {
         return &memFile{buf: buf}, nil
     }
-    fl, err := create{{.T}}File(store, createWriteCloser, openReadSeeker)
+    fl, err := create{{.T}}ReadWriteFile(store, createWriteCloser, openReadSeeker)
     if err != nil {
         t.Fatal("")
     }
@@ -152,7 +152,7 @@ func Test{{.T}}ValuesFileWritingEmpty2(t *testing.T) {
     openReadSeeker := func(name string) (io.ReadSeeker, error) {
         return &memFile{buf: buf}, nil
     }
-    fl, err := create{{.T}}File(store, createWriteCloser, openReadSeeker)
+    fl, err := create{{.T}}ReadWriteFile(store, createWriteCloser, openReadSeeker)
     if err != nil {
         t.Fatal("")
     }
@@ -199,7 +199,7 @@ func Test{{.T}}ValuesFileWriting(t *testing.T) {
     openReadSeeker := func(name string) (io.ReadSeeker, error) {
         return &memFile{buf: buf}, nil
     }
-    fl, err := create{{.T}}File(store, createWriteCloser, openReadSeeker)
+    fl, err := create{{.T}}ReadWriteFile(store, createWriteCloser, openReadSeeker)
     if err != nil {
         t.Fatal("")
     }
@@ -253,7 +253,7 @@ func Test{{.T}}ValuesFileWritingMore(t *testing.T) {
     openReadSeeker := func(name string) (io.ReadSeeker, error) {
         return &memFile{buf: buf}, nil
     }
-    fl, err := create{{.T}}File(store, createWriteCloser, openReadSeeker)
+    fl, err := create{{.T}}ReadWriteFile(store, createWriteCloser, openReadSeeker)
     if err != nil {
         t.Fatal("")
     }
@@ -306,7 +306,7 @@ func Test{{.T}}ValuesFileWritingMultiple(t *testing.T) {
     openReadSeeker := func(name string) (io.ReadSeeker, error) {
         return &memFile{buf: buf}, nil
     }
-    fl, err := create{{.T}}File(store, createWriteCloser, openReadSeeker)
+    fl, err := create{{.T}}ReadWriteFile(store, createWriteCloser, openReadSeeker)
     if err != nil {
         t.Fatal("")
     }

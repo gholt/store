@@ -17,18 +17,18 @@ type valueStoreFile struct {
 	store                     *DefaultValueStore
 	name                      string
 	id                        uint32
-	bts                       int64
-	writerFP                  io.WriteCloser
-	atOffset                  uint32
-	freeChan                  chan *valueStoreFileWriteBuf
-	checksumChan              chan *valueStoreFileWriteBuf
-	writeChan                 chan *valueStoreFileWriteBuf
-	doneChan                  chan struct{}
-	buf                       *valueStoreFileWriteBuf
-	freeableMemBlockChanIndex int
+	nameTimestamp             int64
 	readerFPs                 []brimutil.ChecksummedReader
 	readerLocks               []sync.Mutex
 	readerLens                [][]byte
+	writerFP                  io.WriteCloser
+	writerOffset              uint32
+	writerFreeBufChan         chan *valueStoreFileWriteBuf
+	writerChecksumBufChan     chan *valueStoreFileWriteBuf
+	writerToDiskBufChan       chan *valueStoreFileWriteBuf
+	writerDoneChan            chan struct{}
+	writerCurrentBuf          *valueStoreFileWriteBuf
+	freeableMemBlockChanIndex int
 }
 
 type valueStoreFileWriteBuf struct {
@@ -38,9 +38,9 @@ type valueStoreFileWriteBuf struct {
 	memBlocks []*valueMemBlock
 }
 
-func newValueFile(store *DefaultValueStore, bts int64, openReadSeeker func(name string) (io.ReadSeeker, error)) (*valueStoreFile, error) {
-	fl := &valueStoreFile{store: store, bts: bts}
-	fl.name = path.Join(store.path, fmt.Sprintf("%019d.value", fl.bts))
+func newValueReadFile(store *DefaultValueStore, nameTimestamp int64, openReadSeeker func(name string) (io.ReadSeeker, error)) (*valueStoreFile, error) {
+	fl := &valueStoreFile{store: store, nameTimestamp: nameTimestamp}
+	fl.name = path.Join(store.path, fmt.Sprintf("%019d.value", fl.nameTimestamp))
 	fl.readerFPs = make([]brimutil.ChecksummedReader, store.fileReaders)
 	fl.readerLocks = make([]sync.Mutex, len(fl.readerFPs))
 	fl.readerLens = make([][]byte, len(fl.readerFPs))
@@ -61,29 +61,29 @@ func newValueFile(store *DefaultValueStore, bts int64, openReadSeeker func(name 
 	return fl, nil
 }
 
-func createValueFile(store *DefaultValueStore, createWriteCloser func(name string) (io.WriteCloser, error), openReadSeeker func(name string) (io.ReadSeeker, error)) (*valueStoreFile, error) {
-	fl := &valueStoreFile{store: store, bts: time.Now().UnixNano()}
-	fl.name = path.Join(store.path, fmt.Sprintf("%019d.value", fl.bts))
+func createValueReadWriteFile(store *DefaultValueStore, createWriteCloser func(name string) (io.WriteCloser, error), openReadSeeker func(name string) (io.ReadSeeker, error)) (*valueStoreFile, error) {
+	fl := &valueStoreFile{store: store, nameTimestamp: time.Now().UnixNano()}
+	fl.name = path.Join(store.path, fmt.Sprintf("%019d.value", fl.nameTimestamp))
 	fp, err := createWriteCloser(fl.name)
 	if err != nil {
 		return nil, err
 	}
 	fl.writerFP = fp
-	fl.freeChan = make(chan *valueStoreFileWriteBuf, store.workers)
+	fl.writerFreeBufChan = make(chan *valueStoreFileWriteBuf, store.workers)
 	for i := 0; i < store.workers; i++ {
-		fl.freeChan <- &valueStoreFileWriteBuf{buf: make([]byte, store.checksumInterval+4)}
+		fl.writerFreeBufChan <- &valueStoreFileWriteBuf{buf: make([]byte, store.checksumInterval+4)}
 	}
-	fl.checksumChan = make(chan *valueStoreFileWriteBuf, store.workers)
-	fl.writeChan = make(chan *valueStoreFileWriteBuf, store.workers)
-	fl.doneChan = make(chan struct{})
-	fl.buf = <-fl.freeChan
+	fl.writerChecksumBufChan = make(chan *valueStoreFileWriteBuf, store.workers)
+	fl.writerToDiskBufChan = make(chan *valueStoreFileWriteBuf, store.workers)
+	fl.writerDoneChan = make(chan struct{})
+	fl.writerCurrentBuf = <-fl.writerFreeBufChan
 	head := []byte("VALUESTORE v0                   ")
 	binary.BigEndian.PutUint32(head[28:], store.checksumInterval)
-	fl.buf.offset = uint32(copy(fl.buf.buf, head))
-	atomic.StoreUint32(&fl.atOffset, fl.buf.offset)
+	fl.writerCurrentBuf.offset = uint32(copy(fl.writerCurrentBuf.buf, head))
+	atomic.StoreUint32(&fl.writerOffset, fl.writerCurrentBuf.offset)
 	go fl.writer()
 	for i := 0; i < store.workers; i++ {
-		go fl.checksummer()
+		go fl.writingChecksummer()
 	}
 	fl.readerFPs = make([]brimutil.ChecksummedReader, store.fileReaders)
 	fl.readerLocks = make([]sync.Mutex, len(fl.readerFPs))
@@ -108,12 +108,10 @@ func createValueFile(store *DefaultValueStore, createWriteCloser func(name strin
 }
 
 func (fl *valueStoreFile) timestampnano() int64 {
-	return fl.bts
+	return fl.nameTimestamp
 }
 
 func (fl *valueStoreFile) read(keyA uint64, keyB uint64, timestampbits uint64, offset uint32, length uint32, value []byte) (uint64, []byte, error) {
-	// TODO: Add calling Verify occasionally on the readerFPs, maybe randomly
-	// inside here or maybe randomly requested by the caller.
 	if timestampbits&_TSB_DELETION != 0 {
 		return timestampbits, value, ErrNotFound
 	}
@@ -141,7 +139,7 @@ func (fl *valueStoreFile) write(memBlock *valueMemBlock) {
 		return
 	}
 	memBlock.fileID = fl.id
-	memBlock.fileOffset = atomic.LoadUint32(&fl.atOffset)
+	memBlock.fileOffset = atomic.LoadUint32(&fl.writerOffset)
 	if len(memBlock.values) < 1 {
 		fl.store.freeableMemBlockChans[fl.freeableMemBlockChanIndex] <- memBlock
 		fl.freeableMemBlockChanIndex++
@@ -152,63 +150,63 @@ func (fl *valueStoreFile) write(memBlock *valueMemBlock) {
 	}
 	left := len(memBlock.values)
 	for left > 0 {
-		n := copy(fl.buf.buf[fl.buf.offset:fl.store.checksumInterval], memBlock.values[len(memBlock.values)-left:])
-		atomic.AddUint32(&fl.atOffset, uint32(n))
-		fl.buf.offset += uint32(n)
-		if fl.buf.offset >= fl.store.checksumInterval {
-			s := fl.buf.seq
-			fl.checksumChan <- fl.buf
-			fl.buf = <-fl.freeChan
-			fl.buf.seq = s + 1
+		n := copy(fl.writerCurrentBuf.buf[fl.writerCurrentBuf.offset:fl.store.checksumInterval], memBlock.values[len(memBlock.values)-left:])
+		atomic.AddUint32(&fl.writerOffset, uint32(n))
+		fl.writerCurrentBuf.offset += uint32(n)
+		if fl.writerCurrentBuf.offset >= fl.store.checksumInterval {
+			s := fl.writerCurrentBuf.seq
+			fl.writerChecksumBufChan <- fl.writerCurrentBuf
+			fl.writerCurrentBuf = <-fl.writerFreeBufChan
+			fl.writerCurrentBuf.seq = s + 1
 		}
 		left -= n
 	}
-	if fl.buf.offset == 0 {
+	if fl.writerCurrentBuf.offset == 0 {
 		fl.store.freeableMemBlockChans[fl.freeableMemBlockChanIndex] <- memBlock
 		fl.freeableMemBlockChanIndex++
 		if fl.freeableMemBlockChanIndex >= len(fl.store.freeableMemBlockChans) {
 			fl.freeableMemBlockChanIndex = 0
 		}
 	} else {
-		fl.buf.memBlocks = append(fl.buf.memBlocks, memBlock)
+		fl.writerCurrentBuf.memBlocks = append(fl.writerCurrentBuf.memBlocks, memBlock)
 	}
 }
 
 func (fl *valueStoreFile) closeWriting() error {
-	if fl.checksumChan == nil {
+	if fl.writerChecksumBufChan == nil {
 		return nil
 	}
 	var reterr error
-	close(fl.checksumChan)
-	for i := 0; i < cap(fl.checksumChan); i++ {
-		<-fl.doneChan
+	close(fl.writerChecksumBufChan)
+	for i := 0; i < cap(fl.writerChecksumBufChan); i++ {
+		<-fl.writerDoneChan
 	}
-	fl.writeChan <- nil
-	<-fl.doneChan
+	fl.writerToDiskBufChan <- nil
+	<-fl.writerDoneChan
 	term := []byte("TERM v0 ")
 	left := len(term)
 	for left > 0 {
-		n := copy(fl.buf.buf[fl.buf.offset:fl.store.checksumInterval], term[len(term)-left:])
+		n := copy(fl.writerCurrentBuf.buf[fl.writerCurrentBuf.offset:fl.store.checksumInterval], term[len(term)-left:])
 		left -= n
-		fl.buf.offset += uint32(n)
+		fl.writerCurrentBuf.offset += uint32(n)
 		if left > 0 {
-			binary.BigEndian.PutUint32(fl.buf.buf[fl.buf.offset:], murmur3.Sum32(fl.buf.buf[:fl.buf.offset]))
-			fl.buf.offset += 4
+			binary.BigEndian.PutUint32(fl.writerCurrentBuf.buf[fl.writerCurrentBuf.offset:], murmur3.Sum32(fl.writerCurrentBuf.buf[:fl.writerCurrentBuf.offset]))
+			fl.writerCurrentBuf.offset += 4
 		}
-		if _, err := fl.writerFP.Write(fl.buf.buf[:fl.buf.offset]); err != nil {
+		if _, err := fl.writerFP.Write(fl.writerCurrentBuf.buf[:fl.writerCurrentBuf.offset]); err != nil {
 			if reterr == nil {
 				reterr = err
 			}
 			break
 		}
-		fl.buf.offset = 0
+		fl.writerCurrentBuf.offset = 0
 	}
 	if err := fl.writerFP.Close(); err != nil {
 		if reterr == nil {
 			reterr = err
 		}
 	}
-	for _, memBlock := range fl.buf.memBlocks {
+	for _, memBlock := range fl.writerCurrentBuf.memBlocks {
 		fl.store.freeableMemBlockChans[fl.freeableMemBlockChanIndex] <- memBlock
 		fl.freeableMemBlockChanIndex++
 		if fl.freeableMemBlockChanIndex >= len(fl.store.freeableMemBlockChans) {
@@ -216,11 +214,11 @@ func (fl *valueStoreFile) closeWriting() error {
 		}
 	}
 	fl.writerFP = nil
-	fl.freeChan = nil
-	fl.checksumChan = nil
-	fl.writeChan = nil
-	fl.doneChan = nil
-	fl.buf = nil
+	fl.writerFreeBufChan = nil
+	fl.writerChecksumBufChan = nil
+	fl.writerToDiskBufChan = nil
+	fl.writerDoneChan = nil
+	fl.writerCurrentBuf = nil
 	return reterr
 }
 
@@ -245,34 +243,34 @@ func (fl *valueStoreFile) close() error {
 	return reterr
 }
 
-func (fl *valueStoreFile) checksummer() {
+func (fl *valueStoreFile) writingChecksummer() {
 	for {
-		buf := <-fl.checksumChan
+		buf := <-fl.writerChecksumBufChan
 		if buf == nil {
 			break
 		}
 		binary.BigEndian.PutUint32(buf.buf[fl.store.checksumInterval:], murmur3.Sum32(buf.buf[:fl.store.checksumInterval]))
-		fl.writeChan <- buf
+		fl.writerToDiskBufChan <- buf
 	}
-	fl.doneChan <- struct{}{}
+	fl.writerDoneChan <- struct{}{}
 }
 
 func (fl *valueStoreFile) writer() {
 	var seq int
 	lastWasNil := false
 	for {
-		buf := <-fl.writeChan
+		buf := <-fl.writerToDiskBufChan
 		if buf == nil {
 			if lastWasNil {
 				break
 			}
 			lastWasNil = true
-			fl.writeChan <- nil
+			fl.writerToDiskBufChan <- nil
 			continue
 		}
 		lastWasNil = false
 		if buf.seq != seq {
-			fl.writeChan <- buf
+			fl.writerToDiskBufChan <- buf
 			continue
 		}
 		if _, err := fl.writerFP.Write(buf.buf); err != nil {
@@ -290,8 +288,8 @@ func (fl *valueStoreFile) writer() {
 			buf.memBlocks = buf.memBlocks[:0]
 		}
 		buf.offset = 0
-		fl.freeChan <- buf
+		fl.writerFreeBufChan <- buf
 		seq++
 	}
-	fl.doneChan <- struct{}{}
+	fl.writerDoneChan <- struct{}{}
 }

@@ -704,7 +704,7 @@ func (store *Default{{.T}}Store) fileWriter() {
         }
         if fl == nil {
             var err error
-            fl, err = create{{.T}}File(store, osCreateWriteCloser, osOpenReadSeeker)
+            fl, err = create{{.T}}ReadWriteFile(store, osCreateWriteCloser, osOpenReadSeeker)
             if err != nil {
                 store.logCritical("fileWriter: %s\n", err)
                 break
@@ -887,7 +887,7 @@ func (store *Default{{.T}}Store) recovery() error {
             store.logError("bad timestamp in name: %#v\n", names[i])
             continue
         }
-        fl, err := new{{.T}}File(store, namets, osOpenReadSeeker)
+        fl, err := new{{.T}}ReadFile(store, namets, osOpenReadSeeker)
         if err != nil {
             store.logError("error opening %s: %s\n", names[i], err)
             continue

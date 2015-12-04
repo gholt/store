@@ -16,7 +16,7 @@ func TestGroupValuesFileReading(t *testing.T) {
 	openReadSeeker := func(name string) (io.ReadSeeker, error) {
 		return &memFile{buf: buf}, nil
 	}
-	fl, err := newGroupFile(store, 12345, openReadSeeker)
+	fl, err := newGroupReadFile(store, 12345, openReadSeeker)
 	if err != nil {
 		t.Fatal("")
 	}
@@ -109,7 +109,7 @@ func TestGroupValuesFileWritingEmpty(t *testing.T) {
 	openReadSeeker := func(name string) (io.ReadSeeker, error) {
 		return &memFile{buf: buf}, nil
 	}
-	fl, err := createGroupFile(store, createWriteCloser, openReadSeeker)
+	fl, err := createGroupReadWriteFile(store, createWriteCloser, openReadSeeker)
 	if err != nil {
 		t.Fatal("")
 	}
@@ -152,7 +152,7 @@ func TestGroupValuesFileWritingEmpty2(t *testing.T) {
 	openReadSeeker := func(name string) (io.ReadSeeker, error) {
 		return &memFile{buf: buf}, nil
 	}
-	fl, err := createGroupFile(store, createWriteCloser, openReadSeeker)
+	fl, err := createGroupReadWriteFile(store, createWriteCloser, openReadSeeker)
 	if err != nil {
 		t.Fatal("")
 	}
@@ -199,7 +199,7 @@ func TestGroupValuesFileWriting(t *testing.T) {
 	openReadSeeker := func(name string) (io.ReadSeeker, error) {
 		return &memFile{buf: buf}, nil
 	}
-	fl, err := createGroupFile(store, createWriteCloser, openReadSeeker)
+	fl, err := createGroupReadWriteFile(store, createWriteCloser, openReadSeeker)
 	if err != nil {
 		t.Fatal("")
 	}
@@ -253,7 +253,7 @@ func TestGroupValuesFileWritingMore(t *testing.T) {
 	openReadSeeker := func(name string) (io.ReadSeeker, error) {
 		return &memFile{buf: buf}, nil
 	}
-	fl, err := createGroupFile(store, createWriteCloser, openReadSeeker)
+	fl, err := createGroupReadWriteFile(store, createWriteCloser, openReadSeeker)
 	if err != nil {
 		t.Fatal("")
 	}
@@ -306,7 +306,7 @@ func TestGroupValuesFileWritingMultiple(t *testing.T) {
 	openReadSeeker := func(name string) (io.ReadSeeker, error) {
 		return &memFile{buf: buf}, nil
 	}
-	fl, err := createGroupFile(store, createWriteCloser, openReadSeeker)
+	fl, err := createGroupReadWriteFile(store, createWriteCloser, openReadSeeker)
 	if err != nil {
 		t.Fatal("")
 	}
