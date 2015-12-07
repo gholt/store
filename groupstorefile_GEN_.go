@@ -43,20 +43,19 @@ type groupStoreFileWriteBuf struct {
 func newGroupReadFile(store *DefaultGroupStore, nameTimestamp int64, openReadSeeker func(name string) (io.ReadSeeker, error)) (*groupStoreFile, error) {
 	fl := &groupStoreFile{store: store, nameTimestamp: nameTimestamp}
 	fl.name = path.Join(store.path, fmt.Sprintf("%019d.group", fl.nameTimestamp))
-	checksumInterval, errs := readGroupHeader(fl.name, openReadSeeker)
-	for _, err := range errs {
-		store.logError("%s: %s", fl.name, err)
-	}
-	if checksumInterval == 0 {
-		return nil, errors.New("header check failed")
-	}
 	fl.readerFPs = make([]brimutil.ChecksummedReader, store.fileReaders)
 	fl.readerLocks = make([]sync.Mutex, len(fl.readerFPs))
 	fl.readerLens = make([][]byte, len(fl.readerFPs))
+	var checksumInterval uint32
 	for i := 0; i < len(fl.readerFPs); i++ {
 		fp, err := openReadSeeker(fl.name)
 		if err != nil {
 			return nil, err
+		}
+		if i == 0 {
+			if checksumInterval, err = readGroupHeader(fp); err != nil {
+				return nil, err
+			}
 		}
 		fl.readerFPs[i] = brimutil.NewChecksummedReader(fp, int(checksumInterval), murmur3.New32)
 		fl.readerLens[i] = make([]byte, 4)
@@ -303,26 +302,41 @@ func (fl *groupStoreFile) writer() {
 	fl.writerDoneChan <- struct{}{}
 }
 
-// Returns the checksum interval stored in the header and any errors
-// discovered.
-func readGroupHeader(path string, openReadSeeker func(name string) (io.ReadSeeker, error)) (uint32, []error) {
-	var errs []error
-	fpr, err := openReadSeeker(path)
-	if err != nil {
-		return 0, append(errs, err)
-	}
-	defer closeIfCloser(fpr)
+// Returns the checksum interval stored in the header for a value file or any
+// error discovered; fpr is assumed to be at file position 0.
+func readGroupHeader(fpr io.ReadSeeker) (uint32, error) {
+	return _readGroupHeader(fpr, false)
+}
+
+// Returns the checksum interval stored in the header for a TOC file or any
+// error discovered; fpr is assumed to be at file position 0.
+func readGroupHeaderTOC(fpr io.ReadSeeker) (uint32, error) {
+	return _readGroupHeader(fpr, true)
+}
+
+func _readGroupHeader(fpr io.ReadSeeker, toc bool) (uint32, error) {
+	// var errs []error
+	// fpr, err := openReadSeeker(path)
+	// if err != nil {
+	//     return 0, append(errs, err)
+	// }
+	// defer closeIfCloser(fpr)
 	buf := make([]byte, _GROUP_FILE_HEADER_SIZE)
-	_, err = io.ReadFull(fpr, buf)
-	if err != nil {
-		return 0, append(errs, err)
+	if _, err := io.ReadFull(fpr, buf); err != nil {
+		return 0, err
 	}
-	if !bytes.Equal(buf[:28], []byte("GROUPSTORE v0               ")) {
-		return 0, append(errs, errors.New("unknown file type in header"))
+	var cmp []byte
+	if toc {
+		cmp = []byte("GROUPSTORETOC v0            ")
+	} else {
+		cmp = []byte("GROUPSTORE v0               ")
+	}
+	if !bytes.Equal(buf[:28], cmp) {
+		return 0, errors.New("unknown file type in header")
 	}
 	checksumInterval := binary.BigEndian.Uint32(buf[28:])
 	if checksumInterval < _GROUP_FILE_HEADER_SIZE {
-		return 0, append(errs, fmt.Errorf("checksum interval is too small %d", checksumInterval))
+		return 0, fmt.Errorf("checksum interval is too small %d", checksumInterval)
 	}
-	return checksumInterval, errs
+	return checksumInterval, nil
 }
