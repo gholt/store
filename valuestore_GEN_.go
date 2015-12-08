@@ -671,7 +671,11 @@ func (store *DefaultValueStore) tocWriter() {
 	var err error
 	head := []byte("VALUESTORETOC v0                ")
 	binary.BigEndian.PutUint32(head[28:], uint32(store.checksumInterval))
-	term := []byte("TERM v0 ")
+	// Make sure any trailing data is covered by a checksum by writing an
+	// additional block of zeros (entry offsets of zero are ignored on
+	// recovery).
+	term := make([]byte, store.checksumInterval)
+	copy(term[len(term)-8:], []byte("TERM v0 "))
 OuterLoop:
 	for {
 		t := <-store.pendingTOCBlockChan

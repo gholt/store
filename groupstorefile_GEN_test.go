@@ -118,7 +118,7 @@ func TestGroupValuesFileWritingEmpty(t *testing.T) {
 	}
 	fl.close()
 	bl := len(buf.buf)
-	if bl != _GROUP_FILE_HEADER_SIZE+_GROUP_FILE_TRAILER_SIZE {
+	if bl != _GROUP_FILE_HEADER_SIZE+cfg.ChecksumInterval+4 {
 		t.Fatal(bl)
 	}
 	if string(buf.buf[:28]) != "GROUPSTORE v0               " {
@@ -163,7 +163,7 @@ func TestGroupValuesFileWritingEmpty2(t *testing.T) {
 		t.Fatal(memBlock.fileID, fl.id)
 	}
 	bl := len(buf.buf)
-	if bl != _GROUP_FILE_HEADER_SIZE+_GROUP_FILE_TRAILER_SIZE {
+	if bl != _GROUP_FILE_HEADER_SIZE+cfg.ChecksumInterval+4 {
 		t.Fatal(bl)
 	}
 	if string(buf.buf[:28]) != "GROUPSTORE v0               " {
@@ -204,7 +204,7 @@ func TestGroupValuesFileWriting(t *testing.T) {
 	fl.write(&groupMemBlock{values: values})
 	fl.close()
 	bl := len(buf.buf)
-	if bl != 1234+_GROUP_FILE_HEADER_SIZE+_GROUP_FILE_TRAILER_SIZE {
+	if bl != 1234+_GROUP_FILE_HEADER_SIZE+cfg.ChecksumInterval+4 {
 		t.Fatal(bl)
 	}
 	if string(buf.buf[:28]) != "GROUPSTORE v0               " {
@@ -213,7 +213,7 @@ func TestGroupValuesFileWriting(t *testing.T) {
 	if binary.BigEndian.Uint32(buf.buf[28:]) != store.checksumInterval {
 		t.Fatal(binary.BigEndian.Uint32(buf.buf[28:]), store.checksumInterval)
 	}
-	if !bytes.Equal(buf.buf[_GROUP_FILE_HEADER_SIZE:bl-_GROUP_FILE_TRAILER_SIZE], values) {
+	if !bytes.Equal(buf.buf[_GROUP_FILE_HEADER_SIZE:bl-cfg.ChecksumInterval-4], values) {
 		t.Fatal("")
 	}
 	if string(buf.buf[bl-_GROUP_FILE_TRAILER_SIZE:]) != "TERM v0 " {
@@ -248,8 +248,10 @@ func TestGroupValuesFileWritingMore(t *testing.T) {
 	fl.write(&groupMemBlock{values: values})
 	fl.close()
 	bl := len(buf.buf)
-	if bl != 123456+int(123512/store.checksumInterval*4)+_GROUP_FILE_HEADER_SIZE+_GROUP_FILE_TRAILER_SIZE {
-		t.Fatal(bl)
+	dl := _GROUP_FILE_HEADER_SIZE + 123456 + cfg.ChecksumInterval
+	el := dl + dl/cfg.ChecksumInterval*4
+	if bl != el {
+		t.Fatal(bl, el)
 	}
 	if string(buf.buf[:28]) != "GROUPSTORE v0               " {
 		t.Fatal(string(buf.buf[:28]))
@@ -301,8 +303,10 @@ func TestGroupValuesFileWritingMultiple(t *testing.T) {
 		t.Fatal(memBlock2.fileID, fl.id)
 	}
 	bl := len(buf.buf)
-	if bl != 12345+54321+int(123512/store.checksumInterval*4)+_GROUP_FILE_HEADER_SIZE+_GROUP_FILE_TRAILER_SIZE {
-		t.Fatal(bl)
+	dl := _GROUP_FILE_HEADER_SIZE + 12345 + 54321 + cfg.ChecksumInterval
+	el := dl + dl/cfg.ChecksumInterval*4
+	if bl != el {
+		t.Fatal(bl, el)
 	}
 	if string(buf.buf[:28]) != "GROUPSTORE v0               " {
 		t.Fatal(string(buf.buf[:28]))

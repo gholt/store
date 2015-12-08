@@ -201,7 +201,11 @@ func (fl *valueStoreFile) closeWriting() error {
 	}
 	fl.writerToDiskBufChan <- nil
 	<-fl.writerDoneChan
-	term := []byte("TERM v0 ")
+	// Make sure any trailing data is covered by a checksum by writing an
+	// additional block of zeros (since this is a value file and the TOC won't
+	// reference these additional locations, they are effectively ignored).
+	term := make([]byte, fl.store.checksumInterval)
+	copy(term[len(term)-8:], []byte("TERM v0 "))
 	left := len(term)
 	for left > 0 {
 		n := copy(fl.writerCurrentBuf.buf[fl.writerCurrentBuf.offset:fl.store.checksumInterval], term[len(term)-left:])
@@ -408,28 +412,33 @@ func valueReadTOCEntriesBatched(fpr io.ReadSeeker, blockID uint32, freeBatchChan
 			}
 		}
 		for len(rbuf) >= _VALUE_FILE_ENTRY_SIZE {
-			keyB := binary.BigEndian.Uint64(rbuf[8:])
-			k := keyB % workers
-			if batches[k] == nil {
-				batches[k] = <-freeBatchChans[k]
-				batchesPos[k] = 0
-			}
-			wr := &batches[k][batchesPos[k]]
 
-			wr.KeyA = binary.BigEndian.Uint64(rbuf)
-			wr.KeyB = keyB
-			wr.TimestampBits = binary.BigEndian.Uint64(rbuf[16:])
-			wr.BlockID = blockID
-			wr.Offset = binary.BigEndian.Uint32(rbuf[24:])
-			wr.Length = binary.BigEndian.Uint32(rbuf[28:])
+			offset := binary.BigEndian.Uint32(rbuf[24:])
 
-			batchesPos[k]++
-			if batchesPos[k] >= batchSize {
-				pendingBatchChans[k] <- batches[k]
-				batches[k] = nil
+			if offset != 0 {
+				fromDiskCount++
+				keyB := binary.BigEndian.Uint64(rbuf[8:])
+				k := keyB % workers
+				if batches[k] == nil {
+					batches[k] = <-freeBatchChans[k]
+					batchesPos[k] = 0
+				}
+				wr := &batches[k][batchesPos[k]]
+
+				wr.KeyA = binary.BigEndian.Uint64(rbuf)
+				wr.KeyB = keyB
+				wr.TimestampBits = binary.BigEndian.Uint64(rbuf[16:])
+				wr.BlockID = blockID
+				wr.Offset = offset
+				wr.Length = binary.BigEndian.Uint32(rbuf[28:])
+
+				batchesPos[k]++
+				if batchesPos[k] >= batchSize {
+					pendingBatchChans[k] <- batches[k]
+					batches[k] = nil
+				}
 			}
 			rbuf = rbuf[_VALUE_FILE_ENTRY_SIZE:]
-			fromDiskCount++
 		}
 		rpos = copy(buf, rbuf)
 	}
