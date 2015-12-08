@@ -358,14 +358,14 @@ type groupTOCEntry struct {
 	Length        uint32
 }
 
-func groupReadTOCEntriesBatched(fpr io.ReadSeeker, blockID uint32, freeBatchChans []chan []groupTOCEntry, pendingBatchChans []chan []groupTOCEntry) []error {
+func groupReadTOCEntriesBatched(fpr io.ReadSeeker, blockID uint32, freeBatchChans []chan []groupTOCEntry, pendingBatchChans []chan []groupTOCEntry) (int, []error) {
 	// There is an assumption that the checksum interval is greater than the
 	// _GROUP_FILE_HEADER_SIZE and that the _GROUP_FILE_ENTRY_SIZE is
 	// greater than the _GROUP_FILE_TRAILER_SIZE.
 	var errs []error
 	var checksumInterval int
 	if ci, err := readGroupHeaderTOC(fpr); err != nil {
-		return append(errs, err)
+		return 0, append(errs, err)
 	} else {
 		checksumInterval = int(ci)
 	}
@@ -379,6 +379,7 @@ func groupReadTOCEntriesBatched(fpr io.ReadSeeker, blockID uint32, freeBatchChan
 	batches[0] = <-freeBatchChans[0]
 	batchSize := len(batches[0])
 	batchesPos := make([]int, len(batches))
+	fromDiskCount := 0
 	more := true
 	for more {
 		rbuf := buf[rpos : rpos+checksumInterval+4]
@@ -433,6 +434,7 @@ func groupReadTOCEntriesBatched(fpr io.ReadSeeker, blockID uint32, freeBatchChan
 				batches[k] = nil
 			}
 			rbuf = rbuf[_GROUP_FILE_ENTRY_SIZE:]
+			fromDiskCount++
 		}
 		rpos = copy(buf, rbuf)
 	}
@@ -444,5 +446,5 @@ func groupReadTOCEntriesBatched(fpr io.ReadSeeker, blockID uint32, freeBatchChan
 	if checksumErrors > 0 {
 		errs = append(errs, fmt.Errorf("there were %d checksum errors", checksumErrors))
 	}
-	return errs
+	return fromDiskCount, errs
 }

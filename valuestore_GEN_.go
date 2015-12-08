@@ -766,7 +766,6 @@ OuterLoop:
 
 func (store *DefaultValueStore) recovery() error {
 	start := time.Now()
-	fromDiskCount := int64(0)
 	causedChangeCount := int64(0)
 	workers := uint64(store.workers)
 	pendingBatchChans := make([]chan []valueTOCEntry, workers)
@@ -788,7 +787,6 @@ func (store *DefaultValueStore) recovery() error {
 					break
 				}
 				for j := 0; j < len(batch); j++ {
-					atomic.AddInt64(&fromDiskCount, 1)
 					wr := &batch[j]
 					if wr.TimestampBits&_TSB_LOCAL_REMOVAL != 0 {
 						wr.BlockID = 0
@@ -815,6 +813,7 @@ func (store *DefaultValueStore) recovery() error {
 	if err != nil {
 		return err
 	}
+	fromDiskCount := 0
 	sort.Strings(names)
 	for i := 0; i < len(names); i++ {
 		if !strings.HasSuffix(names[i], ".valuetoc") {
@@ -840,7 +839,9 @@ func (store *DefaultValueStore) recovery() error {
 			closeIfCloser(fpr)
 			continue
 		}
-		for _, err := range valueReadTOCEntriesBatched(fpr, fl.id, freeBatchChans, pendingBatchChans) {
+		fdc, errs := valueReadTOCEntriesBatched(fpr, fl.id, freeBatchChans, pendingBatchChans)
+		fromDiskCount += fdc
+		for _, err := range errs {
 			store.logError("error with %s: %s", names[i], err)
 		}
 		closeIfCloser(fpr)
