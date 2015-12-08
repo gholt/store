@@ -15,6 +15,16 @@ import (
 	"gopkg.in/gholt/brimutil.v1"
 )
 
+//    "GROUPSTORETOC v0            ":28, checksumInterval:4
+// or "GROUPSTORE v0               ":28, checksumInterval:4
+const _GROUP_FILE_HEADER_SIZE = 32
+
+// keyA:8, keyB:8, nameKeyA:8, nameKeyB:8, timestampbits:8, offset:4, length:4
+const _GROUP_FILE_ENTRY_SIZE = 48
+
+// "TERM v0 ":8
+const _GROUP_FILE_TRAILER_SIZE = 8
+
 type groupStoreFile struct {
 	store                     *DefaultGroupStore
 	name                      string
@@ -315,12 +325,6 @@ func readGroupHeaderTOC(fpr io.ReadSeeker) (uint32, error) {
 }
 
 func _readGroupHeader(fpr io.ReadSeeker, toc bool) (uint32, error) {
-	// var errs []error
-	// fpr, err := openReadSeeker(path)
-	// if err != nil {
-	//     return 0, append(errs, err)
-	// }
-	// defer closeIfCloser(fpr)
 	buf := make([]byte, _GROUP_FILE_HEADER_SIZE)
 	if _, err := io.ReadFull(fpr, buf); err != nil {
 		return 0, err
@@ -339,4 +343,106 @@ func _readGroupHeader(fpr io.ReadSeeker, toc bool) (uint32, error) {
 		return 0, fmt.Errorf("checksum interval is too small %d", checksumInterval)
 	}
 	return checksumInterval, nil
+}
+
+type groupTOCEntry struct {
+	KeyA uint64
+	KeyB uint64
+
+	NameKeyA uint64
+	NameKeyB uint64
+
+	TimestampBits uint64
+	BlockID       uint32
+	Offset        uint32
+	Length        uint32
+}
+
+func groupReadTOCEntriesBatched(fpr io.ReadSeeker, blockID uint32, freeBatchChans []chan []groupTOCEntry, pendingBatchChans []chan []groupTOCEntry) []error {
+	// There is an assumption that the checksum interval is greater than the
+	// _GROUP_FILE_HEADER_SIZE and that the _GROUP_FILE_ENTRY_SIZE is
+	// greater than the _GROUP_FILE_TRAILER_SIZE.
+	var errs []error
+	var checksumInterval int
+	if ci, err := readGroupHeaderTOC(fpr); err != nil {
+		return append(errs, err)
+	} else {
+		checksumInterval = int(ci)
+	}
+	fpr.Seek(0, 0)
+	buf := make([]byte, checksumInterval+4+_GROUP_FILE_ENTRY_SIZE)
+	first := true
+	rpos := 0
+	checksumErrors := 0
+	workers := uint64(len(freeBatchChans))
+	batches := make([][]groupTOCEntry, workers)
+	batches[0] = <-freeBatchChans[0]
+	batchSize := len(batches[0])
+	batchesPos := make([]int, len(batches))
+	more := true
+	for more {
+		rbuf := buf[rpos : rpos+checksumInterval+4]
+		if n, err := io.ReadFull(fpr, rbuf); err == io.ErrUnexpectedEOF || err == io.EOF {
+			rbuf = rbuf[:n]
+			more = false
+		} else if err != nil {
+			errs = append(errs, err)
+			break
+		} else {
+			cbuf := rbuf[len(rbuf)-4:]
+			rbuf = rbuf[:len(rbuf)-4]
+			if binary.BigEndian.Uint32(cbuf) != murmur3.Sum32(rbuf) {
+				checksumErrors++
+				// TODO: Have to realign here
+			}
+		}
+		if first {
+			rbuf = rbuf[_GROUP_FILE_HEADER_SIZE:]
+			first = false
+		} else {
+			rbuf = buf[:rpos+len(rbuf)]
+		}
+		if !more {
+			if bytes.Equal(rbuf[len(rbuf)-_GROUP_FILE_TRAILER_SIZE:], []byte("TERM v0 ")) {
+				rbuf = rbuf[:len(rbuf)-_GROUP_FILE_TRAILER_SIZE]
+			} else {
+				errs = append(errs, errors.New("no terminator found"))
+			}
+		}
+		for len(rbuf) >= _GROUP_FILE_ENTRY_SIZE {
+			keyB := binary.BigEndian.Uint64(rbuf[8:])
+			k := keyB % workers
+			if batches[k] == nil {
+				batches[k] = <-freeBatchChans[k]
+				batchesPos[k] = 0
+			}
+			wr := &batches[k][batchesPos[k]]
+
+			wr.KeyA = binary.BigEndian.Uint64(rbuf)
+			wr.KeyB = keyB
+			wr.NameKeyA = binary.BigEndian.Uint64(rbuf[16:])
+			wr.NameKeyB = binary.BigEndian.Uint64(rbuf[24:])
+			wr.TimestampBits = binary.BigEndian.Uint64(rbuf[32:])
+			wr.BlockID = blockID
+			wr.Offset = binary.BigEndian.Uint32(rbuf[40:])
+			wr.Length = binary.BigEndian.Uint32(rbuf[44:])
+
+			batchesPos[k]++
+			if batchesPos[k] >= batchSize {
+				pendingBatchChans[k] <- batches[k]
+				batches[k] = nil
+			}
+			rbuf = rbuf[_GROUP_FILE_ENTRY_SIZE:]
+		}
+		rpos = copy(buf, rbuf)
+	}
+	for i := 0; i < len(batches); i++ {
+		if batches[i] != nil {
+			pendingBatchChans[i] <- batches[i][:batchesPos[i]]
+		}
+	}
+	if checksumErrors > 0 {
+		errs = append(errs, fmt.Errorf("there were %d checksum errors", checksumErrors))
+	}
+	return errs
 }

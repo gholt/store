@@ -15,6 +15,19 @@ import (
     "gopkg.in/gholt/brimutil.v1"
 )
 
+//    "{{.TT}}STORETOC v0            ":28, checksumInterval:4
+// or "{{.TT}}STORE v0               ":28, checksumInterval:4
+const _{{.TT}}_FILE_HEADER_SIZE = 32
+{{if eq .t "value"}}
+// keyA:8, keyB:8, timestampbits:8, offset:4, length:4
+const _{{.TT}}_FILE_ENTRY_SIZE = 32
+{{else}}
+// keyA:8, keyB:8, nameKeyA:8, nameKeyB:8, timestampbits:8, offset:4, length:4
+const _{{.TT}}_FILE_ENTRY_SIZE = 48
+{{end}}
+// "TERM v0 ":8
+const _{{.TT}}_FILE_TRAILER_SIZE = 8
+
 type {{.t}}StoreFile struct {
     store                       *Default{{.T}}Store
     name                        string
@@ -315,12 +328,6 @@ func read{{.T}}HeaderTOC(fpr io.ReadSeeker) (uint32, error) {
 }
 
 func _read{{.T}}Header(fpr io.ReadSeeker, toc bool) (uint32, error) {
-    // var errs []error
-    // fpr, err := openReadSeeker(path)
-    // if err != nil {
-    //     return 0, append(errs, err)
-    // }
-    // defer closeIfCloser(fpr)
     buf := make([]byte, _{{.TT}}_FILE_HEADER_SIZE)
     if _, err := io.ReadFull(fpr, buf); err != nil {
         return 0, err
@@ -339,4 +346,113 @@ func _read{{.T}}Header(fpr io.ReadSeeker, toc bool) (uint32, error) {
         return 0, fmt.Errorf("checksum interval is too small %d", checksumInterval)
     }
     return checksumInterval, nil
+}
+
+type {{.t}}TOCEntry struct {
+    KeyA          uint64
+    KeyB          uint64
+    {{if eq .t "group"}}
+    NameKeyA      uint64
+    NameKeyB      uint64
+    {{end}}
+    TimestampBits uint64
+    BlockID       uint32
+    Offset        uint32
+    Length        uint32
+}
+
+func {{.t}}ReadTOCEntriesBatched(fpr io.ReadSeeker, blockID uint32, freeBatchChans []chan []{{.t}}TOCEntry, pendingBatchChans []chan []{{.t}}TOCEntry) []error {
+    // There is an assumption that the checksum interval is greater than the
+    // _{{.TT}}_FILE_HEADER_SIZE and that the _{{.TT}}_FILE_ENTRY_SIZE is
+    // greater than the _{{.TT}}_FILE_TRAILER_SIZE.
+    var errs []error
+    var checksumInterval int
+    if ci, err := read{{.T}}HeaderTOC(fpr); err != nil {
+        return append(errs, err)
+    } else {
+        checksumInterval = int(ci)
+    }
+    fpr.Seek(0, 0)
+    buf := make([]byte, checksumInterval+4+_{{.TT}}_FILE_ENTRY_SIZE)
+    first := true
+    rpos := 0
+    checksumErrors := 0
+    workers := uint64(len(freeBatchChans))
+    batches := make([][]{{.t}}TOCEntry, workers)
+    batches[0] = <-freeBatchChans[0]
+    batchSize := len(batches[0])
+    batchesPos := make([]int, len(batches))
+    more := true
+    for more {
+        rbuf := buf[rpos:rpos+checksumInterval+4]
+        if n, err := io.ReadFull(fpr, rbuf); err == io.ErrUnexpectedEOF || err == io.EOF {
+            rbuf = rbuf[:n]
+            more = false
+        } else if err != nil {
+            errs = append(errs, err)
+            break
+        } else {
+            cbuf := rbuf[len(rbuf)-4:]
+            rbuf = rbuf[:len(rbuf)-4]
+            if binary.BigEndian.Uint32(cbuf) != murmur3.Sum32(rbuf) {
+                checksumErrors++
+                // TODO: Have to realign here
+            }
+        }
+        if first {
+            rbuf = rbuf[_{{.TT}}_FILE_HEADER_SIZE:]
+            first = false
+        } else {
+            rbuf = buf[:rpos+len(rbuf)]
+        }
+        if !more {
+            if bytes.Equal(rbuf[len(rbuf)-_{{.TT}}_FILE_TRAILER_SIZE:], []byte("TERM v0 ")) {
+                rbuf = rbuf[:len(rbuf)-_{{.TT}}_FILE_TRAILER_SIZE]
+            } else {
+                errs = append(errs, errors.New("no terminator found"))
+            }
+        }
+        for len(rbuf) >= _{{.TT}}_FILE_ENTRY_SIZE {
+            keyB := binary.BigEndian.Uint64(rbuf[8:])
+            k := keyB % workers
+            if batches[k] == nil {
+                batches[k] = <-freeBatchChans[k]
+                batchesPos[k] = 0
+            }
+            wr := &batches[k][batchesPos[k]]
+            {{if eq .t "value"}}
+            wr.KeyA = binary.BigEndian.Uint64(rbuf)
+            wr.KeyB = keyB
+            wr.TimestampBits = binary.BigEndian.Uint64(rbuf[16:])
+            wr.BlockID = blockID
+            wr.Offset = binary.BigEndian.Uint32(rbuf[24:])
+            wr.Length = binary.BigEndian.Uint32(rbuf[28:])
+            {{else}}
+            wr.KeyA = binary.BigEndian.Uint64(rbuf)
+            wr.KeyB = keyB
+            wr.NameKeyA = binary.BigEndian.Uint64(rbuf[16:])
+            wr.NameKeyB = binary.BigEndian.Uint64(rbuf[24:])
+            wr.TimestampBits = binary.BigEndian.Uint64(rbuf[32:])
+            wr.BlockID = blockID
+            wr.Offset = binary.BigEndian.Uint32(rbuf[40:])
+            wr.Length = binary.BigEndian.Uint32(rbuf[44:])
+            {{end}}
+            batchesPos[k]++
+            if batchesPos[k] >= batchSize {
+                pendingBatchChans[k] <- batches[k]
+                batches[k] = nil
+            }
+            rbuf = rbuf[_{{.TT}}_FILE_ENTRY_SIZE:]
+        }
+        rpos = copy(buf, rbuf)
+    }
+    for i := 0; i < len(batches); i++ {
+        if batches[i] != nil {
+            pendingBatchChans[i] <- batches[i][:batchesPos[i]]
+        }
+    }
+    if checksumErrors > 0 {
+        errs = append(errs, fmt.Errorf("there were %d checksum errors", checksumErrors))
+    }
+    return errs
 }

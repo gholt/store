@@ -84,8 +84,6 @@ package store
 //go:generate got memblock.got groupmemblock_GEN_.go TT=GROUP T=Group t=group
 //go:generate got memblock_test.got valuememblock_GEN_test.go TT=VALUE T=Value t=value
 //go:generate got memblock_test.got groupmemblock_GEN_test.go TT=GROUP T=Group t=group
-//go:generate got directfile.got valuedirectfile_GEN_.go TT=VALUE T=Value t=value
-//go:generate got directfile.got groupdirectfile_GEN_.go TT=GROUP T=Group t=group
 //go:generate got storefile.got valuestorefile_GEN_.go TT=VALUE T=Value t=value
 //go:generate got storefile.got groupstorefile_GEN_.go TT=GROUP T=Group t=group
 //go:generate got storefile_test.got valuestorefile_GEN_test.go TT=VALUE T=Value t=value

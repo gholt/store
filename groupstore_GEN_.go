@@ -804,28 +804,29 @@ OuterLoop:
 
 func (store *DefaultGroupStore) recovery() error {
 	start := time.Now()
-	fromDiskCount := 0
+	fromDiskCount := int64(0)
 	causedChangeCount := int64(0)
 	workers := uint64(store.workers)
-	pendingBatchChans := make([]chan []GroupDirectFileEntry, workers)
-	freeBatchChans := make([]chan []GroupDirectFileEntry, len(pendingBatchChans))
+	pendingBatchChans := make([]chan []groupTOCEntry, workers)
+	freeBatchChans := make([]chan []groupTOCEntry, len(pendingBatchChans))
 	for i := 0; i < len(pendingBatchChans); i++ {
-		pendingBatchChans[i] = make(chan []GroupDirectFileEntry, 3)
-		freeBatchChans[i] = make(chan []GroupDirectFileEntry, cap(pendingBatchChans[i]))
+		pendingBatchChans[i] = make(chan []groupTOCEntry, 3)
+		freeBatchChans[i] = make(chan []groupTOCEntry, cap(pendingBatchChans[i]))
 		for j := 0; j < cap(freeBatchChans[i]); j++ {
-			freeBatchChans[i] <- make([]GroupDirectFileEntry, store.recoveryBatchSize)
+			freeBatchChans[i] <- make([]groupTOCEntry, store.recoveryBatchSize)
 		}
 	}
 	wg := &sync.WaitGroup{}
 	wg.Add(len(pendingBatchChans))
 	for i := 0; i < len(pendingBatchChans); i++ {
-		go func(pendingBatchChan chan []GroupDirectFileEntry, freeBatchChan chan []GroupDirectFileEntry) {
+		go func(pendingBatchChan chan []groupTOCEntry, freeBatchChan chan []groupTOCEntry) {
 			for {
 				batch := <-pendingBatchChan
 				if batch == nil {
 					break
 				}
 				for j := 0; j < len(batch); j++ {
+					atomic.AddInt64(&fromDiskCount, 1)
 					wr := &batch[j]
 					if wr.TimestampBits&_TSB_LOCAL_REMOVAL != 0 {
 						wr.BlockID = 0
@@ -866,15 +867,21 @@ func (store *DefaultGroupStore) recovery() error {
 			store.logError("bad timestamp in name: %#v\n", names[i])
 			continue
 		}
-		fl, err := newGroupReadFile(store, namets, osOpenReadSeeker)
+		fpr, err := osOpenReadSeeker(names[i])
 		if err != nil {
 			store.logError("error opening %s: %s\n", names[i], err)
 			continue
 		}
-		df := NewGroupDirectFile(names[i][:len(names[i])-3], names[i], osOpenReadSeeker, osOpenWriteSeeker)
-		for _, err := range df.ReadEntriesBatched(fl.id, freeBatchChans, pendingBatchChans) {
+		fl, err := newGroupReadFile(store, namets, osOpenReadSeeker)
+		if err != nil {
+			store.logError("error opening %s: %s\n", names[i][:len(names[i])-3], err)
+			closeIfCloser(fpr)
+			continue
+		}
+		for _, err := range groupReadTOCEntriesBatched(fpr, fl.id, freeBatchChans, pendingBatchChans) {
 			store.logError("error with %s: %s", names[i], err)
 		}
+		closeIfCloser(fpr)
 	}
 	for i := 0; i < len(pendingBatchChans); i++ {
 		pendingBatchChans[i] <- nil

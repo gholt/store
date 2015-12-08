@@ -83,11 +83,12 @@ func (store *DefaultGroupStore) auditLauncher() {
 }
 
 func (store *DefaultGroupStore) auditPass(speed bool) {
-	if store.logDebug != nil {
-		begin := time.Now()
-		defer func() {
-			store.logDebug("audit pass took %s\n", time.Now().Sub(begin))
-		}()
-	}
+	// TODO
+	// if store.logDebug != nil {
+	//     begin := time.Now()
+	//     defer func() {
+	//         store.logDebug("audit pass took %s\n", time.Now().Sub(begin))
+	//     }()
+	// }
 	time.Sleep(10 * time.Millisecond) // TODO: actual audit pass
 }
