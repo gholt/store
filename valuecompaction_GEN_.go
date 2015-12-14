@@ -158,7 +158,6 @@ func (store *DefaultValueStore) compactionPass() {
 
 // compactionCandidate verifies that the given toc is a valid candidate for
 // compaction and also returns the extracted namets.
-// TODO: This doesn't need to be its own func anymore
 func (store *DefaultValueStore) compactionCandidate(name string) (int64, bool) {
 	if !strings.HasSuffix(name, ".valuetoc") {
 		return 0, false
@@ -185,12 +184,11 @@ func (store *DefaultValueStore) compactionCandidate(name string) (int64, bool) {
 
 func (store *DefaultValueStore) compactionWorker(jobChan chan *valueCompactionJob, wg *sync.WaitGroup) {
 	for c := range jobChan {
-		fstat, err := os.Stat(c.name)
+		total, err := valueTOCStat(c.name, os.Stat, osOpenReadSeeker)
 		if err != nil {
 			store.logError("Unable to stat %s because: %v\n", c.name, err)
 			continue
 		}
-		total := int(fstat.Size()) / 34
 		// TODO: This 100 should be in the Config.
 		if total < 100 {
 			atomic.AddInt32(&store.smallFileCompactions, 1)

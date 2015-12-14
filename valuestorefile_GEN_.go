@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"path"
 	"sync"
 	"sync/atomic"
@@ -451,4 +452,26 @@ func valueReadTOCEntriesBatched(fpr io.ReadSeeker, blockID uint32, freeBatchChan
 		errs = append(errs, fmt.Errorf("there were %d checksum errors", checksumErrors))
 	}
 	return fromDiskCount, errs
+}
+
+// valueTOCStat returns the number of entries or an error.
+func valueTOCStat(path string, statter func(name string) (os.FileInfo, error), openReadSeeker func(name string) (io.ReadSeeker, error)) (int, error) {
+	fileInfo, err := statter(path)
+	if err != nil {
+		return 0, err
+	}
+	fpr, err := openReadSeeker(path)
+	if err != nil {
+		return 0, err
+	}
+	checksumInterval, err := readValueHeaderTOC(fpr)
+	closeIfCloser(fpr)
+	if err != nil {
+		return 0, err
+	}
+	size := fileInfo.Size()
+	checksumsRemoved := size - size/(int64(checksumInterval)+4)*4
+	// NOTE: Store always writes the trailer as a full checksum interval block.
+	headerAndTrailerRemoved := checksumsRemoved - _VALUE_FILE_HEADER_SIZE - int64(checksumInterval)
+	return int(headerAndTrailerRemoved / _VALUE_FILE_ENTRY_SIZE), nil
 }
