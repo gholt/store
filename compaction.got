@@ -190,35 +190,11 @@ func (store *Default{{.T}}Store) compactionWorker(jobChan chan *{{.t}}Compaction
             continue
         }
         // TODO: This 100 should be in the Config.
-        if total < 100 {
-            atomic.AddInt32(&store.smallFileCompactions, 1)
-            result, err := store.compactFile(c.name, c.candidateBlockID)
-            if err != nil {
-                store.logCritical("%s\n", err)
-                continue
-            }
-            if (result.rewrote + result.stale) == result.count {
-                err = os.Remove(c.name)
-                if err != nil {
-                    store.logCritical("Unable to remove %s %s\n", c.name, err)
-                    continue
-                }
-                err = os.Remove(c.name[:len(c.name)-len("toc")])
-                if err != nil {
-                    store.logCritical("Unable to remove %s %s\n", c.name[:len(c.name)-len("toc")], err)
-                    continue
-                }
-                err = store.closeLocBlock(c.candidateBlockID)
-                if err != nil {
-                    store.logCritical("error closing in-memory block for %s: %s\n", c.name, err)
-                }
-                if store.logDebug != nil {
-                    store.logDebug("Compacted %s (total %d, rewrote %d, stale %d)\n", c.name, result.count, result.rewrote, result.stale)
-                }
-            }
-        } else {
+        // If total is less than 100, it'll automatically get compacted.
+        if total >= 100 {
             rand.Seed(time.Now().UnixNano())
-            skipOffset := rand.Intn(int(float64(total) * 0.01)) //randomly skip up to the first 1% of entries
+            // Randomly skip up to the first 1% of entries.
+            skipOffset := rand.Intn(int(float64(total) * 0.01))
             skipTotal := total - skipOffset
             staleTarget := int(float64(skipTotal) * store.compactionState.threshold)
             skip := skipTotal/staleTarget - 1
@@ -229,36 +205,27 @@ func (store *Default{{.T}}Store) compactionWorker(jobChan chan *{{.t}}Compaction
             if store.logDebug != nil {
                 store.logDebug("%s sample result: %d %d %d\n", c.name, count, stale, staleTarget)
             }
-            if stale >= staleTarget {
-                atomic.AddInt32(&store.compactions, 1)
-                if store.logDebug != nil {
-                    store.logDebug("Triggering compaction for %s with %d entries.\n", c.name, count)
-                }
-                result, err := store.compactFile(c.name, c.candidateBlockID)
-                if err != nil {
-                    store.logCritical("%s\n", err)
-                    continue
-                }
-                if (result.rewrote + result.stale) == result.count {
-                    err = os.Remove(c.name)
-                    if err != nil {
-                        store.logCritical("Unable to remove %s %s\n", c.name, err)
-                        continue
-                    }
-                    err = os.Remove(c.name[:len(c.name)-len("toc")])
-                    if err != nil {
-                        store.logCritical("Unable to remove %s %s\n", c.name[:len(c.name)-len("toc")], err)
-                        continue
-                    }
-                    err = store.closeLocBlock(c.candidateBlockID)
-                    if err != nil {
-                        store.logCritical("error closing in-memory block for %s: %s\n", c.name, err)
-                    }
-                    if store.logDebug != nil {
-                        store.logDebug("Compacted %s: (total %d, rewrote %d, stale %d)\n", c.name, result.count, result.rewrote, result.stale)
-                    }
-                }
+            if stale <= staleTarget {
+                continue
             }
+        }
+        atomic.AddInt32(&store.smallFileCompactions, 1)
+        result, err := store.compactFile(c.name, c.candidateBlockID)
+        if err != nil {
+            store.logCritical("%s\n", err)
+            continue
+        }
+        if err = os.Remove(c.name); err != nil {
+            store.logCritical("Unable to remove %s %s\n", c.name, err)
+        }
+        if err = os.Remove(c.name[:len(c.name)-len("toc")]); err != nil {
+            store.logCritical("Unable to remove %s %s\n", c.name[:len(c.name)-len("toc")], err)
+        }
+        if err = store.closeLocBlock(c.candidateBlockID); err != nil {
+            store.logCritical("error closing in-memory block for %s: %s\n", c.name, err)
+        }
+        if store.logDebug != nil {
+            store.logDebug("Compacted %s (total %d, rewrote %d, stale %d)\n", c.name, result.count, result.rewrote, result.stale)
         }
     }
     wg.Done()
@@ -401,8 +368,8 @@ type {{.t}}CompactionResult struct {
     stale            int
 }
 
-func (store *Default{{.T}}Store) compactFile(name string, candidateBlockID uint32) ({{.t}}CompactionResult, error) {
-    var cr {{.t}}CompactionResult
+func (store *Default{{.T}}Store) compactFile(name string, candidateBlockID uint32) (*{{.t}}CompactionResult, error) {
+    cr := &{{.t}}CompactionResult{}
     fromDiskBuf := make([]byte, store.checksumInterval+4)
     fromDiskOverflow := make([]byte, 0, _{{.TT}}_FILE_ENTRY_SIZE)
     fp, err := os.Open(name)
