@@ -1,10 +1,7 @@
 package store
 
 import (
-	"bytes"
-	"encoding/binary"
 	"fmt"
-	"io"
 	"os"
 	"path"
 	"sort"
@@ -13,8 +10,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-
-	"github.com/spaolacci/murmur3"
 )
 
 type valueCompactionState struct {
@@ -297,132 +292,84 @@ func (store *DefaultValueStore) sampleTOC(name string, candidateBlockID uint32, 
 }
 
 type valueCompactionResult struct {
-	checksumFailures int
-	count            int
-	rewrote          int
-	stale            int
+	errorCount uint32
+	count      uint32
+	rewrote    uint32
+	stale      uint32
 }
 
 func (store *DefaultValueStore) compactFile(name string, candidateBlockID uint32) (*valueCompactionResult, error) {
 	cr := &valueCompactionResult{}
-	fromDiskBuf := make([]byte, store.checksumInterval+4)
-	fromDiskOverflow := make([]byte, 0, _VALUE_FILE_ENTRY_SIZE)
-	fp, err := os.Open(name)
+	// Compaction workers work on one file each; maybe we'll expand the workers
+	// under a compaction worker sometime, but for now, limit it.
+	workers := uint64(1)
+	pendingBatchChans := make([]chan []valueTOCEntry, workers)
+	freeBatchChans := make([]chan []valueTOCEntry, len(pendingBatchChans))
+	for i := 0; i < len(pendingBatchChans); i++ {
+		pendingBatchChans[i] = make(chan []valueTOCEntry, 3)
+		freeBatchChans[i] = make(chan []valueTOCEntry, cap(pendingBatchChans[i]))
+		for j := 0; j < cap(freeBatchChans[i]); j++ {
+			freeBatchChans[i] <- make([]valueTOCEntry, store.recoveryBatchSize)
+		}
+	}
+	wg := &sync.WaitGroup{}
+	wg.Add(len(pendingBatchChans))
+	for i := 0; i < len(pendingBatchChans); i++ {
+		go func(pendingBatchChan chan []valueTOCEntry, freeBatchChan chan []valueTOCEntry) {
+			var value []byte
+			for {
+				batch := <-pendingBatchChan
+				if batch == nil {
+					break
+				}
+				if atomic.LoadUint32(&cr.errorCount) > 0 {
+					continue
+				}
+				for j := 0; j < len(batch); j++ {
+					atomic.AddUint32(&cr.count, 1)
+					wr := &batch[j]
+					timestampBits, _, _, _ := store.lookup(wr.KeyA, wr.KeyB)
+					if timestampBits > wr.TimestampBits {
+						atomic.AddUint32(&cr.stale, 1)
+						continue
+					}
+					timestampBits, value, err := store.read(wr.KeyA, wr.KeyB, value[:0])
+					if timestampBits > wr.TimestampBits {
+						atomic.AddUint32(&cr.stale, 1)
+						continue
+					}
+					_, err = store.write(wr.KeyA, wr.KeyB, timestampBits|_TSB_COMPACTION_REWRITE, value, true)
+					if err != nil {
+						store.logError("Compaction error with %s: %s", name, err)
+						atomic.AddUint32(&cr.errorCount, 1)
+						break
+					}
+					atomic.AddUint32(&cr.rewrote, 1)
+				}
+				freeBatchChan <- batch
+			}
+			wg.Done()
+		}(pendingBatchChans[i], freeBatchChans[i])
+	}
+	fpr, err := osOpenReadSeeker(name)
 	if err != nil {
-		return cr, fmt.Errorf("error opening %s: %s", name, err)
+		return cr, fmt.Errorf("Compaction error opening %s: %s\n", name, err)
 	}
-	first := true
-	terminated := false
-	fromDiskOverflow = fromDiskOverflow[:0]
-	for {
-		n, err := io.ReadFull(fp, fromDiskBuf)
-		if n < 4 {
-			if err != io.EOF && err != io.ErrUnexpectedEOF {
-				fp.Close()
-				return cr, fmt.Errorf("error reading %s: %s", name, err)
-			}
-			break
-		}
-		n -= 4
-		if murmur3.Sum32(fromDiskBuf[:n]) != binary.BigEndian.Uint32(fromDiskBuf[n:]) {
-			cr.checksumFailures++
+	fdc, errs := valueReadTOCEntriesBatched(fpr, candidateBlockID, freeBatchChans, pendingBatchChans, make(chan struct{}))
+	for _, err := range errs {
+		store.logError("Compaction error with %s: %s", name, err)
+	}
+	if len(errs) > 0 {
+		if fdc == 0 {
+			return cr, fmt.Errorf("Compaction errors with %s and no entries were read; file will be retried later.", name)
 		} else {
-			j := 0
-			if first {
-				if !bytes.Equal(fromDiskBuf[:_VALUE_FILE_HEADER_SIZE-4], []byte("VALUESTORETOC v0            ")) {
-					fp.Close()
-					return cr, fmt.Errorf("bad header %s: %s", name, err)
-				}
-				if binary.BigEndian.Uint32(fromDiskBuf[_VALUE_FILE_HEADER_SIZE-4:]) != store.checksumInterval {
-					fp.Close()
-					return cr, fmt.Errorf("bad header checksum interval %s: %s", name, err)
-				}
-				j += _VALUE_FILE_HEADER_SIZE
-				first = false
-			}
-			if n < int(store.checksumInterval) {
-				if !bytes.Equal(fromDiskBuf[n-_VALUE_FILE_TRAILER_SIZE:], []byte("TERM v0 ")) {
-					fp.Close()
-					return cr, fmt.Errorf("bad terminator marker %s: %s", name, err)
-				}
-				n -= _VALUE_FILE_TRAILER_SIZE
-				terminated = true
-			}
-			if len(fromDiskOverflow) > 0 {
-				j += _VALUE_FILE_ENTRY_SIZE - len(fromDiskOverflow)
-				fromDiskOverflow = append(fromDiskOverflow, fromDiskBuf[j-_VALUE_FILE_ENTRY_SIZE+len(fromDiskOverflow):j]...)
-
-				keyA := binary.BigEndian.Uint64(fromDiskOverflow)
-				keyB := binary.BigEndian.Uint64(fromDiskOverflow[8:])
-				timestampbits := binary.BigEndian.Uint64(fromDiskOverflow[16:])
-
-				fromDiskOverflow = fromDiskOverflow[:0]
-				tsm, blockid, _, _ := store.lookup(keyA, keyB)
-				if tsm>>_TSB_UTIL_BITS != timestampbits>>_TSB_UTIL_BITS && blockid != candidateBlockID || tsm&_TSB_DELETION != 0 {
-					cr.count++
-					cr.stale++
-				} else {
-					var value []byte
-					_, value, err := store.read(keyA, keyB, value)
-					if err != nil {
-						fp.Close()
-						return cr, fmt.Errorf("error on read for compaction rewrite: %s", err)
-					}
-					_, err = store.write(keyA, keyB, timestampbits|_TSB_COMPACTION_REWRITE, value, true)
-					if err != nil {
-						fp.Close()
-						return cr, fmt.Errorf("error on write for compaction rewrite: %s", err)
-					}
-					cr.count++
-					cr.rewrote++
-				}
-			}
-			for ; j+_VALUE_FILE_ENTRY_SIZE <= n; j += _VALUE_FILE_ENTRY_SIZE {
-
-				keyA := binary.BigEndian.Uint64(fromDiskBuf[j:])
-				keyB := binary.BigEndian.Uint64(fromDiskBuf[j+8:])
-				timestampbits := binary.BigEndian.Uint64(fromDiskBuf[j+16:])
-
-				tsm, blockid, _, _ := store.lookup(keyA, keyB)
-				if tsm>>_TSB_UTIL_BITS != timestampbits>>_TSB_UTIL_BITS && blockid != candidateBlockID || tsm&_TSB_DELETION != 0 {
-					cr.count++
-					cr.stale++
-				} else {
-					var value []byte
-					_, value, err := store.read(keyA, keyB, value)
-					if err != nil {
-						fp.Close()
-						return cr, fmt.Errorf("error on read for compaction rewrite: %s", err)
-					}
-					_, err = store.write(keyA, keyB, timestampbits|_TSB_COMPACTION_REWRITE, value, true)
-					if err != nil {
-						fp.Close()
-						return cr, fmt.Errorf("error on write for compaction rewrite: %s", err)
-					}
-					cr.count++
-					cr.rewrote++
-				}
-			}
-			if j != n {
-				fromDiskOverflow = fromDiskOverflow[:n-j]
-				copy(fromDiskOverflow, fromDiskBuf[j:])
-			}
-		}
-		if err != nil && err != io.EOF && err != io.ErrUnexpectedEOF {
-			fp.Close()
-			return cr, fmt.Errorf("EOF while reading toc: %s", err)
+			store.logError("Compaction errors with %s but some entries were read; assuming the recovery was as good as it could get and removing file.", name)
 		}
 	}
-	fp.Close()
-	if !terminated {
-		store.logError("early end of file: %s\n", name)
-		return cr, nil
-
+	closeIfCloser(fpr)
+	for i := 0; i < len(pendingBatchChans); i++ {
+		pendingBatchChans[i] <- nil
 	}
-	if cr.checksumFailures > 0 {
-		store.logWarning("%d checksum failures for %s\n", cr.checksumFailures, name)
-		return cr, nil
-
-	}
+	wg.Wait()
 	return cr, nil
 }
