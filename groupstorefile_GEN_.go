@@ -363,7 +363,7 @@ type groupTOCEntry struct {
 	Length        uint32
 }
 
-func groupReadTOCEntriesBatched(fpr io.ReadSeeker, blockID uint32, freeBatchChans []chan []groupTOCEntry, pendingBatchChans []chan []groupTOCEntry) (int, []error) {
+func groupReadTOCEntriesBatched(fpr io.ReadSeeker, blockID uint32, freeBatchChans []chan []groupTOCEntry, pendingBatchChans []chan []groupTOCEntry, controlChan chan struct{}) (int, []error) {
 	// There is an assumption that the checksum interval is greater than the
 	// _GROUP_FILE_HEADER_SIZE and that the _GROUP_FILE_ENTRY_SIZE is
 	// greater than the _GROUP_FILE_TRAILER_SIZE.
@@ -386,7 +386,13 @@ func groupReadTOCEntriesBatched(fpr io.ReadSeeker, blockID uint32, freeBatchChan
 	batchesPos := make([]int, len(batches))
 	fromDiskCount := 0
 	more := true
+L1:
 	for more {
+		select {
+		case <-controlChan:
+			break L1
+		default:
+		}
 		rbuf := buf[rpos : rpos+checksumInterval+4]
 		if n, err := io.ReadFull(fpr, rbuf); err == io.ErrUnexpectedEOF || err == io.EOF {
 			rbuf = rbuf[:n]

@@ -5,7 +5,6 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
-	"math/rand"
 	"os"
 	"path"
 	"sort"
@@ -189,23 +188,24 @@ func (store *DefaultValueStore) compactionWorker(jobChan chan *valueCompactionJo
 			store.logError("Unable to stat %s because: %v\n", c.name, err)
 			continue
 		}
-		// TODO: This 100 should be in the Config.
+		// TODO: This 1000 should be in the Config.
 		// If total is less than 100, it'll automatically get compacted.
-		if total >= 100 {
-			rand.Seed(time.Now().UnixNano())
-			// Randomly skip up to the first 1% of entries.
-			skipOffset := rand.Intn(int(float64(total) * 0.01))
-			skipTotal := total - skipOffset
-			staleTarget := int(float64(skipTotal) * store.compactionState.threshold)
-			skip := skipTotal/staleTarget - 1
-			count, stale, err := store.sampleTOC(c.name, c.candidateBlockID, skipOffset, skip)
+		if total >= 1000 {
+			toCheck := uint32(total)
+			// If there are more than a million entries, we'll just check the
+			// first million and extrapolate.
+			if toCheck > 1000000 {
+				toCheck = 1000000
+			}
+			checked, stale, err := store.sampleTOC(c.name, c.candidateBlockID, toCheck)
 			if err != nil {
+				store.logError("Unable to sample %s: %s", c.name, err)
 				continue
 			}
 			if store.logDebug != nil {
-				store.logDebug("%s sample result: %d %d %d\n", c.name, count, stale, staleTarget)
+				store.logDebug("Compaction sample result: %s had %d entries; checked %d entries, %d were stale\n", c.name, total, checked, stale)
 			}
-			if stale <= staleTarget {
+			if stale <= uint32(float64(checked)*store.compactionState.threshold) {
 				continue
 			}
 		}
@@ -231,122 +231,69 @@ func (store *DefaultValueStore) compactionWorker(jobChan chan *valueCompactionJo
 	wg.Done()
 }
 
-func (store *DefaultValueStore) sampleTOC(name string, candidateBlockID uint32, skipOffset, skipCount int) (int, int, error) {
-	count := 0
-	stale := 0
-	fromDiskBuf := make([]byte, store.checksumInterval+4)
-	fromDiskOverflow := make([]byte, 0, _VALUE_FILE_ENTRY_SIZE)
-	fp, err := os.Open(name)
+func (store *DefaultValueStore) sampleTOC(name string, candidateBlockID uint32, toCheck uint32) (uint32, uint32, error) {
+	stale := uint32(0)
+	checked := uint32(0)
+	// Compaction workers work on one file each; maybe we'll expand the workers
+	// under a compaction worker sometime, but for now, limit it.
+	workers := uint64(1)
+	pendingBatchChans := make([]chan []valueTOCEntry, workers)
+	freeBatchChans := make([]chan []valueTOCEntry, len(pendingBatchChans))
+	for i := 0; i < len(pendingBatchChans); i++ {
+		pendingBatchChans[i] = make(chan []valueTOCEntry, 3)
+		freeBatchChans[i] = make(chan []valueTOCEntry, cap(pendingBatchChans[i]))
+		for j := 0; j < cap(freeBatchChans[i]); j++ {
+			freeBatchChans[i] <- make([]valueTOCEntry, store.recoveryBatchSize)
+		}
+	}
+	controlChan := make(chan struct{})
+	wg := &sync.WaitGroup{}
+	wg.Add(len(pendingBatchChans))
+	for i := 0; i < len(pendingBatchChans); i++ {
+		go func(pendingBatchChan chan []valueTOCEntry, freeBatchChan chan []valueTOCEntry) {
+			skipRest := false
+			for {
+				batch := <-pendingBatchChan
+				if batch == nil {
+					break
+				}
+				if skipRest {
+					continue
+				}
+				for j := 0; j < len(batch); j++ {
+					wr := &batch[j]
+					timestampBits, blockID, _, _ := store.lookup(wr.KeyA, wr.KeyB)
+					if timestampBits != wr.TimestampBits || blockID != wr.BlockID {
+						atomic.AddUint32(&stale, 1)
+					}
+					if c := atomic.AddUint32(&checked, 1); c == toCheck {
+						skipRest = true
+						close(controlChan)
+						break
+					} else if c > toCheck {
+						skipRest = true
+						break
+					}
+				}
+				freeBatchChan <- batch
+			}
+			wg.Done()
+		}(pendingBatchChans[i], freeBatchChans[i])
+	}
+	fpr, err := osOpenReadSeeker(name)
 	if err != nil {
-		store.logError("error opening %s: %s\n", name, err)
 		return 0, 0, err
 	}
-	checksumFailures := 0
-	first := true
-	terminated := false
-	fromDiskOverflow = fromDiskOverflow[:0]
-	skipCounter := 0 - skipOffset
-	for {
-		n, err := io.ReadFull(fp, fromDiskBuf)
-		if n < 4 {
-			if err != io.EOF && err != io.ErrUnexpectedEOF {
-				store.logError("error reading %s: %s\n", name, err)
-			}
-			break
-		}
-		n -= 4
-		// TODO: This area is wrong, instead we should be reading the trailer
-		// at the outset and verifying the size of the included data; the last
-		// part of the file likely won't have a checksum. Perhaps quicker would
-		// be to use the file size to compute where the trailer should be.
-		// Anyway, I'll fix this later; I want to consolidate what recovery,
-		// compaction, and auditing all do. For now, the last few entries
-		// written to a file won't be readable. :(
-		if murmur3.Sum32(fromDiskBuf[:n]) != binary.BigEndian.Uint32(fromDiskBuf[n:]) {
-			checksumFailures++
-			// TODO: There's an issue here. The entry size is not guaranteed to
-			// align with the checksum interval and we probably need to throw
-			// away x bytes from the next read block as well to get aligned
-			// again. This issue is also in recovery.
-		} else {
-			j := 0
-			if first {
-				if !bytes.Equal(fromDiskBuf[:_VALUE_FILE_HEADER_SIZE-4], []byte("VALUESTORETOC v0            ")) {
-					store.logError("bad header: %s\n", name)
-					break
-				}
-				if binary.BigEndian.Uint32(fromDiskBuf[_VALUE_FILE_HEADER_SIZE-4:]) != store.checksumInterval {
-					store.logError("bad header checksum interval: %s\n", name)
-					break
-				}
-				j += _VALUE_FILE_HEADER_SIZE
-				first = false
-			}
-			if n < int(store.checksumInterval) {
-				if !bytes.Equal(fromDiskBuf[n-_VALUE_FILE_TRAILER_SIZE:], []byte("TERM v0 ")) {
-					store.logError("bad terminator: %s\n", name)
-					break
-				}
-				n -= _VALUE_FILE_TRAILER_SIZE
-				terminated = true
-			}
-			if len(fromDiskOverflow) > 0 {
-				j += _VALUE_FILE_ENTRY_SIZE - len(fromDiskOverflow)
-				fromDiskOverflow = append(fromDiskOverflow, fromDiskBuf[j-_VALUE_FILE_ENTRY_SIZE+len(fromDiskOverflow):j]...)
-
-				keyA := binary.BigEndian.Uint64(fromDiskOverflow)
-				keyB := binary.BigEndian.Uint64(fromDiskOverflow[8:])
-				timestampbits := binary.BigEndian.Uint64(fromDiskOverflow[16:])
-
-				fromDiskOverflow = fromDiskOverflow[:0]
-				count++
-				if skipCounter == skipCount {
-					tsm, blockid, _, _ := store.lookup(keyA, keyB)
-					if tsm>>_TSB_UTIL_BITS != timestampbits>>_TSB_UTIL_BITS && blockid != candidateBlockID || tsm&_TSB_DELETION != 0 {
-						stale++
-					}
-					skipCounter = 0
-				} else {
-					skipCounter++
-				}
-
-			}
-			for ; j+_VALUE_FILE_ENTRY_SIZE <= n; j += _VALUE_FILE_ENTRY_SIZE {
-
-				keyA := binary.BigEndian.Uint64(fromDiskBuf[j:])
-				keyB := binary.BigEndian.Uint64(fromDiskBuf[j+8:])
-				timestampbits := binary.BigEndian.Uint64(fromDiskBuf[j+16:])
-
-				tsm, blockid, _, _ := store.lookup(keyA, keyB)
-				count++
-				if skipCounter == skipCount {
-					if tsm>>_TSB_UTIL_BITS != timestampbits>>_TSB_UTIL_BITS && blockid != candidateBlockID || tsm&_TSB_DELETION != 0 {
-						stale++
-					}
-					skipCounter = 0
-				} else {
-					skipCounter++
-				}
-			}
-			if j != n {
-				fromDiskOverflow = fromDiskOverflow[:n-j]
-				copy(fromDiskOverflow, fromDiskBuf[j:])
-			}
-		}
-		if err != nil && err != io.EOF && err != io.ErrUnexpectedEOF {
-			store.logError("error reading %s: %s\n", name, err)
-			break
-		}
+	_, errs := valueReadTOCEntriesBatched(fpr, candidateBlockID, freeBatchChans, pendingBatchChans, controlChan)
+	for _, err := range errs {
+		store.logError("Compaction check error with %s: %s", name, err)
 	}
-	fp.Close()
-	if !terminated {
-		store.logError("early end of file: %s\n", name)
+	closeIfCloser(fpr)
+	for i := 0; i < len(pendingBatchChans); i++ {
+		pendingBatchChans[i] <- nil
 	}
-	if checksumFailures > 0 {
-		store.logWarning("%d checksum failures for %s\n", checksumFailures, name)
-	}
-	return count, stale, nil
-
+	wg.Wait()
+	return checked, stale, nil
 }
 
 type valueCompactionResult struct {

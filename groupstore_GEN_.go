@@ -881,7 +881,7 @@ func (store *DefaultGroupStore) recovery() error {
 			closeIfCloser(fpr)
 			continue
 		}
-		fdc, errs := groupReadTOCEntriesBatched(fpr, fl.id, freeBatchChans, pendingBatchChans)
+		fdc, errs := groupReadTOCEntriesBatched(fpr, fl.id, freeBatchChans, pendingBatchChans, make(chan struct{}))
 		fromDiskCount += fdc
 		for _, err := range errs {
 			store.logError("error with %s: %s", names[i], err)
