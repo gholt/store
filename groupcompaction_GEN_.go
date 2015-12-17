@@ -111,7 +111,7 @@ func (store *DefaultGroupStore) compactionLauncher() {
 }
 
 type groupCompactionJob struct {
-	name             string
+	fullPath         string
 	candidateBlockID uint32
 }
 
@@ -141,7 +141,7 @@ func (store *DefaultGroupStore) compactionPass() {
 		go store.compactionWorker(jobChan, wg)
 	}
 	for _, name := range names {
-		namets, valid := store.compactionCandidate(path.Join(store.pathtoc, name))
+		namets, valid := store.compactionCandidate(name)
 		if valid {
 			jobChan <- &groupCompactionJob{path.Join(store.pathtoc, name), store.locBlockIDFromTimestampnano(namets)}
 		}
@@ -178,9 +178,9 @@ func (store *DefaultGroupStore) compactionCandidate(name string) (int64, bool) {
 
 func (store *DefaultGroupStore) compactionWorker(jobChan chan *groupCompactionJob, wg *sync.WaitGroup) {
 	for c := range jobChan {
-		total, err := groupTOCStat(c.name, os.Stat, osOpenReadSeeker)
+		total, err := groupTOCStat(c.fullPath, os.Stat, osOpenReadSeeker)
 		if err != nil {
-			store.logError("Unable to stat %s because: %v\n", c.name, err)
+			store.logError("Unable to stat %s because: %v\n", c.fullPath, err)
 			continue
 		}
 		// TODO: This 1000 should be in the Config.
@@ -192,41 +192,41 @@ func (store *DefaultGroupStore) compactionWorker(jobChan chan *groupCompactionJo
 			if toCheck > 1000000 {
 				toCheck = 1000000
 			}
-			checked, stale, err := store.sampleTOC(c.name, c.candidateBlockID, toCheck)
+			checked, stale, err := store.sampleTOC(c.fullPath, c.candidateBlockID, toCheck)
 			if err != nil {
-				store.logError("Unable to sample %s: %s", c.name, err)
+				store.logError("Unable to sample %s: %s", c.fullPath, err)
 				continue
 			}
 			if store.logDebug != nil {
-				store.logDebug("Compaction sample result: %s had %d entries; checked %d entries, %d were stale\n", c.name, total, checked, stale)
+				store.logDebug("Compaction sample result: %s had %d entries; checked %d entries, %d were stale\n", c.fullPath, total, checked, stale)
 			}
 			if stale <= uint32(float64(checked)*store.compactionState.threshold) {
 				continue
 			}
 		}
 		atomic.AddInt32(&store.smallFileCompactions, 1)
-		result, err := store.compactFile(c.name, c.candidateBlockID)
+		result, err := store.compactFile(c.fullPath, c.candidateBlockID)
 		if err != nil {
 			store.logCritical("%s\n", err)
 			continue
 		}
-		if err = os.Remove(c.name); err != nil {
-			store.logCritical("Unable to remove %s %s\n", c.name, err)
+		if err = os.Remove(c.fullPath); err != nil {
+			store.logCritical("Unable to remove %s %s\n", c.fullPath, err)
 		}
-		if err = os.Remove(c.name[:len(c.name)-len("toc")]); err != nil {
-			store.logCritical("Unable to remove %s %s\n", c.name[:len(c.name)-len("toc")], err)
+		if err = os.Remove(c.fullPath[:len(c.fullPath)-len("toc")]); err != nil {
+			store.logCritical("Unable to remove %s %s\n", c.fullPath[:len(c.fullPath)-len("toc")], err)
 		}
 		if err = store.closeLocBlock(c.candidateBlockID); err != nil {
-			store.logCritical("error closing in-memory block for %s: %s\n", c.name, err)
+			store.logCritical("error closing in-memory block for %s: %s\n", c.fullPath, err)
 		}
 		if store.logDebug != nil {
-			store.logDebug("Compacted %s (total %d, rewrote %d, stale %d)\n", c.name, result.count, result.rewrote, result.stale)
+			store.logDebug("Compacted %s (total %d, rewrote %d, stale %d)\n", c.fullPath, result.count, result.rewrote, result.stale)
 		}
 	}
 	wg.Done()
 }
 
-func (store *DefaultGroupStore) sampleTOC(name string, candidateBlockID uint32, toCheck uint32) (uint32, uint32, error) {
+func (store *DefaultGroupStore) sampleTOC(fullPath string, candidateBlockID uint32, toCheck uint32) (uint32, uint32, error) {
 	stale := uint32(0)
 	checked := uint32(0)
 	// Compaction workers work on one file each; maybe we'll expand the workers
@@ -275,13 +275,13 @@ func (store *DefaultGroupStore) sampleTOC(name string, candidateBlockID uint32, 
 			wg.Done()
 		}(pendingBatchChans[i], freeBatchChans[i])
 	}
-	fpr, err := osOpenReadSeeker(name)
+	fpr, err := osOpenReadSeeker(fullPath)
 	if err != nil {
 		return 0, 0, err
 	}
 	_, errs := groupReadTOCEntriesBatched(fpr, candidateBlockID, freeBatchChans, pendingBatchChans, controlChan)
 	for _, err := range errs {
-		store.logError("Compaction check error with %s: %s", name, err)
+		store.logError("Compaction check error with %s: %s", fullPath, err)
 	}
 	closeIfCloser(fpr)
 	for i := 0; i < len(pendingBatchChans); i++ {
@@ -298,7 +298,7 @@ type groupCompactionResult struct {
 	stale      uint32
 }
 
-func (store *DefaultGroupStore) compactFile(name string, candidateBlockID uint32) (*groupCompactionResult, error) {
+func (store *DefaultGroupStore) compactFile(fullPath string, candidateBlockID uint32) (*groupCompactionResult, error) {
 	cr := &groupCompactionResult{}
 	// Compaction workers work on one file each; maybe we'll expand the workers
 	// under a compaction worker sometime, but for now, limit it.
@@ -340,7 +340,7 @@ func (store *DefaultGroupStore) compactFile(name string, candidateBlockID uint32
 					}
 					_, err = store.write(wr.KeyA, wr.KeyB, wr.NameKeyA, wr.NameKeyB, wr.TimestampBits|_TSB_COMPACTION_REWRITE, value, true)
 					if err != nil {
-						store.logError("Compaction error with %s: %s", name, err)
+						store.logError("Compaction error with %s: %s", fullPath, err)
 						atomic.AddUint32(&cr.errorCount, 1)
 						break
 					}
@@ -351,19 +351,19 @@ func (store *DefaultGroupStore) compactFile(name string, candidateBlockID uint32
 			wg.Done()
 		}(pendingBatchChans[i], freeBatchChans[i])
 	}
-	fpr, err := osOpenReadSeeker(name)
+	fpr, err := osOpenReadSeeker(fullPath)
 	if err != nil {
-		return cr, fmt.Errorf("Compaction error opening %s: %s\n", name, err)
+		return cr, fmt.Errorf("Compaction error opening %s: %s\n", fullPath, err)
 	}
 	fdc, errs := groupReadTOCEntriesBatched(fpr, candidateBlockID, freeBatchChans, pendingBatchChans, make(chan struct{}))
 	for _, err := range errs {
-		store.logError("Compaction error with %s: %s", name, err)
+		store.logError("Compaction error with %s: %s", fullPath, err)
 	}
 	if len(errs) > 0 {
 		if fdc == 0 {
-			return cr, fmt.Errorf("Compaction errors with %s and no entries were read; file will be retried later.", name)
+			return cr, fmt.Errorf("Compaction errors with %s and no entries were read; file will be retried later.", fullPath)
 		} else {
-			store.logError("Compaction errors with %s but some entries were read; assuming the recovery was as good as it could get and removing file.", name)
+			store.logError("Compaction errors with %s but some entries were read; assuming the recovery was as good as it could get and removing file.", fullPath)
 		}
 	}
 	closeIfCloser(fpr)
