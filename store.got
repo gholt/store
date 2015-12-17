@@ -640,7 +640,7 @@ func (store *Default{{.T}}Store) memWriter(pendingWriteReqChan chan *{{.t}}Write
                 memBlock.values[i] = 0
             }
         }
-        ptimestampbits := store.locmap.Set(writeReq.keyA, writeReq.keyB{{if eq .t "group"}}, writeReq.nameKeyA, writeReq.nameKeyB{{end}}, writeReq.timestampbits, memBlock.id, uint32(memBlockMemOffset), uint32(length), false)
+        ptimestampbits := store.locmap.Set(writeReq.keyA, writeReq.keyB{{if eq .t "group"}}, writeReq.nameKeyA, writeReq.nameKeyB{{end}}, writeReq.timestampbits & ^uint64(_TSB_COMPACTION_REWRITE), memBlock.id, uint32(memBlockMemOffset), uint32(length), writeReq.timestampbits&_TSB_COMPACTION_REWRITE != 0)
         if ptimestampbits < writeReq.timestampbits {
             memBlock.toc = memBlock.toc[:memBlockTOCOffset+_{{.TT}}_FILE_ENTRY_SIZE]
             {{if eq .t "value"}}

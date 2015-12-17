@@ -129,10 +129,12 @@ import (
 
 const (
 	_TSB_UTIL_BITS = 8
-	_TSB_INACTIVE  = 0xff
+	_TSB_INACTIVE  = 0xfe
 	_TSB_DELETION  = 0x80
-	// _TSB_COMPACTION_REWRITE indicates an item is being rewritten as part of
-	// compaction to the last disk file.
+	// _TSB_COMPACTION_REWRITE indicates an item is being or has been rewritten
+	// as part of compaction. Note that if this bit somehow ends up persisted,
+	// it won't be considered an inactive marker since it's outside the
+	// _TSB_INACTIVE mask.
 	_TSB_COMPACTION_REWRITE = 0x01
 	// _TSB_LOCAL_REMOVAL indicates an item to be removed locally due to push
 	// replication (local store wasn't considered responsible for the item

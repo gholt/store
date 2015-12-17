@@ -338,7 +338,7 @@ func (store *DefaultGroupStore) compactFile(name string, candidateBlockID uint32
 						atomic.AddUint32(&cr.stale, 1)
 						continue
 					}
-					_, err = store.write(wr.KeyA, wr.KeyB, wr.NameKeyA, wr.NameKeyB, timestampBits|_TSB_COMPACTION_REWRITE, value, true)
+					_, err = store.write(wr.KeyA, wr.KeyB, wr.NameKeyA, wr.NameKeyB, wr.TimestampBits|_TSB_COMPACTION_REWRITE, value, true)
 					if err != nil {
 						store.logError("Compaction error with %s: %s", name, err)
 						atomic.AddUint32(&cr.errorCount, 1)
