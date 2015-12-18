@@ -846,6 +846,8 @@ func (store *DefaultGroupStore) recovery() error {
 			wg.Done()
 		}(pendingBatchChans[i], freeBatchChans[i])
 	}
+	// TODO: Early returns need to shutdown the goroutines set up before so
+	// they don't just sit there forever.
 	fp, err := os.Open(store.pathtoc)
 	if err != nil {
 		return err

@@ -245,6 +245,12 @@ type {{.T}}StoreConfig struct {
     // page; this depends on the PageSize value and the internal struct size
     // for the store.
     FlusherThreshold int32
+    // AuditInterval is like BackgroundInterval but just for audit passes. The
+    // default audit interval is 604,800 seconds (1 week).
+    AuditInterval int
+    // AuditAgeThreshold indicates how old a given file must be before it
+    // is considered for an audit. Defaults to 604,800 seconds (1 week).
+    AuditAgeThreshold int
 }
 
 func resolve{{.T}}StoreConfig(c *{{.T}}StoreConfig) *{{.T}}StoreConfig {
@@ -804,6 +810,28 @@ func resolve{{.T}}StoreConfig(c *{{.T}}StoreConfig) *{{.T}}StoreConfig {
     }
     if cfg.FlusherThreshold < 0 {
         cfg.FlusherThreshold = 0
+    }
+    if env := os.Getenv("{{.TT}}STORE_AUDIT_INTERVAL"); env != "" {
+        if val, err := strconv.Atoi(env); err == nil {
+            cfg.AuditInterval = val
+        }
+    }
+    if cfg.AuditInterval == 0 {
+        cfg.AuditInterval = 604800
+    }
+    if cfg.AuditInterval < 1 {
+        cfg.AuditInterval = 1
+    }
+    if env := os.Getenv("{{.TT}}STORE_AUDIT_AGE_THRESHOLD"); env != "" {
+        if val, err := strconv.Atoi(env); err == nil {
+            cfg.AuditAgeThreshold = val
+        }
+    }
+    if cfg.AuditAgeThreshold == 0 {
+        cfg.AuditAgeThreshold = 604800
+    }
+    if cfg.AuditAgeThreshold < 1 {
+        cfg.AuditAgeThreshold = 1
     }
     return cfg
 }

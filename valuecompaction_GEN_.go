@@ -351,6 +351,8 @@ func (store *DefaultValueStore) compactFile(fullPath string, candidateBlockID ui
 			wg.Done()
 		}(pendingBatchChans[i], freeBatchChans[i])
 	}
+	// TODO: Early returns need to shutdown the goroutines set up before so
+	// they don't just sit there forever.
 	fpr, err := osOpenReadSeeker(fullPath)
 	if err != nil {
 		return cr, fmt.Errorf("Compaction error opening %s: %s\n", fullPath, err)

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"path"
 	"sync"
@@ -64,7 +65,7 @@ func newGroupReadFile(store *DefaultGroupStore, nameTimestamp int64, openReadSee
 			return nil, err
 		}
 		if i == 0 {
-			if checksumInterval, err = readGroupHeader(fp); err != nil {
+			if _, checksumInterval, err = readGroupHeader(fp); err != nil {
 				return nil, err
 			}
 		}
@@ -317,22 +318,22 @@ func (fl *groupStoreFile) writer() {
 	fl.writerDoneChan <- struct{}{}
 }
 
-// Returns the checksum interval stored in the header for a value file or any
-// error discovered; fpr is assumed to be at file position 0.
-func readGroupHeader(fpr io.ReadSeeker) (uint32, error) {
+// Returns the header bytes and checksum interval stored in the header for a
+// value file or any error discovered; fpr is assumed to be at file position 0.
+func readGroupHeader(fpr io.Reader) ([]byte, uint32, error) {
 	return _readGroupHeader(fpr, false)
 }
 
-// Returns the checksum interval stored in the header for a TOC file or any
-// error discovered; fpr is assumed to be at file position 0.
-func readGroupHeaderTOC(fpr io.ReadSeeker) (uint32, error) {
+// Returns the header bytes and checksum interval stored in the header for a
+// TOC file or any error discovered; fpr is assumed to be at file position 0.
+func readGroupHeaderTOC(fpr io.Reader) ([]byte, uint32, error) {
 	return _readGroupHeader(fpr, true)
 }
 
-func _readGroupHeader(fpr io.ReadSeeker, toc bool) (uint32, error) {
+func _readGroupHeader(fpr io.Reader, toc bool) ([]byte, uint32, error) {
 	buf := make([]byte, _GROUP_FILE_HEADER_SIZE)
-	if _, err := io.ReadFull(fpr, buf); err != nil {
-		return 0, err
+	if n, err := io.ReadFull(fpr, buf); err != nil {
+		return buf[:n], 0, err
 	}
 	var cmp []byte
 	if toc {
@@ -341,13 +342,13 @@ func _readGroupHeader(fpr io.ReadSeeker, toc bool) (uint32, error) {
 		cmp = []byte("GROUPSTORE v0               ")
 	}
 	if !bytes.Equal(buf[:28], cmp) {
-		return 0, errors.New("unknown file type in header")
+		return buf, 0, errors.New("unknown file type in header")
 	}
 	checksumInterval := binary.BigEndian.Uint32(buf[28:])
 	if checksumInterval < _GROUP_FILE_HEADER_SIZE {
-		return 0, fmt.Errorf("checksum interval is too small %d", checksumInterval)
+		return buf, 0, fmt.Errorf("checksum interval is too small %d", checksumInterval)
 	}
-	return checksumInterval, nil
+	return buf, checksumInterval, nil
 }
 
 type groupTOCEntry struct {
@@ -369,7 +370,7 @@ func groupReadTOCEntriesBatched(fpr io.ReadSeeker, blockID uint32, freeBatchChan
 	// greater than the _GROUP_FILE_TRAILER_SIZE.
 	var errs []error
 	var checksumInterval int
-	if ci, err := readGroupHeaderTOC(fpr); err != nil {
+	if _, ci, err := readGroupHeaderTOC(fpr); err != nil {
 		return 0, append(errs, err)
 	} else {
 		checksumInterval = int(ci)
@@ -475,7 +476,7 @@ func groupTOCStat(path string, statter func(name string) (os.FileInfo, error), o
 	if err != nil {
 		return 0, err
 	}
-	checksumInterval, err := readGroupHeaderTOC(fpr)
+	_, checksumInterval, err := readGroupHeaderTOC(fpr)
 	closeIfCloser(fpr)
 	if err != nil {
 		return 0, err
@@ -485,4 +486,56 @@ func groupTOCStat(path string, statter func(name string) (os.FileInfo, error), o
 	// NOTE: Store always writes the trailer as a full checksum interval block.
 	headerAndTrailerRemoved := checksumsRemoved - _GROUP_FILE_HEADER_SIZE - int64(checksumInterval)
 	return int(headerAndTrailerRemoved / _GROUP_FILE_ENTRY_SIZE), nil
+}
+
+type groupCorruptRange struct {
+	start uint32
+	stop  uint32
+}
+
+// Scans a file for checksum errors and returns all the corrupt ranges and
+// errors encountered.
+func groupChecksumVerify(fpr io.Reader) ([]*groupCorruptRange, []error) {
+	header, checksumInterval, err := readGroupHeader(fpr)
+	if err != nil {
+		return []*groupCorruptRange{&groupCorruptRange{0, math.MaxUint32}}, []error{err}
+	}
+	buf := make([]byte, checksumInterval+4)
+	copy(buf, header)
+	if _, err := io.ReadFull(fpr, buf[len(header):]); err != nil {
+		return []*groupCorruptRange{&groupCorruptRange{0, math.MaxUint32}}, []error{err}
+	}
+	start := uint32(0)
+	stop := checksumInterval - 1
+	var corruptions []*groupCorruptRange
+	var errs []error
+	for {
+		if murmur3.Sum32(buf[:checksumInterval]) != binary.BigEndian.Uint32(buf[checksumInterval:]) {
+			corruptions = append(corruptions, &groupCorruptRange{start, stop})
+		}
+		start = stop + 1
+		stop = stop + checksumInterval
+		if _, err := io.ReadFull(fpr, buf); err != nil {
+			corruptions = append(corruptions, &groupCorruptRange{start, math.MaxUint32})
+			errs = append(errs, err)
+			break
+		}
+	}
+	return corruptions, errs
+}
+
+func groupInCorruptRange(offset uint32, length uint32, corruptions []*groupCorruptRange) bool {
+	// Offset == 0 means a filler offset as offset zero is always the header.
+	// Length == 0 means it really doesn't matter if it's in a corrupted range
+	// since it's zero bytes long anyway.
+	if offset == 0 || length == 0 {
+		return false
+	}
+	end := offset + length
+	for _, corruption := range corruptions {
+		if offset >= corruption.start && end <= corruption.stop {
+			return true
+		}
+	}
+	return false
 }
