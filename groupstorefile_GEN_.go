@@ -533,7 +533,10 @@ func groupInCorruptRange(offset uint32, length uint32, corruptions []*groupCorru
 	}
 	end := offset + length
 	for _, corruption := range corruptions {
-		if offset >= corruption.start && end <= corruption.stop {
+		if offset >= corruption.start && offset <= corruption.stop {
+			return true
+		}
+		if end >= corruption.start && end <= corruption.stop {
 			return true
 		}
 	}

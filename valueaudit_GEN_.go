@@ -157,7 +157,7 @@ func (store *DefaultValueStore) auditPass(speed bool) {
 		dataName := names[i][:len(names[i])-3]
 		fpr, err := osOpenReadSeeker(dataName)
 		if err != nil {
-			atomic.StoreUint32(&failedAudit, 1)
+			atomic.AddUint32(&failedAudit, 1)
 			if os.IsNotExist(err) {
 				if store.logDebug != nil {
 					store.logDebug("audit: error opening %s: %s\n", dataName, err)
@@ -183,6 +183,7 @@ func (store *DefaultValueStore) auditPass(speed bool) {
 					freeBatchChans[i] <- make([]valueTOCEntry, store.recoveryBatchSize)
 				}
 			}
+			controlChan := make(chan struct{})
 			wg := &sync.WaitGroup{}
 			wg.Add(len(pendingBatchChans))
 			for i := 0; i < len(pendingBatchChans); i++ {
@@ -192,19 +193,23 @@ func (store *DefaultValueStore) auditPass(speed bool) {
 						if batch == nil {
 							break
 						}
-						if atomic.LoadUint32(&failedAudit) != 0 {
-							continue
-						}
+						// TODO: if atomic.LoadUint32(&failedAudit) == 0 {
 						for j := 0; j < len(batch); j++ {
 							wr := &batch[j]
 							if wr.TimestampBits&_TSB_DELETION != 0 {
 								continue
 							}
 							if valueInCorruptRange(wr.Offset, wr.Length, corruptions) {
-								atomic.StoreUint32(&failedAudit, 1)
-								break
+								/* TODO: v := */ atomic.AddUint32(&failedAudit, 1)
+								/* TODO: Later we'll abort on first error; for now, I want to test how many it detects.
+								   if v == 0 {
+								       close(controlChan)
+								   }
+								   break
+								*/
 							}
 						}
+						// TODO: }
 						freeBatchChan <- batch
 					}
 					wg.Done()
@@ -212,17 +217,17 @@ func (store *DefaultValueStore) auditPass(speed bool) {
 			}
 			fpr, err = osOpenReadSeeker(names[i])
 			if err != nil {
-				atomic.StoreUint32(&failedAudit, 1)
+				atomic.AddUint32(&failedAudit, 1)
 				if !os.IsNotExist(err) {
 					store.logError("audit: error opening %s: %s\n", names[i], err)
 				}
 			} else {
-				// NOTE: The block ID is unimportant in this context, so it's just
-				// set 1 and ignored elsewhere.
-				_, errs := valueReadTOCEntriesBatched(fpr, 1, freeBatchChans, pendingBatchChans, make(chan struct{}))
+				// NOTE: The block ID is unimportant in this context, so it's
+				// just set 1 and ignored elsewhere.
+				_, errs := valueReadTOCEntriesBatched(fpr, 1, freeBatchChans, pendingBatchChans, controlChan)
 				closeIfCloser(fpr)
 				if len(errs) > 0 {
-					atomic.StoreUint32(&failedAudit, 1)
+					atomic.AddUint32(&failedAudit, 1)
 					for _, err := range errs {
 						store.logError("audit: error with %s: %s", names[i], err)
 					}
@@ -238,7 +243,7 @@ func (store *DefaultValueStore) auditPass(speed bool) {
 				store.logDebug("audit: passed %s", names[i])
 			}
 		} else {
-			store.logError("audit: failed %s", names[i])
+			store.logError("audit: failed %s, %d affected", names[i], atomic.LoadUint32(&failedAudit)) // TODO: Remove the affected part
 			// TODO: Actually do something to recover from the issue as best as
 			// possible. I'm thinking this will act like compaction, rewriting
 			// all the good entries it can, but also deliberately removing any
