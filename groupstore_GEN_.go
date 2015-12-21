@@ -633,7 +633,7 @@ func (store *DefaultGroupStore) memWriter(pendingWriteReqChan chan *groupWriteRe
 			binary.BigEndian.PutUint64(memBlock.toc[memBlockTOCOffset+8:], writeReq.keyB)
 			binary.BigEndian.PutUint64(memBlock.toc[memBlockTOCOffset+16:], writeReq.nameKeyA)
 			binary.BigEndian.PutUint64(memBlock.toc[memBlockTOCOffset+24:], writeReq.nameKeyB)
-			binary.BigEndian.PutUint64(memBlock.toc[memBlockTOCOffset+32:], writeReq.timestampbits)
+			binary.BigEndian.PutUint64(memBlock.toc[memBlockTOCOffset+32:], writeReq.timestampbits & ^uint64(_TSB_COMPACTION_REWRITE))
 			binary.BigEndian.PutUint32(memBlock.toc[memBlockTOCOffset+40:], uint32(memBlockMemOffset))
 			binary.BigEndian.PutUint32(memBlock.toc[memBlockTOCOffset+44:], uint32(length))
 

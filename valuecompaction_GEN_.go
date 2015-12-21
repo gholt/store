@@ -185,7 +185,9 @@ func (store *DefaultValueStore) compactionWorker(jobChan chan *valueCompactionJo
 		}
 		// TODO: This 1000 should be in the Config.
 		// If total is less than 100, it'll automatically get compacted.
-		if total >= 1000 {
+		if total < 1000 {
+			atomic.AddInt32(&store.smallFileCompactions, 1)
+		} else {
 			toCheck := uint32(total)
 			// If there are more than a million entries, we'll just check the
 			// first million and extrapolate.
@@ -203,8 +205,8 @@ func (store *DefaultValueStore) compactionWorker(jobChan chan *valueCompactionJo
 			if stale <= uint32(float64(checked)*store.compactionState.threshold) {
 				continue
 			}
+			atomic.AddInt32(&store.compactions, 1)
 		}
-		atomic.AddInt32(&store.smallFileCompactions, 1)
 		result, err := store.compactFile(c.fullPath, c.candidateBlockID)
 		if err != nil {
 			store.logCritical("%s\n", err)
@@ -362,8 +364,8 @@ func (store *DefaultValueStore) compactFile(fullPath string, candidateBlockID ui
 	fdc, errs := valueReadTOCEntriesBatched(fpr, candidateBlockID, freeBatchChans, pendingBatchChans, make(chan struct{}))
 	for _, err := range errs {
 		store.logError("Compaction error with %s: %s", fullPath, err)
-		// TODO: The auditor should catch this eventually, but we should be
-		// proactive and notify the auditor of the issue here.
+		// NOTE: No need to notify the auditor since an attempt was just made
+		// to compact this file, which is what the auditor would try to do.
 	}
 	if len(errs) > 0 {
 		if fdc == 0 {

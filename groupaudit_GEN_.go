@@ -3,6 +3,7 @@ package store
 import (
 	"io"
 	"os"
+	"path"
 	"strconv"
 	"strings"
 	"sync"
@@ -155,7 +156,7 @@ func (store *DefaultGroupStore) auditPass(speed bool) {
 		}
 		failedAudit := uint32(0)
 		dataName := names[i][:len(names[i])-3]
-		fpr, err := osOpenReadSeeker(dataName)
+		fpr, err := osOpenReadSeeker(path.Join(store.path, dataName))
 		if err != nil {
 			atomic.AddUint32(&failedAudit, 1)
 			if os.IsNotExist(err) {
@@ -193,29 +194,27 @@ func (store *DefaultGroupStore) auditPass(speed bool) {
 						if batch == nil {
 							break
 						}
-						// TODO: if atomic.LoadUint32(&failedAudit) == 0 {
-						for j := 0; j < len(batch); j++ {
-							wr := &batch[j]
-							if wr.TimestampBits&_TSB_DELETION != 0 {
-								continue
-							}
-							if groupInCorruptRange(wr.Offset, wr.Length, corruptions) {
-								/* TODO: v := */ atomic.AddUint32(&failedAudit, 1)
-								/* TODO: Later we'll abort on first error; for now, I want to test how many it detects.
-								   if v == 0 {
-								       close(controlChan)
-								   }
-								   break
-								*/
+						if atomic.LoadUint32(&failedAudit) == 0 {
+							for j := 0; j < len(batch); j++ {
+								wr := &batch[j]
+								if wr.TimestampBits&_TSB_DELETION != 0 {
+									continue
+								}
+								if groupInCorruptRange(wr.Offset, wr.Length, corruptions) {
+									v := atomic.AddUint32(&failedAudit, 1)
+									if v == 0 {
+										close(controlChan)
+									}
+									break
+								}
 							}
 						}
-						// TODO: }
 						freeBatchChan <- batch
 					}
 					wg.Done()
 				}(pendingBatchChans[i], freeBatchChans[i])
 			}
-			fpr, err = osOpenReadSeeker(names[i])
+			fpr, err = osOpenReadSeeker(path.Join(store.pathtoc, names[i]))
 			if err != nil {
 				atomic.AddUint32(&failedAudit, 1)
 				if !os.IsNotExist(err) {
@@ -243,17 +242,33 @@ func (store *DefaultGroupStore) auditPass(speed bool) {
 				store.logDebug("audit: passed %s", names[i])
 			}
 		} else {
-			store.logError("audit: failed %s, %d affected", names[i], atomic.LoadUint32(&failedAudit)) // TODO: Remove the affected part
-			// TODO: Actually do something to recover from the issue as best as
-			// possible. I'm thinking this will act like compaction, rewriting
-			// all the good entries it can, but also deliberately removing any
-			// known bad entries from the locmap so that replication can get
-			// them back in place from other servers. Also, once done
-			// recovering the entries from the file set as best as possible, a
-			// reload of the whole store is needed in case some entries weren't
-			// even discoverable. A full reload of the store will mean the new
+			store.logError("audit: failed %s", names[i])
+			// TODO: Compaction needs to rewrite all the good entries it can,
+			// but also deliberately remove any known bad entries from the
+			// locmap so that replication can get them back in place from other
+			// servers. Also, once done recovering the entries from the file
+			// set as best as possible, if anything is in doubt, a reload of
+			// the whole store is needed in case some entries weren't even
+			// discoverable. A full reload of the store will mean the new
 			// locmap won't have the completely missing entries allowing
 			// replication to kick in.
+			blockID := store.locBlockIDFromTimestampnano(namets)
+			result, err := store.compactFile(path.Join(store.pathtoc, names[i]), blockID)
+			if err != nil {
+				store.logCritical("%s\n", err)
+			}
+			if err = os.Remove(path.Join(store.pathtoc, names[i])); err != nil {
+				store.logCritical("Unable to remove %s %s\n", names[i], err)
+			}
+			if err = os.Remove(path.Join(store.path, names[i][:len(names[i])-len("toc")])); err != nil {
+				store.logCritical("Unable to remove %s %s\n", names[i][:len(names[i])-len("toc")], err)
+			}
+			if err = store.closeLocBlock(blockID); err != nil {
+				store.logCritical("error closing in-memory block for %s: %s\n", names[i], err)
+			}
+			if store.logDebug != nil {
+				store.logDebug("audit: compacted %s (total %d, rewrote %d, stale %d)\n", names[i], result.count, result.rewrote, result.stale)
+			}
 		}
 	}
 }

@@ -419,7 +419,7 @@ L1:
 			rbuf = buf[:rpos+len(rbuf)]
 		}
 		if !more {
-			if bytes.Equal(rbuf[len(rbuf)-_GROUP_FILE_TRAILER_SIZE:], []byte("TERM v0 ")) {
+			if len(rbuf) >= _VALUE_FILE_TRAILER_SIZE && bytes.Equal(rbuf[len(rbuf)-_GROUP_FILE_TRAILER_SIZE:], []byte("TERM v0 ")) {
 				rbuf = rbuf[:len(rbuf)-_GROUP_FILE_TRAILER_SIZE]
 			} else {
 				errs = append(errs, errors.New("no terminator found"))
