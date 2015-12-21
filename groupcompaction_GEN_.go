@@ -282,6 +282,8 @@ func (store *DefaultGroupStore) sampleTOC(fullPath string, candidateBlockID uint
 	_, errs := groupReadTOCEntriesBatched(fpr, candidateBlockID, freeBatchChans, pendingBatchChans, controlChan)
 	for _, err := range errs {
 		store.logError("Compaction check error with %s: %s", fullPath, err)
+		// TODO: The auditor should catch this eventually, but we should be
+		// proactive and notify the auditor of the issue here.
 	}
 	closeIfCloser(fpr)
 	for i := 0; i < len(pendingBatchChans); i++ {
@@ -360,6 +362,8 @@ func (store *DefaultGroupStore) compactFile(fullPath string, candidateBlockID ui
 	fdc, errs := groupReadTOCEntriesBatched(fpr, candidateBlockID, freeBatchChans, pendingBatchChans, make(chan struct{}))
 	for _, err := range errs {
 		store.logError("Compaction error with %s: %s", fullPath, err)
+		// TODO: The auditor should catch this eventually, but we should be
+		// proactive and notify the auditor of the issue here.
 	}
 	if len(errs) > 0 {
 		if fdc == 0 {

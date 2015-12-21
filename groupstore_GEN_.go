@@ -887,6 +887,8 @@ func (store *DefaultGroupStore) recovery() error {
 		fromDiskCount += fdc
 		for _, err := range errs {
 			store.logError("error with %s: %s", names[i], err)
+			// TODO: The auditor should catch this eventually, but we should be
+			// proactive and notify the auditor of the issue here.
 		}
 		closeIfCloser(fpr)
 	}

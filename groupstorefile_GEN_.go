@@ -377,7 +377,6 @@ func groupReadTOCEntriesBatched(fpr io.ReadSeeker, blockID uint32, freeBatchChan
 	}
 	fpr.Seek(0, 0)
 	buf := make([]byte, checksumInterval+4+_GROUP_FILE_ENTRY_SIZE)
-	first := true
 	rpos := 0
 	checksumErrors := 0
 	workers := uint64(len(freeBatchChans))
@@ -386,6 +385,7 @@ func groupReadTOCEntriesBatched(fpr io.ReadSeeker, blockID uint32, freeBatchChan
 	batchSize := len(batches[0])
 	batchesPos := make([]int, len(batches))
 	fromDiskCount := 0
+	skipNext := _GROUP_FILE_HEADER_SIZE
 	more := true
 L1:
 	for more {
@@ -406,12 +406,15 @@ L1:
 			rbuf = rbuf[:len(rbuf)-4]
 			if binary.BigEndian.Uint32(cbuf) != murmur3.Sum32(rbuf) {
 				checksumErrors++
-				// TODO: Have to realign here
+				rbuf = buf[:rpos+len(rbuf)]
+				skipNext = _GROUP_FILE_ENTRY_SIZE - ((skipNext + len(rbuf)) % _GROUP_FILE_ENTRY_SIZE)
+				rpos = 0
+				continue
 			}
 		}
-		if first {
-			rbuf = rbuf[_GROUP_FILE_HEADER_SIZE:]
-			first = false
+		if skipNext != 0 {
+			rbuf = rbuf[skipNext:]
+			skipNext = 0
 		} else {
 			rbuf = buf[:rpos+len(rbuf)]
 		}
