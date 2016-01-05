@@ -808,15 +808,21 @@ func (store *DefaultValueStore) recovery() error {
 			wg.Done()
 		}(pendingBatchChans[i], freeBatchChans[i])
 	}
-	// TODO: Early returns need to shutdown the goroutines set up before so
-	// they don't just sit there forever.
+	spindown := func() {
+		for i := 0; i < len(pendingBatchChans); i++ {
+			pendingBatchChans[i] <- nil
+		}
+		wg.Wait()
+	}
 	fp, err := os.Open(store.pathtoc)
 	if err != nil {
+		spindown()
 		return err
 	}
 	names, err := fp.Readdirnames(-1)
 	fp.Close()
 	if err != nil {
+		spindown()
 		return err
 	}
 	fromDiskCount := 0
@@ -854,10 +860,7 @@ func (store *DefaultValueStore) recovery() error {
 		}
 		closeIfCloser(fpr)
 	}
-	for i := 0; i < len(pendingBatchChans); i++ {
-		pendingBatchChans[i] <- nil
-	}
-	wg.Wait()
+	spindown()
 	if store.logDebug != nil {
 		dur := time.Now().Sub(start)
 		stats := store.Stats(false).(*ValueStoreStats)

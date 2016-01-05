@@ -355,10 +355,15 @@ func (store *Default{{.T}}Store) compactFile(fullPath string, candidateBlockID u
             wg.Done()
         }(pendingBatchChans[i], freeBatchChans[i])
     }
-    // TODO: Early returns need to shutdown the goroutines set up before so
-    // they don't just sit there forever.
+    spindown := func() {
+        for i := 0; i < len(pendingBatchChans); i++ {
+            pendingBatchChans[i] <- nil
+        }
+        wg.Wait()
+    }
     fpr, err := osOpenReadSeeker(fullPath)
     if err != nil {
+        spindown()
         return cr, fmt.Errorf("Compaction error opening %s: %s\n", fullPath, err)
     }
     fdc, errs := {{.t}}ReadTOCEntriesBatched(fpr, candidateBlockID, freeBatchChans, pendingBatchChans, make(chan struct{}))
@@ -369,15 +374,13 @@ func (store *Default{{.T}}Store) compactFile(fullPath string, candidateBlockID u
     }
     if len(errs) > 0 {
         if fdc == 0 {
+            spindown()
             return cr, fmt.Errorf("Compaction errors with %s and no entries were read; file will be retried later.", fullPath)
         } else {
             store.logError("Compaction errors with %s but some entries were read; assuming the recovery was as good as it could get and removing file.", fullPath)
         }
     }
     closeIfCloser(fpr)
-    for i := 0; i < len(pendingBatchChans); i++ {
-        pendingBatchChans[i] <- nil
-    }
-    wg.Wait()
+    spindown()
     return cr, nil
 }
