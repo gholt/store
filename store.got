@@ -229,7 +229,6 @@ func New{{.T}}Store(c *{{.T}}StoreConfig) (*Default{{.T}}Store, error) {
     store.bulkSetAckConfig(cfg)
     store.flusherConfig(cfg)
     store.diskWatcherConfig(cfg)
-    store.compactionLaunch()
     store.auditLaunch()
     store.pullReplicationLaunch()
     store.pushReplicationLaunch()

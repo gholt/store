@@ -13,99 +13,105 @@ import (
 )
 
 type valueCompactionState struct {
-	interval     int
-	workerCount  int
-	ageThreshold int64
-	abort        uint32
-	threshold    float64
-	notifyChan   chan *backgroundNotification
+	interval       int
+	threshold      float64
+	ageThreshold   int64
+	workerCount    int
+	notifyChanLock sync.Mutex
+	notifyChan     chan *bgNotification
 }
 
 func (store *DefaultValueStore) compactionConfig(cfg *ValueStoreConfig) {
 	store.compactionState.interval = cfg.CompactionInterval
 	store.compactionState.threshold = cfg.CompactionThreshold
 	store.compactionState.ageThreshold = int64(cfg.CompactionAgeThreshold * 1000000000)
-	store.compactionState.notifyChan = make(chan *backgroundNotification, 1)
 	store.compactionState.workerCount = cfg.CompactionWorkers
 }
 
-func (store *DefaultValueStore) compactionLaunch() {
-	go store.compactionLauncher()
-}
-
-// DisableCompaction will stop any compaction passes until
-// EnableCompaction is called. A compaction pass searches for files
-// with a percentage of XX deleted entries.
-func (store *DefaultValueStore) DisableCompaction() {
-	c := make(chan struct{}, 1)
-	store.compactionState.notifyChan <- &backgroundNotification{
-		disable:  true,
-		doneChan: c,
-	}
-	<-c
-}
-
-// EnableCompaction will resume compaction passes.
-// A compaction pass searches for files with a percentage of XX deleted
-// entries.
-func (store *DefaultValueStore) EnableCompaction() {
-	c := make(chan struct{}, 1)
-	store.compactionState.notifyChan <- &backgroundNotification{
-		enable:   true,
-		doneChan: c,
-	}
-	<-c
-}
-
-// CompactionPass will immediately execute a compaction pass to compact stale files.
+// CompactionPass will immediately execute a compaction pass to compact stale
+// files.
 func (store *DefaultValueStore) CompactionPass() {
-	atomic.StoreUint32(&store.compactionState.abort, 1)
-	c := make(chan struct{}, 1)
-	store.compactionState.notifyChan <- &backgroundNotification{doneChan: c}
-	<-c
+	store.compactionState.notifyChanLock.Lock()
+	if store.compactionState.notifyChan == nil {
+		store.compactionPass(make(chan *bgNotification))
+	} else {
+		c := make(chan struct{}, 1)
+		store.compactionState.notifyChan <- &bgNotification{
+			action:   _BG_PASS,
+			doneChan: c,
+		}
+		<-c
+	}
+	store.compactionState.notifyChanLock.Unlock()
 }
 
-func (store *DefaultValueStore) compactionLauncher() {
-	var enabled bool
+// EnableCompaction will resume compaction passes. A compaction pass searches
+// for files with a percentage of XX deleted entries.
+func (store *DefaultValueStore) EnableCompaction() {
+	store.compactionState.notifyChanLock.Lock()
+	if store.compactionState.notifyChan == nil {
+		store.compactionState.notifyChan = make(chan *bgNotification, 1)
+		go store.compactionLauncher(store.compactionState.notifyChan)
+	}
+	store.compactionState.notifyChanLock.Unlock()
+}
+
+// DisableCompaction will stop any compaction passes until EnableCompaction is
+// called. A compaction pass searches for files with a percentage of XX deleted
+// entries.
+func (store *DefaultValueStore) DisableCompaction() {
+	store.compactionState.notifyChanLock.Lock()
+	if store.compactionState.notifyChan != nil {
+		c := make(chan struct{}, 1)
+		store.compactionState.notifyChan <- &bgNotification{
+			action:   _BG_DISABLE,
+			doneChan: c,
+		}
+		<-c
+		store.compactionState.notifyChan = nil
+	}
+	store.compactionState.notifyChanLock.Unlock()
+}
+
+func (store *DefaultValueStore) compactionLauncher(notifyChan chan *bgNotification) {
 	interval := float64(store.compactionState.interval) * float64(time.Second)
 	store.randMutex.Lock()
 	nextRun := time.Now().Add(time.Duration(interval + interval*store.rand.NormFloat64()*0.1))
 	store.randMutex.Unlock()
-	for {
-		var notification *backgroundNotification
-		sleep := nextRun.Sub(time.Now())
-		if sleep > 0 {
-			select {
-			case notification = <-store.compactionState.notifyChan:
-			case <-time.After(sleep):
-			}
-		} else {
-			select {
-			case notification = <-store.compactionState.notifyChan:
-			default:
+	var notification *bgNotification
+	running := true
+	for running {
+		if notification == nil {
+			sleep := nextRun.Sub(time.Now())
+			if sleep > 0 {
+				select {
+				case notification = <-notifyChan:
+				case <-time.After(sleep):
+				}
+			} else {
+				select {
+				case notification = <-notifyChan:
+				default:
+				}
 			}
 		}
 		store.randMutex.Lock()
 		nextRun = time.Now().Add(time.Duration(interval + interval*store.rand.NormFloat64()*0.1))
 		store.randMutex.Unlock()
 		if notification != nil {
-			if notification.enable {
-				enabled = true
-				notification.doneChan <- struct{}{}
-				continue
+			var nextNotification *bgNotification
+			switch notification.action {
+			case _BG_PASS:
+				nextNotification = store.compactionPass(notifyChan)
+			case _BG_DISABLE:
+				running = false
+			default:
+				store.logCritical("compaction: invalid action requested: %d", notification.action)
 			}
-			if notification.disable {
-				atomic.StoreUint32(&store.compactionState.abort, 1)
-				enabled = false
-				notification.doneChan <- struct{}{}
-				continue
-			}
-			atomic.StoreUint32(&store.compactionState.abort, 0)
-			store.compactionPass()
 			notification.doneChan <- struct{}{}
-		} else if enabled {
-			atomic.StoreUint32(&store.compactionState.abort, 0)
-			store.compactionPass()
+			notification = nextNotification
+		} else {
+			notification = store.compactionPass(notifyChan)
 		}
 	}
 }
@@ -115,7 +121,7 @@ type valueCompactionJob struct {
 	candidateBlockID uint32
 }
 
-func (store *DefaultValueStore) compactionPass() {
+func (store *DefaultValueStore) compactionPass(notifyChan chan *bgNotification) *bgNotification {
 	if store.logDebug != nil {
 		begin := time.Now()
 		defer func() {
@@ -125,15 +131,16 @@ func (store *DefaultValueStore) compactionPass() {
 	fp, err := os.Open(store.pathtoc)
 	if err != nil {
 		store.logError("%s\n", err)
-		return
+		return nil
 	}
 	names, err := fp.Readdirnames(-1)
 	fp.Close()
 	if err != nil {
 		store.logError("%s\n", err)
-		return
+		return nil
 	}
 	sort.Strings(names)
+	var abort uint32
 	jobChan := make(chan *valueCompactionJob, len(names))
 	wg := &sync.WaitGroup{}
 	for i := 0; i < store.compactionState.workerCount; i++ {
@@ -141,13 +148,30 @@ func (store *DefaultValueStore) compactionPass() {
 		go store.compactionWorker(jobChan, wg)
 	}
 	for _, name := range names {
+		if atomic.LoadUint32(&abort) != 0 {
+			break
+		}
 		namets, valid := store.compactionCandidate(name)
 		if valid {
 			jobChan <- &valueCompactionJob{path.Join(store.pathtoc, name), store.locBlockIDFromTimestampnano(namets)}
 		}
 	}
 	close(jobChan)
-	wg.Wait()
+	waitChan := make(chan struct{}, 1)
+	go func() {
+		wg.Wait()
+		close(waitChan)
+	}()
+	for {
+		select {
+		case notification := <-notifyChan:
+			atomic.AddUint32(&abort, 1)
+			<-waitChan
+			return notification
+		case <-waitChan:
+			return nil
+		}
+	}
 }
 
 // compactionCandidate verifies that the given toc is a valid candidate for
