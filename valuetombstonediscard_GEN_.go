@@ -194,15 +194,13 @@ func (store *DefaultValueStore) tombstoneDiscardPassLocalRemovals(notifyChan cha
 		wg.Wait()
 		close(waitChan)
 	}()
-	for {
-		select {
-		case notification := <-notifyChan:
-			atomic.AddUint32(&abort, 1)
-			<-waitChan
-			return notification
-		case <-waitChan:
-			return nil
-		}
+	select {
+	case notification := <-notifyChan:
+		atomic.AddUint32(&abort, 1)
+		<-waitChan
+		return notification
+	case <-waitChan:
+		return nil
 	}
 }
 

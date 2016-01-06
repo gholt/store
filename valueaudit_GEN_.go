@@ -12,42 +12,15 @@ import (
 )
 
 type valueAuditState struct {
-	interval     int
-	ageThreshold int64
-	notifyChan   chan *backgroundNotification
-	abort        uint32
+	interval       int
+	ageThreshold   int64
+	notifyChanLock sync.Mutex
+	notifyChan     chan *bgNotification
 }
 
 func (store *DefaultValueStore) auditConfig(cfg *ValueStoreConfig) {
 	store.auditState.interval = cfg.AuditInterval
 	store.auditState.ageThreshold = int64(cfg.AuditAgeThreshold) * int64(time.Second)
-	store.auditState.notifyChan = make(chan *backgroundNotification, 1)
-}
-
-func (store *DefaultValueStore) auditLaunch() {
-	go store.auditLauncher()
-}
-
-// DisableAudit will stop any audit passes until EnableAudit is called. An
-// audit pass checks on-disk data for errors.
-func (store *DefaultValueStore) DisableAudit() {
-	c := make(chan struct{}, 1)
-	store.auditState.notifyChan <- &backgroundNotification{
-		disable:  true,
-		doneChan: c,
-	}
-	<-c
-}
-
-// EnableAudit will resume audit passes. An audit pass checks on-disk data for
-// errors.
-func (store *DefaultValueStore) EnableAudit() {
-	c := make(chan struct{}, 1)
-	store.auditState.notifyChan <- &backgroundNotification{
-		enable:   true,
-		doneChan: c,
-	}
-	<-c
 }
 
 // AuditPass will immediately execute a pass at full speed to check the on-disk
@@ -56,53 +29,86 @@ func (store *DefaultValueStore) EnableAudit() {
 // stopped and restarted so that a call to this function ensures one complete
 // pass occurs.
 func (store *DefaultValueStore) AuditPass() {
-	atomic.StoreUint32(&store.auditState.abort, 1)
-	c := make(chan struct{}, 1)
-	store.auditState.notifyChan <- &backgroundNotification{doneChan: c}
-	<-c
+	store.auditState.notifyChanLock.Lock()
+	if store.auditState.notifyChan == nil {
+		store.auditPass(true, make(chan *bgNotification))
+	} else {
+		c := make(chan struct{}, 1)
+		store.auditState.notifyChan <- &bgNotification{
+			action:   _BG_PASS,
+			doneChan: c,
+		}
+		<-c
+	}
+	store.auditState.notifyChanLock.Unlock()
 }
 
-func (store *DefaultValueStore) auditLauncher() {
-	var enabled bool
+// EnableAudit will resume audit passes. An audit pass checks on-disk data for
+// errors.
+func (store *DefaultValueStore) EnableAudit() {
+	store.auditState.notifyChanLock.Lock()
+	if store.auditState.notifyChan == nil {
+		store.auditState.notifyChan = make(chan *bgNotification, 1)
+		go store.auditLauncher(store.auditState.notifyChan)
+	}
+	store.auditState.notifyChanLock.Unlock()
+}
+
+// DisableAudit will stop any audit passes until EnableAudit is called. An
+// audit pass checks on-disk data for errors.
+func (store *DefaultValueStore) DisableAudit() {
+	store.auditState.notifyChanLock.Lock()
+	if store.auditState.notifyChan != nil {
+		c := make(chan struct{}, 1)
+		store.auditState.notifyChan <- &bgNotification{
+			action:   _BG_DISABLE,
+			doneChan: c,
+		}
+		<-c
+		store.auditState.notifyChan = nil
+	}
+	store.auditState.notifyChanLock.Unlock()
+}
+
+func (store *DefaultValueStore) auditLauncher(notifyChan chan *bgNotification) {
 	interval := float64(store.auditState.interval) * float64(time.Second)
 	store.randMutex.Lock()
 	nextRun := time.Now().Add(time.Duration(interval + interval*store.rand.NormFloat64()*0.1))
 	store.randMutex.Unlock()
-	for {
-		var notification *backgroundNotification
-		sleep := nextRun.Sub(time.Now())
-		if sleep > 0 {
-			select {
-			case notification = <-store.auditState.notifyChan:
-			case <-time.After(sleep):
-			}
-		} else {
-			select {
-			case notification = <-store.auditState.notifyChan:
-			default:
+	var notification *bgNotification
+	running := true
+	for running {
+		if notification == nil {
+			sleep := nextRun.Sub(time.Now())
+			if sleep > 0 {
+				select {
+				case notification = <-notifyChan:
+				case <-time.After(sleep):
+				}
+			} else {
+				select {
+				case notification = <-notifyChan:
+				default:
+				}
 			}
 		}
 		store.randMutex.Lock()
 		nextRun = time.Now().Add(time.Duration(interval + interval*store.rand.NormFloat64()*0.1))
 		store.randMutex.Unlock()
 		if notification != nil {
-			if notification.enable {
-				enabled = true
-				notification.doneChan <- struct{}{}
-				continue
+			var nextNotification *bgNotification
+			switch notification.action {
+			case _BG_PASS:
+				nextNotification = store.auditPass(true, notifyChan)
+			case _BG_DISABLE:
+				running = false
+			default:
+				store.logCritical("audit: invalid action requested: %d", notification.action)
 			}
-			if notification.disable {
-				atomic.StoreUint32(&store.auditState.abort, 1)
-				enabled = false
-				notification.doneChan <- struct{}{}
-				continue
-			}
-			atomic.StoreUint32(&store.auditState.abort, 0)
-			store.auditPass(true)
 			notification.doneChan <- struct{}{}
-		} else if enabled {
-			atomic.StoreUint32(&store.auditState.abort, 0)
-			store.auditPass(false)
+			notification = nextNotification
+		} else {
+			notification = store.auditPass(false, notifyChan)
 		}
 	}
 }
@@ -110,7 +116,7 @@ func (store *DefaultValueStore) auditLauncher() {
 // NOTE: For now, there is no difference between speed=true and speed=false;
 // eventually the background audits will try to slow themselves down to finish
 // in approximately the store.auditState.interval.
-func (store *DefaultValueStore) auditPass(speed bool) {
+func (store *DefaultValueStore) auditPass(speed bool, notifyChan chan *bgNotification) *bgNotification {
 	if store.logDebug != nil {
 		begin := time.Now()
 		defer func() {
@@ -120,13 +126,13 @@ func (store *DefaultValueStore) auditPass(speed bool) {
 	fp, err := os.Open(store.pathtoc)
 	if err != nil {
 		store.logError("audit: %s\n", err)
-		return
+		return nil
 	}
 	names, err := fp.Readdirnames(-1)
 	fp.Close()
 	if err != nil {
 		store.logError("audit: %s\n", err)
-		return
+		return nil
 	}
 	shuffledNames := make([]string, len(names))
 	store.randMutex.Lock()
@@ -136,6 +142,11 @@ func (store *DefaultValueStore) auditPass(speed bool) {
 	store.randMutex.Unlock()
 	names = shuffledNames
 	for i := 0; i < len(names); i++ {
+		select {
+		case notification := <-notifyChan:
+			return notification
+		default:
+		}
 		if !strings.HasSuffix(names[i], ".valuetoc") {
 			continue
 		}
@@ -184,7 +195,19 @@ func (store *DefaultValueStore) auditPass(speed bool) {
 					freeBatchChans[i] <- make([]valueTOCEntry, store.recoveryBatchSize)
 				}
 			}
+			nextNotificationChan := make(chan *bgNotification, 1)
 			controlChan := make(chan struct{})
+			go func() {
+				select {
+				case n := <-notifyChan:
+					if atomic.AddUint32(&failedAudit, 1) == 0 {
+						close(controlChan)
+					}
+					nextNotificationChan <- n
+				case <-controlChan:
+					nextNotificationChan <- nil
+				}
+			}()
 			wg := &sync.WaitGroup{}
 			wg.Add(len(pendingBatchChans))
 			for i := 0; i < len(pendingBatchChans); i++ {
@@ -201,8 +224,7 @@ func (store *DefaultValueStore) auditPass(speed bool) {
 									continue
 								}
 								if valueInCorruptRange(wr.Offset, wr.Length, corruptions) {
-									v := atomic.AddUint32(&failedAudit, 1)
-									if v == 0 {
+									if atomic.AddUint32(&failedAudit, 1) == 0 {
 										close(controlChan)
 									}
 									break
@@ -236,6 +258,12 @@ func (store *DefaultValueStore) auditPass(speed bool) {
 				pendingBatchChans[i] <- nil
 			}
 			wg.Wait()
+			if atomic.LoadUint32(&failedAudit) == 0 {
+				close(controlChan)
+			}
+			if n := <-nextNotificationChan; n != nil {
+				return n
+			}
 		}
 		if atomic.LoadUint32(&failedAudit) == 0 {
 			if store.logDebug != nil {
@@ -271,4 +299,5 @@ func (store *DefaultValueStore) auditPass(speed bool) {
 			}
 		}
 	}
+	return nil
 }
