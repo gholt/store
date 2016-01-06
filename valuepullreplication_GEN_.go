@@ -16,20 +16,23 @@ const _VALUE_PULL_REPLICATION_MSG_TYPE = 0x579c4bd162f045b3
 const _VALUE_PULL_REPLICATION_MSG_HEADER_BYTES = 44
 
 type valuePullReplicationState struct {
-	inWorkers            int
+	outInterval          int
+	outWorkers           uint64
+	outIteration         uint16
 	inMsgChan            chan *valuePullReplicationMsg
 	inFreeMsgChan        chan *valuePullReplicationMsg
-	inResponseMsgTimeout time.Duration
-	outWorkers           uint64
-	outInterval          time.Duration
-	outNotifyChan        chan *backgroundNotification
-	outIteration         uint16
-	outAbort             uint32
+	inWorkers            int
 	outMsgChan           chan *valuePullReplicationMsg
-	outKTBFs             []*valueKTBloomFilter
-	outMsgTimeout        time.Duration
 	bloomN               uint64
 	bloomP               float64
+	outKTBFs             []*valueKTBloomFilter
+	inResponseMsgTimeout time.Duration
+	outMsgTimeout        time.Duration
+
+	inNotifyChanLock  sync.Mutex
+	inNotifyChan      chan *bgNotification
+	outNotifyChanLock sync.Mutex
+	outNotifyChan     chan *bgNotification
 }
 
 type valuePullReplicationMsg struct {
@@ -39,8 +42,7 @@ type valuePullReplicationMsg struct {
 }
 
 func (store *DefaultValueStore) pullReplicationConfig(cfg *ValueStoreConfig) {
-	store.pullReplicationState.outInterval = time.Duration(cfg.OutPullReplicationInterval) * time.Second
-	store.pullReplicationState.outNotifyChan = make(chan *backgroundNotification, 1)
+	store.pullReplicationState.outInterval = cfg.OutPullReplicationInterval
 	store.pullReplicationState.outWorkers = uint64(cfg.OutPullReplicationWorkers)
 	store.pullReplicationState.outIteration = uint16(cfg.Rand.Uint32())
 	if store.msgRing != nil {
@@ -68,35 +70,104 @@ func (store *DefaultValueStore) pullReplicationConfig(cfg *ValueStoreConfig) {
 		store.pullReplicationState.inResponseMsgTimeout = time.Duration(cfg.InPullReplicationResponseMsgTimeout) * time.Millisecond
 		store.pullReplicationState.outMsgTimeout = time.Duration(cfg.OutPullReplicationMsgTimeout) * time.Millisecond
 	}
-	store.pullReplicationState.outNotifyChan = make(chan *backgroundNotification, 1)
 }
 
-func (store *DefaultValueStore) pullReplicationLaunch() {
-	for i := 0; i < store.pullReplicationState.inWorkers; i++ {
-		go store.inPullReplication()
+// EnableInPullReplication will resume handling incoming pull replication
+// requests.
+func (store *DefaultValueStore) EnableInPullReplication() {
+	store.pullReplicationState.inNotifyChanLock.Lock()
+	if store.pullReplicationState.inNotifyChan == nil {
+		store.pullReplicationState.inNotifyChan = make(chan *bgNotification, 1)
+		go store.inPullReplicationLauncher(store.pullReplicationState.inNotifyChan)
 	}
-	go store.outPullReplicationLauncher()
+	store.pullReplicationState.inNotifyChanLock.Unlock()
+}
+
+// DisableInPullReplication will stop handling any incoming pull replication
+// requests (they will be dropped) until EnableInPullReplication is called.
+func (store *DefaultValueStore) DisableInPullReplication() {
+	store.pullReplicationState.inNotifyChanLock.Lock()
+	if store.pullReplicationState.inNotifyChan != nil {
+		c := make(chan struct{}, 1)
+		store.pullReplicationState.inNotifyChan <- &bgNotification{
+			action:   _BG_DISABLE,
+			doneChan: c,
+		}
+		<-c
+		store.pullReplicationState.inNotifyChan = nil
+	}
+	store.pullReplicationState.inNotifyChanLock.Unlock()
+}
+
+// OutPullReplicationPass will immediately execute an outgoing pull replication
+// pass rather than waiting for the next interval. If a pass is currently
+// executing, it will be stopped and restarted so that a call to this function
+// ensures one complete pass occurs. Note that this pass will send the outgoing
+// pull replication requests, but all the responses will almost certainly not
+// have been received when this function returns. These requests are stateless,
+// and so synchronization at that level is not possible.
+func (store *DefaultValueStore) OutPullReplicationPass() {
+	store.pullReplicationState.outNotifyChanLock.Lock()
+	if store.pullReplicationState.outNotifyChan == nil {
+		store.tombstoneDiscardPass(make(chan *bgNotification))
+	} else {
+		c := make(chan struct{}, 1)
+		store.pullReplicationState.outNotifyChan <- &bgNotification{
+			action:   _BG_PASS,
+			doneChan: c,
+		}
+		<-c
+	}
+	store.pullReplicationState.outNotifyChanLock.Unlock()
+}
+
+// EnableOutPullReplication will resume outgoing pull replication requests.
+func (store *DefaultValueStore) EnableOutPullReplication() {
+	store.pullReplicationState.outNotifyChanLock.Lock()
+	if store.pullReplicationState.outNotifyChan == nil {
+		store.pullReplicationState.outNotifyChan = make(chan *bgNotification, 1)
+		go store.outPullReplicationLauncher(store.pullReplicationState.outNotifyChan)
+	}
+	store.pullReplicationState.outNotifyChanLock.Unlock()
 }
 
 // DisableOutPullReplication will stop any outgoing pull replication requests
 // until EnableOutPullReplication is called.
 func (store *DefaultValueStore) DisableOutPullReplication() {
-	c := make(chan struct{}, 1)
-	store.pullReplicationState.outNotifyChan <- &backgroundNotification{
-		disable:  true,
-		doneChan: c,
+	store.pullReplicationState.outNotifyChanLock.Lock()
+	if store.pullReplicationState.outNotifyChan != nil {
+		c := make(chan struct{}, 1)
+		store.pullReplicationState.outNotifyChan <- &bgNotification{
+			action:   _BG_DISABLE,
+			doneChan: c,
+		}
+		<-c
+		store.pullReplicationState.outNotifyChan = nil
 	}
-	<-c
+	store.pullReplicationState.outNotifyChanLock.Unlock()
 }
 
-// EnableOutPullReplication will resume outgoing pull replication requests.
-func (store *DefaultValueStore) EnableOutPullReplication() {
-	c := make(chan struct{}, 1)
-	store.pullReplicationState.outNotifyChan <- &backgroundNotification{
-		enable:   true,
-		doneChan: c,
+func (store *DefaultValueStore) inPullReplicationLauncher(notifyChan chan *bgNotification) {
+	wg := &sync.WaitGroup{}
+	wg.Add(store.pullReplicationState.inWorkers)
+	for i := 0; i < store.pullReplicationState.inWorkers; i++ {
+		go store.inPullReplication(i, wg)
 	}
-	<-c
+	var notification *bgNotification
+	running := true
+	for running {
+		notification = <-notifyChan
+		if notification.action == _BG_DISABLE {
+			for i := 0; i < store.pullReplicationState.inWorkers; i++ {
+				store.pullReplicationState.inMsgChan <- nil
+			}
+			wg.Wait()
+			running = false
+		} else {
+			store.logCritical("out pull replication: invalid action requested: %d", notification.action)
+		}
+		notification.doneChan <- struct{}{}
+	}
 }
 
 // newInPullReplicationMsg reads pull-replication messages from the MsgRing and
@@ -106,8 +177,8 @@ func (store *DefaultValueStore) newInPullReplicationMsg(r io.Reader, l uint64) (
 	select {
 	case prm = <-store.pullReplicationState.inFreeMsgChan:
 	default:
-		// If there isn't a free valuePullReplicationMsg, just read and discard the
-		// incoming pull-replication message.
+		// If there isn't a free valuePullReplicationMsg, just read and
+		// discard the incoming pull-replication message.
 		left := l
 		var sn int
 		var err error
@@ -165,7 +236,7 @@ func (store *DefaultValueStore) newInPullReplicationMsg(r io.Reader, l uint64) (
 
 // inPullReplication actually processes incoming pull-replication messages;
 // there may be more than one of these workers.
-func (store *DefaultValueStore) inPullReplication() {
+func (store *DefaultValueStore) inPullReplication(worker int, wg *sync.WaitGroup) {
 	k := make([]uint64, store.bulkSetState.msgCap/_VALUE_BULK_SET_MSG_MIN_ENTRY_LENGTH*2)
 	v := make([]byte, store.valueCap)
 	for {
@@ -246,70 +317,55 @@ func (store *DefaultValueStore) inPullReplication() {
 			}
 		}
 	}
+	wg.Done()
 }
 
-// OutPullReplicationPass will immediately execute an outgoing pull replication
-// pass rather than waiting for the next interval. If a pass is currently
-// executing, it will be stopped and restarted so that a call to this function
-// ensures one complete pass occurs. Note that this pass will send the outgoing
-// pull replication requests, but all the responses will almost certainly not
-// have been received when this function returns. These requests are stateless,
-// and so synchronization at that level is not possible.
-func (store *DefaultValueStore) OutPullReplicationPass() {
-	atomic.StoreUint32(&store.pullReplicationState.outAbort, 1)
-	c := make(chan struct{}, 1)
-	store.pullReplicationState.outNotifyChan <- &backgroundNotification{doneChan: c}
-	<-c
-}
-
-func (store *DefaultValueStore) outPullReplicationLauncher() {
-	var enabled bool
-	interval := float64(store.pullReplicationState.outInterval)
+func (store *DefaultValueStore) outPullReplicationLauncher(notifyChan chan *bgNotification) {
+	interval := float64(store.pullReplicationState.outInterval) * float64(time.Second)
 	store.randMutex.Lock()
 	nextRun := time.Now().Add(time.Duration(interval + interval*store.rand.NormFloat64()*0.1))
 	store.randMutex.Unlock()
-	for {
-		var notification *backgroundNotification
-		sleep := nextRun.Sub(time.Now())
-		if sleep > 0 {
-			select {
-			case notification = <-store.pullReplicationState.outNotifyChan:
-			case <-time.After(sleep):
-			}
-		} else {
-			select {
-			case notification = <-store.pullReplicationState.outNotifyChan:
-			default:
+	var notification *bgNotification
+	running := true
+	for running {
+		if notification == nil {
+			sleep := nextRun.Sub(time.Now())
+			if sleep > 0 {
+				select {
+				case notification = <-notifyChan:
+				case <-time.After(sleep):
+				}
+			} else {
+				select {
+				case notification = <-notifyChan:
+				default:
+				}
 			}
 		}
 		store.randMutex.Lock()
 		nextRun = time.Now().Add(time.Duration(interval + interval*store.rand.NormFloat64()*0.1))
 		store.randMutex.Unlock()
 		if notification != nil {
-			if notification.enable {
-				enabled = true
-				notification.doneChan <- struct{}{}
-				continue
+			var nextNotification *bgNotification
+			switch notification.action {
+			case _BG_PASS:
+				nextNotification = store.outPullReplicationPass(notifyChan)
+			case _BG_DISABLE:
+				running = false
+			default:
+				store.logCritical("out pull replication: invalid action requested: %d", notification.action)
 			}
-			if notification.disable {
-				atomic.StoreUint32(&store.pullReplicationState.outAbort, 1)
-				enabled = false
-				notification.doneChan <- struct{}{}
-				continue
-			}
-			atomic.StoreUint32(&store.pullReplicationState.outAbort, 0)
-			store.outPullReplicationPass()
 			notification.doneChan <- struct{}{}
-		} else if enabled {
-			atomic.StoreUint32(&store.pullReplicationState.outAbort, 0)
-			store.outPullReplicationPass()
+			notification = nextNotification
+		} else {
+			notification = store.outPullReplicationPass(notifyChan)
 		}
 	}
 }
 
-func (store *DefaultValueStore) outPullReplicationPass() {
+func (store *DefaultValueStore) outPullReplicationPass(notifyChan chan *bgNotification) *bgNotification {
 	if store.msgRing == nil {
-		return
+		return nil
 	}
 	if store.logDebug != nil {
 		begin := time.Now()
@@ -319,7 +375,7 @@ func (store *DefaultValueStore) outPullReplicationPass() {
 	}
 	ring := store.msgRing.Ring()
 	if ring == nil {
-		return
+		return nil
 	}
 	rightwardPartitionShift := 64 - ring.PartitionBitCount()
 	partitionCount := uint64(1) << ring.PartitionBitCount()
@@ -333,6 +389,7 @@ func (store *DefaultValueStore) outPullReplicationPass() {
 	for uint64(len(store.pullReplicationState.outKTBFs)) < ws {
 		store.pullReplicationState.outKTBFs = append(store.pullReplicationState.outKTBFs, newValueKTBloomFilter(store.pullReplicationState.bloomN, store.pullReplicationState.bloomP, 0))
 	}
+	var abort uint32
 	f := func(p uint64, w uint64, ktbf *valueKTBloomFilter) {
 		pb := p << rightwardPartitionShift
 		rb := pb + ((uint64(1) << rightwardPartitionShift) / ws * w)
@@ -349,16 +406,13 @@ func (store *DefaultValueStore) outPullReplicationPass() {
 		timestampbitsnow := uint64(brimtime.TimeToUnixMicro(time.Now())) << _TSB_UTIL_BITS
 		cutoff := timestampbitsnow - store.replicationIgnoreRecent
 		var more bool
-		for {
+		for atomic.LoadUint32(&abort) == 0 {
 			rbThis := rb
 			ktbf.reset(store.pullReplicationState.outIteration)
 			rb, more = store.locmap.ScanCallback(rb, re, 0, _TSB_LOCAL_REMOVAL, cutoff, store.pullReplicationState.bloomN, func(keyA uint64, keyB uint64, timestampbits uint64, length uint32) bool {
 				ktbf.add(keyA, keyB, timestampbits)
 				return true
 			})
-			if atomic.LoadUint32(&store.pullReplicationState.outAbort) != 0 {
-				break
-			}
 			ring2 := store.msgRing.Ring()
 			if ring2 == nil || ring2.Version() != ringVersion {
 				break
@@ -382,7 +436,7 @@ func (store *DefaultValueStore) outPullReplicationPass() {
 			ktbf := store.pullReplicationState.outKTBFs[w]
 			pb := partitionCount / ws * w
 			for p := pb; p < partitionCount; p++ {
-				if atomic.LoadUint32(&store.pullReplicationState.outAbort) != 0 {
+				if atomic.LoadUint32(&abort) != 0 {
 					break
 				}
 				ring2 := store.msgRing.Ring()
@@ -394,7 +448,7 @@ func (store *DefaultValueStore) outPullReplicationPass() {
 				}
 			}
 			for p := uint64(0); p < pb; p++ {
-				if atomic.LoadUint32(&store.pullReplicationState.outAbort) != 0 {
+				if atomic.LoadUint32(&abort) != 0 {
 					break
 				}
 				ring2 := store.msgRing.Ring()
@@ -409,6 +463,19 @@ func (store *DefaultValueStore) outPullReplicationPass() {
 		}(w)
 	}
 	wg.Wait()
+	waitChan := make(chan struct{}, 1)
+	go func() {
+		wg.Wait()
+		close(waitChan)
+	}()
+	select {
+	case notification := <-notifyChan:
+		atomic.AddUint32(&abort, 1)
+		<-waitChan
+		return notification
+	case <-waitChan:
+		return nil
+	}
 }
 
 // newOutPullReplicationMsg gives an initialized valuePullReplicationMsg for filling

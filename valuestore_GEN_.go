@@ -226,7 +226,6 @@ func NewValueStore(c *ValueStoreConfig) (*DefaultValueStore, error) {
 	store.bulkSetAckConfig(cfg)
 	store.flusherConfig(cfg)
 	store.diskWatcherConfig(cfg)
-	store.pullReplicationLaunch()
 	store.pushReplicationLaunch()
 	store.bulkSetLaunch()
 	store.bulkSetAckLaunch()
@@ -247,26 +246,48 @@ func (store *DefaultValueStore) DisableAll() {
 }
 
 // DisableAllBackground calls DisableTombstoneDiscard(), DisableCompaction(),
-// DisableAudit(), DisableOutPullReplication(), DisableOutPushReplication(),
-// but does *not* call DisableWrites().
+// DisableAudit(), DisableInPullReplication(), DisableOutPullReplication(),
+// DisableOutPushReplication(), but does *not* call DisableWrites().
 func (store *DefaultValueStore) DisableAllBackground() {
-	store.DisableTombstoneDiscard()
-	store.DisableCompaction()
-	store.DisableAudit()
-	store.DisableOutPullReplication()
-	store.DisableOutPushReplication()
+	wg := &sync.WaitGroup{}
+	for i, f := range []func(){
+		store.DisableTombstoneDiscard,
+		store.DisableCompaction,
+		store.DisableAudit,
+		store.DisableInPullReplication,
+		store.DisableOutPullReplication,
+		store.DisableOutPushReplication,
+	} {
+		wg.Add(1)
+		go func(ii int, ff func()) {
+			ff()
+			wg.Done()
+		}(i, f)
+	}
+	wg.Wait()
 }
 
-// EnableAll calls EnableTombstoneDiscard(), EnableCompaction(),
-// EnableAudit(), EnableOutPullReplication(), EnableOutPushReplication(), and
-// EnableWrites().
+// EnableAll calls EnableTombstoneDiscard(), EnableCompaction(), EnableAudit(),
+// EnableInPullReplication(), EnableOutPullReplication(),
+// EnableOutPushReplication(), and EnableWrites().
 func (store *DefaultValueStore) EnableAll() {
-	store.EnableTombstoneDiscard()
-	store.EnableOutPullReplication()
-	store.EnableOutPushReplication()
-	store.EnableWrites()
-	store.EnableCompaction()
-	store.EnableAudit()
+	wg := &sync.WaitGroup{}
+	for _, f := range []func(){
+		store.EnableTombstoneDiscard,
+		store.EnableCompaction,
+		store.EnableAudit,
+		store.EnableInPullReplication,
+		store.EnableOutPullReplication,
+		store.EnableOutPushReplication,
+		store.EnableWrites,
+	} {
+		wg.Add(1)
+		go func(ff func()) {
+			ff()
+			wg.Done()
+		}(f)
+	}
+	wg.Wait()
 }
 
 // DisableWrites will cause any incoming Write or Delete requests to respond
@@ -837,7 +858,7 @@ func (store *DefaultValueStore) recovery() error {
 			store.logError("bad timestamp in name: %#v\n", names[i])
 			continue
 		}
-		fpr, err := osOpenReadSeeker(names[i])
+		fpr, err := osOpenReadSeeker(path.Join(store.pathtoc, names[i]))
 		if err != nil {
 			store.logError("error opening %s: %s\n", names[i], err)
 			continue
