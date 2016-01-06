@@ -168,6 +168,18 @@ func osCreateWriteCloser(name string) (io.WriteCloser, error) {
 
 type LogFunc func(format string, v ...interface{})
 
+type bgNotificationAction int
+
+const (
+	_BG_PASS bgNotificationAction = iota
+	_BG_DISABLE
+)
+
+type bgNotification struct {
+	action   bgNotificationAction
+	doneChan chan struct{}
+}
+
 type backgroundNotification struct {
 	enable   bool
 	disable  bool

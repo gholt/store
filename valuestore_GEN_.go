@@ -226,7 +226,6 @@ func NewValueStore(c *ValueStoreConfig) (*DefaultValueStore, error) {
 	store.bulkSetAckConfig(cfg)
 	store.flusherConfig(cfg)
 	store.diskWatcherConfig(cfg)
-	store.tombstoneDiscardLaunch()
 	store.compactionLaunch()
 	store.auditLaunch()
 	store.pullReplicationLaunch()
