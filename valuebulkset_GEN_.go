@@ -3,6 +3,7 @@ package store
 import (
 	"encoding/binary"
 	"io"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -16,11 +17,14 @@ const _VALUE_BULK_SET_MSG_MIN_ENTRY_LENGTH = 28
 
 type valueBulkSetState struct {
 	msgCap               int
+	inWorkers            int
+	inResponseMsgTimeout time.Duration
 	inMsgChan            chan *valueBulkSetMsg
 	inFreeMsgChan        chan *valueBulkSetMsg
-	inResponseMsgTimeout time.Duration
 	outFreeMsgChan       chan *valueBulkSetMsg
-	inBulkSetDoneChans   []chan struct{}
+
+	inNotifyChanLock sync.Mutex
+	inNotifyChan     chan *bgNotification
 }
 
 type valueBulkSetMsg struct {
@@ -30,6 +34,9 @@ type valueBulkSetMsg struct {
 }
 
 func (store *DefaultValueStore) bulkSetConfig(cfg *ValueStoreConfig) {
+	store.bulkSetState.msgCap = cfg.BulkSetMsgCap
+	store.bulkSetState.inWorkers = cfg.InBulkSetWorkers
+	store.bulkSetState.inResponseMsgTimeout = time.Duration(cfg.InBulkSetResponseMsgTimeout) * time.Millisecond
 	if store.msgRing != nil {
 		store.msgRing.SetMsgHandler(_VALUE_BULK_SET_MSG_TYPE, store.newInBulkSetMsg)
 		store.bulkSetState.inMsgChan = make(chan *valueBulkSetMsg, cfg.InBulkSetMsgs)
@@ -41,11 +48,6 @@ func (store *DefaultValueStore) bulkSetConfig(cfg *ValueStoreConfig) {
 				body:   make([]byte, cfg.BulkSetMsgCap),
 			}
 		}
-		store.bulkSetState.inBulkSetDoneChans = make([]chan struct{}, cfg.InBulkSetWorkers)
-		for i := 0; i < len(store.bulkSetState.inBulkSetDoneChans); i++ {
-			store.bulkSetState.inBulkSetDoneChans[i] = make(chan struct{}, 1)
-		}
-		store.bulkSetState.msgCap = cfg.BulkSetMsgCap
 		store.bulkSetState.outFreeMsgChan = make(chan *valueBulkSetMsg, cfg.OutBulkSetMsgs)
 		for i := 0; i < cap(store.bulkSetState.outFreeMsgChan); i++ {
 			store.bulkSetState.outFreeMsgChan <- &valueBulkSetMsg{
@@ -54,13 +56,55 @@ func (store *DefaultValueStore) bulkSetConfig(cfg *ValueStoreConfig) {
 				body:   make([]byte, cfg.BulkSetMsgCap),
 			}
 		}
-		store.bulkSetState.inResponseMsgTimeout = time.Duration(cfg.InBulkSetResponseMsgTimeout) * time.Millisecond
 	}
 }
 
-func (store *DefaultValueStore) bulkSetLaunch() {
-	for i := 0; i < len(store.bulkSetState.inBulkSetDoneChans); i++ {
-		go store.inBulkSet(store.bulkSetState.inBulkSetDoneChans[i])
+// EnableInBulkSet will resume handling incoming bulk set requests.
+func (store *DefaultValueStore) EnableInBulkSet() {
+	store.bulkSetState.inNotifyChanLock.Lock()
+	if store.bulkSetState.inNotifyChan == nil {
+		store.bulkSetState.inNotifyChan = make(chan *bgNotification, 1)
+		go store.inBulkSetLauncher(store.bulkSetState.inNotifyChan)
+	}
+	store.bulkSetState.inNotifyChanLock.Unlock()
+}
+
+// DisableInBulkSet will stop handling any incoming bulk set requests (they
+// will be dropped) until EnableInBulkSet is called.
+func (store *DefaultValueStore) DisableInBulkSet() {
+	store.bulkSetState.inNotifyChanLock.Lock()
+	if store.bulkSetState.inNotifyChan != nil {
+		c := make(chan struct{}, 1)
+		store.bulkSetState.inNotifyChan <- &bgNotification{
+			action:   _BG_DISABLE,
+			doneChan: c,
+		}
+		<-c
+		store.bulkSetState.inNotifyChan = nil
+	}
+	store.bulkSetState.inNotifyChanLock.Unlock()
+}
+
+func (store *DefaultValueStore) inBulkSetLauncher(notifyChan chan *bgNotification) {
+	wg := &sync.WaitGroup{}
+	wg.Add(store.bulkSetState.inWorkers)
+	for i := 0; i < store.bulkSetState.inWorkers; i++ {
+		go store.inBulkSet(wg)
+	}
+	var notification *bgNotification
+	running := true
+	for running {
+		notification = <-notifyChan
+		if notification.action == _BG_DISABLE {
+			for i := 0; i < store.bulkSetState.inWorkers; i++ {
+				store.bulkSetState.inMsgChan <- nil
+			}
+			wg.Wait()
+			running = false
+		} else {
+			store.logCritical("in bulk set: invalid action requested: %d", notification.action)
+		}
+		notification.doneChan <- struct{}{}
 	}
 }
 
@@ -71,8 +115,8 @@ func (store *DefaultValueStore) newInBulkSetMsg(r io.Reader, l uint64) (uint64, 
 	select {
 	case bsm = <-store.bulkSetState.inFreeMsgChan:
 	default:
-		// If there isn't a free valueBulkSetMsg, just read and discard the incoming
-		// bulk-set message.
+		// If there isn't a free valueBulkSetMsg, just read and discard the
+		// incoming bulk-set message.
 		left := l
 		var sn int
 		var err error
@@ -157,7 +201,7 @@ func (store *DefaultValueStore) newInBulkSetMsg(r io.Reader, l uint64) (uint64, 
 
 // inBulkSet actually processes incoming bulk-set messages; there may be more
 // than one of these workers.
-func (store *DefaultValueStore) inBulkSet(doneChan chan struct{}) {
+func (store *DefaultValueStore) inBulkSet(wg *sync.WaitGroup) {
 	for {
 		bsm := <-store.bulkSetState.inMsgChan
 		if bsm == nil {
@@ -208,7 +252,7 @@ func (store *DefaultValueStore) inBulkSet(doneChan chan struct{}) {
 		}
 		store.bulkSetState.inFreeMsgChan <- bsm
 	}
-	doneChan <- struct{}{}
+	wg.Done()
 }
 
 // newOutBulkSetMsg gives an initialized valueBulkSetMsg for filling out and

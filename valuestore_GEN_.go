@@ -226,7 +226,6 @@ func NewValueStore(c *ValueStoreConfig) (*DefaultValueStore, error) {
 	store.bulkSetAckConfig(cfg)
 	store.flusherConfig(cfg)
 	store.diskWatcherConfig(cfg)
-	store.bulkSetLaunch()
 	store.bulkSetAckLaunch()
 	store.flusherLaunch()
 	store.diskWatcherLaunch()
@@ -238,24 +237,21 @@ func (store *DefaultValueStore) ValueCap() uint32 {
 	return store.valueCap
 }
 
-// DisableAll calls DisableAllBackground(), and DisableWrites().
 func (store *DefaultValueStore) DisableAll() {
 	store.DisableAllBackground()
 	store.DisableWrites()
 }
 
-// DisableAllBackground calls DisableTombstoneDiscard(), DisableCompaction(),
-// DisableAudit(), DisableInPullReplication(), DisableOutPullReplication(),
-// DisableOutPushReplication(), but does *not* call DisableWrites().
 func (store *DefaultValueStore) DisableAllBackground() {
 	wg := &sync.WaitGroup{}
 	for i, f := range []func(){
-		store.DisableTombstoneDiscard,
-		store.DisableCompaction,
 		store.DisableAudit,
+		store.DisableCompaction,
 		store.DisableInPullReplication,
 		store.DisableOutPullReplication,
 		store.DisableOutPushReplication,
+		store.DisableInBulkSet,
+		store.DisableTombstoneDiscard,
 	} {
 		wg.Add(1)
 		go func(ii int, ff func()) {
@@ -266,19 +262,17 @@ func (store *DefaultValueStore) DisableAllBackground() {
 	wg.Wait()
 }
 
-// EnableAll calls EnableTombstoneDiscard(), EnableCompaction(), EnableAudit(),
-// EnableInPullReplication(), EnableOutPullReplication(),
-// EnableOutPushReplication(), and EnableWrites().
 func (store *DefaultValueStore) EnableAll() {
 	wg := &sync.WaitGroup{}
 	for _, f := range []func(){
+		store.EnableWrites,
 		store.EnableTombstoneDiscard,
+		store.EnableInBulkSet,
+		store.EnableOutPushReplication,
+		store.EnableOutPullReplication,
+		store.EnableInPullReplication,
 		store.EnableCompaction,
 		store.EnableAudit,
-		store.EnableInPullReplication,
-		store.EnableOutPullReplication,
-		store.EnableOutPushReplication,
-		store.EnableWrites,
 	} {
 		wg.Add(1)
 		go func(ff func()) {

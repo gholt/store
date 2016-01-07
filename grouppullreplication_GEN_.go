@@ -151,7 +151,7 @@ func (store *DefaultGroupStore) inPullReplicationLauncher(notifyChan chan *bgNot
 	wg := &sync.WaitGroup{}
 	wg.Add(store.pullReplicationState.inWorkers)
 	for i := 0; i < store.pullReplicationState.inWorkers; i++ {
-		go store.inPullReplication(i, wg)
+		go store.inPullReplication(wg)
 	}
 	var notification *bgNotification
 	running := true
@@ -236,7 +236,7 @@ func (store *DefaultGroupStore) newInPullReplicationMsg(r io.Reader, l uint64) (
 
 // inPullReplication actually processes incoming pull-replication messages;
 // there may be more than one of these workers.
-func (store *DefaultGroupStore) inPullReplication(worker int, wg *sync.WaitGroup) {
+func (store *DefaultGroupStore) inPullReplication(wg *sync.WaitGroup) {
 	k := make([]uint64, store.bulkSetState.msgCap/_GROUP_BULK_SET_MSG_MIN_ENTRY_LENGTH*4)
 	v := make([]byte, store.valueCap)
 	for {

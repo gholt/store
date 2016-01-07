@@ -17,12 +17,7 @@ func Test{{.T}}BulkSetReadObviouslyTooShort(t *testing.T) {
     if err != nil {
         t.Fatal("")
     }
-    for i := 0; i < len(store.bulkSetState.inBulkSetDoneChans); i++ {
-        store.bulkSetState.inMsgChan <- nil
-    }
-    for _, doneChan := range store.bulkSetState.inBulkSetDoneChans {
-        <-doneChan
-    }
+    store.DisableInBulkSet()
     n, err := store.newInBulkSetMsg(bytes.NewBuffer(make([]byte, 1)), 1)
     if err != nil {
         t.Fatal(err)
@@ -54,12 +49,7 @@ func Test{{.T}}BulkSetRead(t *testing.T) {
     if err != nil {
         t.Fatal("")
     }
-    for i := 0; i < len(store.bulkSetState.inBulkSetDoneChans); i++ {
-        store.bulkSetState.inMsgChan <- nil
-    }
-    for _, doneChan := range store.bulkSetState.inBulkSetDoneChans {
-        <-doneChan
-    }
+    store.DisableInBulkSet()
     n, err := store.newInBulkSetMsg(bytes.NewBuffer(make([]byte, 100)), 100)
     if err != nil {
         t.Fatal(err)
@@ -104,12 +94,7 @@ func Test{{.T}}BulkSetReadLowSendCap(t *testing.T) {
     if err != nil {
         t.Fatal("")
     }
-    for i := 0; i < len(store.bulkSetState.inBulkSetDoneChans); i++ {
-        store.bulkSetState.inMsgChan <- nil
-    }
-    for _, doneChan := range store.bulkSetState.inBulkSetDoneChans {
-        <-doneChan
-    }
+    store.DisableInBulkSet()
     for len(store.bulkSetState.inMsgChan) > 0 {
         time.Sleep(time.Millisecond)
     }
