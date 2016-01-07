@@ -3,6 +3,7 @@ package store
 import (
 	"encoding/binary"
 	"io"
+	"sync"
 	"sync/atomic"
 )
 
@@ -13,10 +14,13 @@ const _VALUE_BULK_SET_ACK_MSG_TYPE = 0x39589f4746844e3b
 const _VALUE_BULK_SET_ACK_MSG_ENTRY_LENGTH = 24
 
 type valueBulkSetAckState struct {
-	inMsgChan             chan *valueBulkSetAckMsg
-	inFreeMsgChan         chan *valueBulkSetAckMsg
-	outFreeMsgChan        chan *valueBulkSetAckMsg
-	inBulkSetAckDoneChans []chan struct{}
+	inWorkers      int
+	inMsgChan      chan *valueBulkSetAckMsg
+	inFreeMsgChan  chan *valueBulkSetAckMsg
+	outFreeMsgChan chan *valueBulkSetAckMsg
+
+	inNotifyChanLock sync.Mutex
+	inNotifyChan     chan *bgNotification
 }
 
 type valueBulkSetAckMsg struct {
@@ -25,33 +29,73 @@ type valueBulkSetAckMsg struct {
 }
 
 func (store *DefaultValueStore) bulkSetAckConfig(cfg *ValueStoreConfig) {
+	store.bulkSetAckState.inWorkers = cfg.InBulkSetAckWorkers
+	store.bulkSetAckState.inMsgChan = make(chan *valueBulkSetAckMsg, cfg.InBulkSetAckMsgs)
+	store.bulkSetAckState.inFreeMsgChan = make(chan *valueBulkSetAckMsg, cfg.InBulkSetAckMsgs)
+	for i := 0; i < cap(store.bulkSetAckState.inFreeMsgChan); i++ {
+		store.bulkSetAckState.inFreeMsgChan <- &valueBulkSetAckMsg{
+			store: store,
+			body:  make([]byte, cfg.BulkSetAckMsgCap),
+		}
+	}
+	store.bulkSetAckState.outFreeMsgChan = make(chan *valueBulkSetAckMsg, cfg.OutBulkSetAckMsgs)
+	for i := 0; i < cap(store.bulkSetAckState.outFreeMsgChan); i++ {
+		store.bulkSetAckState.outFreeMsgChan <- &valueBulkSetAckMsg{
+			store: store,
+			body:  make([]byte, cfg.BulkSetAckMsgCap),
+		}
+	}
 	if store.msgRing != nil {
 		store.msgRing.SetMsgHandler(_VALUE_BULK_SET_ACK_MSG_TYPE, store.newInBulkSetAckMsg)
-		store.bulkSetAckState.inMsgChan = make(chan *valueBulkSetAckMsg, cfg.InBulkSetAckMsgs)
-		store.bulkSetAckState.inFreeMsgChan = make(chan *valueBulkSetAckMsg, cfg.InBulkSetAckMsgs)
-		for i := 0; i < cap(store.bulkSetAckState.inFreeMsgChan); i++ {
-			store.bulkSetAckState.inFreeMsgChan <- &valueBulkSetAckMsg{
-				store: store,
-				body:  make([]byte, cfg.BulkSetAckMsgCap),
-			}
-		}
-		store.bulkSetAckState.inBulkSetAckDoneChans = make([]chan struct{}, cfg.InBulkSetAckWorkers)
-		for i := 0; i < len(store.bulkSetAckState.inBulkSetAckDoneChans); i++ {
-			store.bulkSetAckState.inBulkSetAckDoneChans[i] = make(chan struct{}, 1)
-		}
-		store.bulkSetAckState.outFreeMsgChan = make(chan *valueBulkSetAckMsg, cfg.OutBulkSetAckMsgs)
-		for i := 0; i < cap(store.bulkSetAckState.outFreeMsgChan); i++ {
-			store.bulkSetAckState.outFreeMsgChan <- &valueBulkSetAckMsg{
-				store: store,
-				body:  make([]byte, cfg.BulkSetAckMsgCap),
-			}
-		}
 	}
 }
 
-func (store *DefaultValueStore) bulkSetAckLaunch() {
-	for i := 0; i < len(store.bulkSetAckState.inBulkSetAckDoneChans); i++ {
-		go store.inBulkSetAck(store.bulkSetAckState.inBulkSetAckDoneChans[i])
+// EnableInBulkSetAck will resume handling incoming bulk set ack messages.
+func (store *DefaultValueStore) EnableInBulkSetAck() {
+	store.bulkSetAckState.inNotifyChanLock.Lock()
+	if store.bulkSetAckState.inNotifyChan == nil {
+		store.bulkSetAckState.inNotifyChan = make(chan *bgNotification, 1)
+		go store.inBulkSetAckLauncher(store.bulkSetAckState.inNotifyChan)
+	}
+	store.bulkSetAckState.inNotifyChanLock.Unlock()
+}
+
+// DisableInBulkSetAck will stop handling any incoming bulk set ack messages
+// (they will be dropped) until EnableInBulkSetAck is called.
+func (store *DefaultValueStore) DisableInBulkSetAck() {
+	store.bulkSetAckState.inNotifyChanLock.Lock()
+	if store.bulkSetAckState.inNotifyChan != nil {
+		c := make(chan struct{}, 1)
+		store.bulkSetAckState.inNotifyChan <- &bgNotification{
+			action:   _BG_DISABLE,
+			doneChan: c,
+		}
+		<-c
+		store.bulkSetAckState.inNotifyChan = nil
+	}
+	store.bulkSetAckState.inNotifyChanLock.Unlock()
+}
+
+func (store *DefaultValueStore) inBulkSetAckLauncher(notifyChan chan *bgNotification) {
+	wg := &sync.WaitGroup{}
+	wg.Add(store.bulkSetAckState.inWorkers)
+	for i := 0; i < store.bulkSetAckState.inWorkers; i++ {
+		go store.inBulkSetAck(wg)
+	}
+	var notification *bgNotification
+	running := true
+	for running {
+		notification = <-notifyChan
+		if notification.action == _BG_DISABLE {
+			for i := 0; i < store.bulkSetAckState.inWorkers; i++ {
+				store.bulkSetAckState.inMsgChan <- nil
+			}
+			wg.Wait()
+			running = false
+		} else {
+			store.logCritical("in bulk set ack: invalid action requested: %d", notification.action)
+		}
+		notification.doneChan <- struct{}{}
 	}
 }
 
@@ -107,7 +151,7 @@ func (store *DefaultValueStore) newInBulkSetAckMsg(r io.Reader, l uint64) (uint6
 
 // inBulkSetAck actually processes incoming bulk-set-ack messages; there may be
 // more than one of these workers.
-func (store *DefaultValueStore) inBulkSetAck(doneChan chan struct{}) {
+func (store *DefaultValueStore) inBulkSetAck(wg *sync.WaitGroup) {
 	for {
 		bsam := <-store.bulkSetAckState.inMsgChan
 		if bsam == nil {
@@ -136,7 +180,7 @@ func (store *DefaultValueStore) inBulkSetAck(doneChan chan struct{}) {
 		}
 		store.bulkSetAckState.inFreeMsgChan <- bsam
 	}
-	doneChan <- struct{}{}
+	wg.Done()
 }
 
 // newOutBulkSetAckMsg gives an initialized valueBulkSetAckMsg for filling out

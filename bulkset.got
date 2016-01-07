@@ -46,25 +46,25 @@ func (store *Default{{.T}}Store) bulkSetConfig(cfg *{{.T}}StoreConfig) {
     store.bulkSetState.msgCap = cfg.BulkSetMsgCap
     store.bulkSetState.inWorkers = cfg.InBulkSetWorkers
     store.bulkSetState.inResponseMsgTimeout = time.Duration(cfg.InBulkSetResponseMsgTimeout) * time.Millisecond
+    store.bulkSetState.inMsgChan = make(chan *{{.t}}BulkSetMsg, cfg.InBulkSetMsgs)
+    store.bulkSetState.inFreeMsgChan = make(chan *{{.t}}BulkSetMsg, cfg.InBulkSetMsgs)
+    for i := 0; i < cap(store.bulkSetState.inFreeMsgChan); i++ {
+        store.bulkSetState.inFreeMsgChan <- &{{.t}}BulkSetMsg{
+            store:  store,
+            header: make([]byte, _{{.TT}}_BULK_SET_MSG_HEADER_LENGTH),
+            body:   make([]byte, cfg.BulkSetMsgCap),
+        }
+    }
+    store.bulkSetState.outFreeMsgChan = make(chan *{{.t}}BulkSetMsg, cfg.OutBulkSetMsgs)
+    for i := 0; i < cap(store.bulkSetState.outFreeMsgChan); i++ {
+        store.bulkSetState.outFreeMsgChan <- &{{.t}}BulkSetMsg{
+            store:  store,
+            header: make([]byte, _{{.TT}}_BULK_SET_MSG_HEADER_LENGTH),
+            body:   make([]byte, cfg.BulkSetMsgCap),
+        }
+    }
     if store.msgRing != nil {
         store.msgRing.SetMsgHandler(_{{.TT}}_BULK_SET_MSG_TYPE, store.newInBulkSetMsg)
-        store.bulkSetState.inMsgChan = make(chan *{{.t}}BulkSetMsg, cfg.InBulkSetMsgs)
-        store.bulkSetState.inFreeMsgChan = make(chan *{{.t}}BulkSetMsg, cfg.InBulkSetMsgs)
-        for i := 0; i < cap(store.bulkSetState.inFreeMsgChan); i++ {
-            store.bulkSetState.inFreeMsgChan <- &{{.t}}BulkSetMsg{
-                store:  store,
-                header: make([]byte, _{{.TT}}_BULK_SET_MSG_HEADER_LENGTH),
-                body:   make([]byte, cfg.BulkSetMsgCap),
-            }
-        }
-        store.bulkSetState.outFreeMsgChan = make(chan *{{.t}}BulkSetMsg, cfg.OutBulkSetMsgs)
-        for i := 0; i < cap(store.bulkSetState.outFreeMsgChan); i++ {
-            store.bulkSetState.outFreeMsgChan <- &{{.t}}BulkSetMsg{
-                store:  store,
-                header: make([]byte, _{{.TT}}_BULK_SET_MSG_HEADER_LENGTH),
-                body:   make([]byte, cfg.BulkSetMsgCap),
-            }
-        }
     }
 }
 

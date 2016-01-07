@@ -15,12 +15,7 @@ func TestGroupBulkSetAckRead(t *testing.T) {
 	if err != nil {
 		t.Fatal("")
 	}
-	for i := 0; i < len(store.bulkSetAckState.inBulkSetAckDoneChans); i++ {
-		store.bulkSetAckState.inMsgChan <- nil
-	}
-	for _, doneChan := range store.bulkSetAckState.inBulkSetAckDoneChans {
-		<-doneChan
-	}
+	store.DisableInBulkSetAck()
 	n, err := store.newInBulkSetAckMsg(bytes.NewBuffer(make([]byte, 100)), 100)
 	if err != nil {
 		t.Fatal(err)
@@ -52,12 +47,7 @@ func TestGroupBulkSetAckReadLowSendCap(t *testing.T) {
 	if err != nil {
 		t.Fatal("")
 	}
-	for i := 0; i < len(store.bulkSetAckState.inBulkSetAckDoneChans); i++ {
-		store.bulkSetAckState.inMsgChan <- nil
-	}
-	for _, doneChan := range store.bulkSetAckState.inBulkSetAckDoneChans {
-		<-doneChan
-	}
+	store.DisableInBulkSetAck()
 	n, err := store.newInBulkSetAckMsg(bytes.NewBuffer(make([]byte, 100)), 100)
 	if err != nil {
 		t.Fatal(err)

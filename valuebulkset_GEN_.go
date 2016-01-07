@@ -37,25 +37,25 @@ func (store *DefaultValueStore) bulkSetConfig(cfg *ValueStoreConfig) {
 	store.bulkSetState.msgCap = cfg.BulkSetMsgCap
 	store.bulkSetState.inWorkers = cfg.InBulkSetWorkers
 	store.bulkSetState.inResponseMsgTimeout = time.Duration(cfg.InBulkSetResponseMsgTimeout) * time.Millisecond
+	store.bulkSetState.inMsgChan = make(chan *valueBulkSetMsg, cfg.InBulkSetMsgs)
+	store.bulkSetState.inFreeMsgChan = make(chan *valueBulkSetMsg, cfg.InBulkSetMsgs)
+	for i := 0; i < cap(store.bulkSetState.inFreeMsgChan); i++ {
+		store.bulkSetState.inFreeMsgChan <- &valueBulkSetMsg{
+			store:  store,
+			header: make([]byte, _VALUE_BULK_SET_MSG_HEADER_LENGTH),
+			body:   make([]byte, cfg.BulkSetMsgCap),
+		}
+	}
+	store.bulkSetState.outFreeMsgChan = make(chan *valueBulkSetMsg, cfg.OutBulkSetMsgs)
+	for i := 0; i < cap(store.bulkSetState.outFreeMsgChan); i++ {
+		store.bulkSetState.outFreeMsgChan <- &valueBulkSetMsg{
+			store:  store,
+			header: make([]byte, _VALUE_BULK_SET_MSG_HEADER_LENGTH),
+			body:   make([]byte, cfg.BulkSetMsgCap),
+		}
+	}
 	if store.msgRing != nil {
 		store.msgRing.SetMsgHandler(_VALUE_BULK_SET_MSG_TYPE, store.newInBulkSetMsg)
-		store.bulkSetState.inMsgChan = make(chan *valueBulkSetMsg, cfg.InBulkSetMsgs)
-		store.bulkSetState.inFreeMsgChan = make(chan *valueBulkSetMsg, cfg.InBulkSetMsgs)
-		for i := 0; i < cap(store.bulkSetState.inFreeMsgChan); i++ {
-			store.bulkSetState.inFreeMsgChan <- &valueBulkSetMsg{
-				store:  store,
-				header: make([]byte, _VALUE_BULK_SET_MSG_HEADER_LENGTH),
-				body:   make([]byte, cfg.BulkSetMsgCap),
-			}
-		}
-		store.bulkSetState.outFreeMsgChan = make(chan *valueBulkSetMsg, cfg.OutBulkSetMsgs)
-		for i := 0; i < cap(store.bulkSetState.outFreeMsgChan); i++ {
-			store.bulkSetState.outFreeMsgChan <- &valueBulkSetMsg{
-				store:  store,
-				header: make([]byte, _VALUE_BULK_SET_MSG_HEADER_LENGTH),
-				body:   make([]byte, cfg.BulkSetMsgCap),
-			}
-		}
 	}
 }
 
