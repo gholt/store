@@ -226,7 +226,6 @@ func NewValueStore(c *ValueStoreConfig) (*DefaultValueStore, error) {
 	store.bulkSetAckConfig(cfg)
 	store.flusherConfig(cfg)
 	store.diskWatcherConfig(cfg)
-	store.flusherLaunch()
 	store.diskWatcherLaunch()
 	return store, nil
 }
@@ -244,6 +243,7 @@ func (store *DefaultValueStore) DisableAll() {
 func (store *DefaultValueStore) DisableAllBackground() {
 	wg := &sync.WaitGroup{}
 	for i, f := range []func(){
+		store.DisableFlusher,
 		store.DisableAudit,
 		store.DisableCompaction,
 		store.DisableInPullReplication,
@@ -274,6 +274,7 @@ func (store *DefaultValueStore) EnableAll() {
 		store.EnableInPullReplication,
 		store.EnableCompaction,
 		store.EnableAudit,
+		store.EnableFlusher,
 	} {
 		wg.Add(1)
 		go func(ff func()) {

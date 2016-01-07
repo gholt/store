@@ -229,7 +229,6 @@ func NewGroupStore(c *GroupStoreConfig) (*DefaultGroupStore, error) {
 	store.bulkSetAckConfig(cfg)
 	store.flusherConfig(cfg)
 	store.diskWatcherConfig(cfg)
-	store.flusherLaunch()
 	store.diskWatcherLaunch()
 	return store, nil
 }
@@ -247,6 +246,7 @@ func (store *DefaultGroupStore) DisableAll() {
 func (store *DefaultGroupStore) DisableAllBackground() {
 	wg := &sync.WaitGroup{}
 	for i, f := range []func(){
+		store.DisableFlusher,
 		store.DisableAudit,
 		store.DisableCompaction,
 		store.DisableInPullReplication,
@@ -277,6 +277,7 @@ func (store *DefaultGroupStore) EnableAll() {
 		store.EnableInPullReplication,
 		store.EnableCompaction,
 		store.EnableAudit,
+		store.EnableFlusher,
 	} {
 		wg.Add(1)
 		go func(ff func()) {
