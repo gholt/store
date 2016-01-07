@@ -229,7 +229,6 @@ func NewGroupStore(c *GroupStoreConfig) (*DefaultGroupStore, error) {
 	store.bulkSetAckConfig(cfg)
 	store.flusherConfig(cfg)
 	store.diskWatcherConfig(cfg)
-	store.pushReplicationLaunch()
 	store.bulkSetLaunch()
 	store.bulkSetAckLaunch()
 	store.flusherLaunch()

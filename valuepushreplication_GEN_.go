@@ -12,12 +12,13 @@ import (
 type valuePushReplicationState struct {
 	outWorkers    int
 	outInterval   int
-	outNotifyChan chan *backgroundNotification
-	outAbort      uint32
 	outMsgChan    chan *valuePullReplicationMsg
+	outMsgTimeout time.Duration
 	outLists      [][]uint64
 	outValBufs    [][]byte
-	outMsgTimeout time.Duration
+
+	outNotifyChanLock sync.Mutex
+	outNotifyChan     chan *bgNotification
 }
 
 func (store *DefaultValueStore) pushReplicationConfig(cfg *ValueStoreConfig) {
@@ -26,33 +27,7 @@ func (store *DefaultValueStore) pushReplicationConfig(cfg *ValueStoreConfig) {
 	if store.msgRing != nil {
 		store.pushReplicationState.outMsgChan = make(chan *valuePullReplicationMsg, cfg.OutPushReplicationMsgs)
 	}
-	store.pushReplicationState.outNotifyChan = make(chan *backgroundNotification, 1)
 	store.pushReplicationState.outMsgTimeout = time.Duration(cfg.OutPushReplicationMsgTimeout) * time.Millisecond
-}
-
-func (store *DefaultValueStore) pushReplicationLaunch() {
-	go store.outPushReplicationLauncher()
-}
-
-// DisableOutPushReplication will stop any outgoing push replication requests
-// until EnableOutPushReplication is called.
-func (store *DefaultValueStore) DisableOutPushReplication() {
-	c := make(chan struct{}, 1)
-	store.pushReplicationState.outNotifyChan <- &backgroundNotification{
-		disable:  true,
-		doneChan: c,
-	}
-	<-c
-}
-
-// EnableOutPushReplication will resume outgoing push replication requests.
-func (store *DefaultValueStore) EnableOutPushReplication() {
-	c := make(chan struct{}, 1)
-	store.pushReplicationState.outNotifyChan <- &backgroundNotification{
-		enable:   true,
-		doneChan: c,
-	}
-	<-c
 }
 
 // OutPushReplicationPass will immediately execute an outgoing push replication
@@ -63,60 +38,92 @@ func (store *DefaultValueStore) EnableOutPushReplication() {
 // have been received when this function returns. These requests are stateless,
 // and so synchronization at that level is not possible.
 func (store *DefaultValueStore) OutPushReplicationPass() {
-	atomic.StoreUint32(&store.pushReplicationState.outAbort, 1)
-	c := make(chan struct{}, 1)
-	store.pushReplicationState.outNotifyChan <- &backgroundNotification{doneChan: c}
-	<-c
+	store.pushReplicationState.outNotifyChanLock.Lock()
+	if store.pushReplicationState.outNotifyChan == nil {
+		store.outPushReplicationPass(make(chan *bgNotification))
+	} else {
+		c := make(chan struct{}, 1)
+		store.pushReplicationState.outNotifyChan <- &bgNotification{
+			action:   _BG_PASS,
+			doneChan: c,
+		}
+		<-c
+	}
+	store.pushReplicationState.outNotifyChanLock.Unlock()
 }
 
-func (store *DefaultValueStore) outPushReplicationLauncher() {
-	var enabled bool
+// EnableOutPushReplication will resume outgoing push replication requests.
+func (store *DefaultValueStore) EnableOutPushReplication() {
+	store.pushReplicationState.outNotifyChanLock.Lock()
+	if store.pushReplicationState.outNotifyChan == nil {
+		store.pushReplicationState.outNotifyChan = make(chan *bgNotification, 1)
+		go store.outPushReplicationLauncher(store.pushReplicationState.outNotifyChan)
+	}
+	store.pushReplicationState.outNotifyChanLock.Unlock()
+}
+
+// DisableOutPushReplication will stop any outgoing push replication requests
+// until EnableOutPushReplication is called.
+func (store *DefaultValueStore) DisableOutPushReplication() {
+	store.pushReplicationState.outNotifyChanLock.Lock()
+	if store.pushReplicationState.outNotifyChan != nil {
+		c := make(chan struct{}, 1)
+		store.pushReplicationState.outNotifyChan <- &bgNotification{
+			action:   _BG_DISABLE,
+			doneChan: c,
+		}
+		<-c
+		store.pushReplicationState.outNotifyChan = nil
+	}
+	store.pushReplicationState.outNotifyChanLock.Unlock()
+}
+
+func (store *DefaultValueStore) outPushReplicationLauncher(notifyChan chan *bgNotification) {
 	interval := float64(store.pushReplicationState.outInterval) * float64(time.Second)
 	store.randMutex.Lock()
 	nextRun := time.Now().Add(time.Duration(interval + interval*store.rand.NormFloat64()*0.1))
 	store.randMutex.Unlock()
-	for {
-		var notification *backgroundNotification
-		sleep := nextRun.Sub(time.Now())
-		if sleep > 0 {
-			select {
-			case notification = <-store.pushReplicationState.outNotifyChan:
-			case <-time.After(sleep):
-			}
-		} else {
-			select {
-			case notification = <-store.pushReplicationState.outNotifyChan:
-			default:
+	var notification *bgNotification
+	running := true
+	for running {
+		if notification == nil {
+			sleep := nextRun.Sub(time.Now())
+			if sleep > 0 {
+				select {
+				case notification = <-notifyChan:
+				case <-time.After(sleep):
+				}
+			} else {
+				select {
+				case notification = <-notifyChan:
+				default:
+				}
 			}
 		}
 		store.randMutex.Lock()
 		nextRun = time.Now().Add(time.Duration(interval + interval*store.rand.NormFloat64()*0.1))
 		store.randMutex.Unlock()
 		if notification != nil {
-			if notification.enable {
-				enabled = true
-				notification.doneChan <- struct{}{}
-				continue
+			var nextNotification *bgNotification
+			switch notification.action {
+			case _BG_PASS:
+				nextNotification = store.outPushReplicationPass(notifyChan)
+			case _BG_DISABLE:
+				running = false
+			default:
+				store.logCritical("out push replication: invalid action requested: %d", notification.action)
 			}
-			if notification.disable {
-				atomic.StoreUint32(&store.pushReplicationState.outAbort, 1)
-				enabled = false
-				notification.doneChan <- struct{}{}
-				continue
-			}
-			atomic.StoreUint32(&store.pushReplicationState.outAbort, 0)
-			store.outPushReplicationPass()
 			notification.doneChan <- struct{}{}
-		} else if enabled {
-			atomic.StoreUint32(&store.pushReplicationState.outAbort, 0)
-			store.outPushReplicationPass()
+			notification = nextNotification
+		} else {
+			notification = store.outPushReplicationPass(notifyChan)
 		}
 	}
 }
 
-func (store *DefaultValueStore) outPushReplicationPass() {
+func (store *DefaultValueStore) outPushReplicationPass(notifyChan chan *bgNotification) *bgNotification {
 	if store.msgRing == nil {
-		return
+		return nil
 	}
 	if store.logDebug != nil {
 		begin := time.Now()
@@ -126,7 +133,7 @@ func (store *DefaultValueStore) outPushReplicationPass() {
 	}
 	ring := store.msgRing.Ring()
 	if ring == nil {
-		return
+		return nil
 	}
 	ringVersion := ring.Version()
 	pbc := ring.PartitionBitCount()
@@ -142,6 +149,7 @@ func (store *DefaultValueStore) outPushReplicationPass() {
 	for len(store.pushReplicationState.outValBufs) < int(workerMax+1) {
 		store.pushReplicationState.outValBufs = append(store.pushReplicationState.outValBufs, make([]byte, store.valueCap))
 	}
+	var abort uint32
 	work := func(partition uint64, worker uint64, list []uint64, valbuf []byte) {
 		partitionOnLeftBits := partition << partitionShift
 		rangeBegin := partitionOnLeftBits + (workerPartitionPiece * worker)
@@ -178,7 +186,7 @@ func (store *DefaultValueStore) outPushReplicationPass() {
 			}
 			return true
 		})
-		if len(list) <= 0 || atomic.LoadUint32(&store.pushReplicationState.outAbort) != 0 {
+		if len(list) <= 0 || atomic.LoadUint32(&abort) != 0 {
 			return
 		}
 		ring2 := store.msgRing.Ring()
@@ -219,7 +227,7 @@ func (store *DefaultValueStore) outPushReplicationPass() {
 			valbuf := store.pushReplicationState.outValBufs[worker]
 			partitionBegin := (partitionMax + 1) / (workerMax + 1) * worker
 			for partition := partitionBegin; ; {
-				if atomic.LoadUint32(&store.pushReplicationState.outAbort) != 0 {
+				if atomic.LoadUint32(&abort) != 0 {
 					break
 				}
 				ring2 := store.msgRing.Ring()
@@ -240,5 +248,17 @@ func (store *DefaultValueStore) outPushReplicationPass() {
 			wg.Done()
 		}(worker)
 	}
-	wg.Wait()
+	waitChan := make(chan struct{}, 1)
+	go func() {
+		wg.Wait()
+		close(waitChan)
+	}()
+	select {
+	case notification := <-notifyChan:
+		atomic.AddUint32(&abort, 1)
+		<-waitChan
+		return notification
+	case <-waitChan:
+		return nil
+	}
 }

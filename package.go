@@ -180,12 +180,6 @@ type bgNotification struct {
 	doneChan chan struct{}
 }
 
-type backgroundNotification struct {
-	enable   bool
-	disable  bool
-	doneChan chan struct{}
-}
-
 // Store is an interface for a disk-backed data structure that stores
 // []byte values referenced by keys with options for replication.
 //

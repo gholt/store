@@ -112,7 +112,7 @@ func (store *Default{{.T}}Store) DisableInPullReplication() {
 func (store *Default{{.T}}Store) OutPullReplicationPass() {
     store.pullReplicationState.outNotifyChanLock.Lock()
     if store.pullReplicationState.outNotifyChan == nil {
-        store.tombstoneDiscardPass(make(chan *bgNotification))
+        store.outPullReplicationPass(make(chan *bgNotification))
     } else {
         c := make(chan struct{}, 1)
         store.pullReplicationState.outNotifyChan <- &bgNotification{
@@ -465,7 +465,6 @@ func (store *Default{{.T}}Store) outPullReplicationPass(notifyChan chan *bgNotif
             wg.Done()
         }(w)
     }
-    wg.Wait()
     waitChan := make(chan struct{}, 1)
     go func() {
         wg.Wait()
