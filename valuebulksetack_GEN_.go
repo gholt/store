@@ -126,10 +126,10 @@ func (store *DefaultValueStore) inBulkSetAck(doneChan chan struct{}) {
 			if ring != nil && !ring.Responsible(uint32(keyA>>rightwardPartitionShift)) {
 				atomic.AddInt32(&store.inBulkSetAckWrites, 1)
 				timestampbits := binary.BigEndian.Uint64(b[o+16:]) | _TSB_LOCAL_REMOVAL
-				rtimestampbits, err := store.write(keyA, binary.BigEndian.Uint64(b[o+8:]), timestampbits, nil, true)
+				ptimestampbits, err := store.write(keyA, binary.BigEndian.Uint64(b[o+8:]), timestampbits, nil, true)
 				if err != nil {
 					atomic.AddInt32(&store.inBulkSetAckWriteErrors, 1)
-				} else if rtimestampbits != timestampbits {
+				} else if ptimestampbits >= timestampbits {
 					atomic.AddInt32(&store.inBulkSetAckWritesOverridden, 1)
 				}
 			}

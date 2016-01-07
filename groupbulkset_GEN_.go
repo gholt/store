@@ -168,7 +168,7 @@ func (store *DefaultGroupStore) inBulkSet(doneChan chan struct{}) {
 		ring := store.msgRing.Ring()
 		var rightwardPartitionShift uint64
 		var bsam *groupBulkSetAckMsg
-		var rtimestampbits uint64
+		var ptimestampbits uint64
 		if ring != nil {
 			rightwardPartitionShift = 64 - uint64(ring.PartitionBitCount())
 			// Only ack if there is someone to ack to, which should always be
@@ -191,10 +191,10 @@ func (store *DefaultGroupStore) inBulkSet(doneChan chan struct{}) {
 			// Note that deletions are acted upon as internal requests (work
 			// even if writes are disabled due to disk fullness) and new data
 			// writes are not.
-			rtimestampbits, err = store.write(keyA, keyB, nameKeyA, nameKeyB, timestampbits, body[_GROUP_BULK_SET_MSG_ENTRY_HEADER_LENGTH:_GROUP_BULK_SET_MSG_ENTRY_HEADER_LENGTH+l], timestampbits&_TSB_DELETION != 0)
+			ptimestampbits, err = store.write(keyA, keyB, nameKeyA, nameKeyB, timestampbits, body[_GROUP_BULK_SET_MSG_ENTRY_HEADER_LENGTH:_GROUP_BULK_SET_MSG_ENTRY_HEADER_LENGTH+l], timestampbits&_TSB_DELETION != 0)
 			if err != nil {
 				atomic.AddInt32(&store.inBulkSetWriteErrors, 1)
-			} else if rtimestampbits != timestampbits {
+			} else if ptimestampbits >= timestampbits {
 				atomic.AddInt32(&store.inBulkSetWritesOverridden, 1)
 			}
 			// But only ack on success, there is someone to ack to, and the
