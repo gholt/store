@@ -12,8 +12,9 @@ import (
 )
 
 type valueAuditState struct {
-	interval       int
-	ageThreshold   int64
+	interval     int
+	ageThreshold int64
+
 	notifyChanLock sync.Mutex
 	notifyChan     chan *bgNotification
 }
@@ -120,18 +121,18 @@ func (store *DefaultValueStore) auditPass(speed bool, notifyChan chan *bgNotific
 	if store.logDebug != nil {
 		begin := time.Now()
 		defer func() {
-			store.logDebug("audit: took %s\n", time.Now().Sub(begin))
+			store.logDebug("audit: took %s", time.Now().Sub(begin))
 		}()
 	}
 	fp, err := os.Open(store.pathtoc)
 	if err != nil {
-		store.logError("audit: %s\n", err)
+		store.logError("audit: %s", err)
 		return nil
 	}
 	names, err := fp.Readdirnames(-1)
 	fp.Close()
 	if err != nil {
-		store.logError("audit: %s\n", err)
+		store.logError("audit: %s", err)
 		return nil
 	}
 	shuffledNames := make([]string, len(names))
@@ -152,11 +153,11 @@ func (store *DefaultValueStore) auditPass(speed bool, notifyChan chan *bgNotific
 		}
 		namets := int64(0)
 		if namets, err = strconv.ParseInt(names[i][:len(names[i])-len(".valuetoc")], 10, 64); err != nil {
-			store.logError("audit: bad timestamp in name: %#v\n", names[i])
+			store.logError("audit: bad timestamp in name: %#v", names[i])
 			continue
 		}
 		if namets == 0 {
-			store.logError("audit: bad timestamp in name: %#v\n", names[i])
+			store.logError("audit: bad timestamp in name: %#v", names[i])
 			continue
 		}
 		if namets == int64(atomic.LoadUint64(&store.activeTOCA)) || namets == int64(atomic.LoadUint64(&store.activeTOCB)) {
@@ -172,10 +173,10 @@ func (store *DefaultValueStore) auditPass(speed bool, notifyChan chan *bgNotific
 			atomic.AddUint32(&failedAudit, 1)
 			if os.IsNotExist(err) {
 				if store.logDebug != nil {
-					store.logDebug("audit: error opening %s: %s\n", dataName, err)
+					store.logDebug("audit: error opening %s: %s", dataName, err)
 				}
 			} else {
-				store.logError("audit: error opening %s: %s\n", dataName, err)
+				store.logError("audit: error opening %s: %s", dataName, err)
 			}
 		} else {
 			corruptions, errs := valueChecksumVerify(fpr)
@@ -240,7 +241,7 @@ func (store *DefaultValueStore) auditPass(speed bool, notifyChan chan *bgNotific
 			if err != nil {
 				atomic.AddUint32(&failedAudit, 1)
 				if !os.IsNotExist(err) {
-					store.logError("audit: error opening %s: %s\n", names[i], err)
+					store.logError("audit: error opening %s: %s", names[i], err)
 				}
 			} else {
 				// NOTE: The block ID is unimportant in this context, so it's
@@ -283,19 +284,19 @@ func (store *DefaultValueStore) auditPass(speed bool, notifyChan chan *bgNotific
 			blockID := store.locBlockIDFromTimestampnano(namets)
 			result, err := store.compactFile(path.Join(store.pathtoc, names[i]), blockID)
 			if err != nil {
-				store.logCritical("%s\n", err)
+				store.logError("audit: %s", err)
 			}
 			if err = os.Remove(path.Join(store.pathtoc, names[i])); err != nil {
-				store.logCritical("Unable to remove %s %s\n", names[i], err)
+				store.logError("audit: unable to remove %s: %s", names[i], err)
 			}
 			if err = os.Remove(path.Join(store.path, names[i][:len(names[i])-len("toc")])); err != nil {
-				store.logCritical("Unable to remove %s %s\n", names[i][:len(names[i])-len("toc")], err)
+				store.logError("audit: unable to remove %s: %s", names[i][:len(names[i])-len("toc")], err)
 			}
 			if err = store.closeLocBlock(blockID); err != nil {
-				store.logCritical("error closing in-memory block for %s: %s\n", names[i], err)
+				store.logError("audit: error closing in-memory block for %s: %s", names[i], err)
 			}
 			if store.logDebug != nil {
-				store.logDebug("audit: compacted %s (total %d, rewrote %d, stale %d)\n", names[i], result.count, result.rewrote, result.stale)
+				store.logDebug("audit: compacted %s (total %d, rewrote %d, stale %d)", names[i], result.count, result.rewrote, result.stale)
 			}
 		}
 	}
