@@ -275,12 +275,7 @@ func (store *DefaultValueStore) auditPass(speed bool, notifyChan chan *bgNotific
 			// TODO: Compaction needs to rewrite all the good entries it can,
 			// but also deliberately remove any known bad entries from the
 			// locmap so that replication can get them back in place from other
-			// servers. Also, once done recovering the entries from the file
-			// set as best as possible, if anything is in doubt, a reload of
-			// the whole store is needed in case some entries weren't even
-			// discoverable. A full reload of the store will mean the new
-			// locmap won't have the completely missing entries allowing
-			// replication to kick in.
+			// servers.
 			blockID := store.locBlockIDFromTimestampnano(namets)
 			result, err := store.compactFile(path.Join(store.pathtoc, names[i]), blockID)
 			if err != nil {
@@ -298,6 +293,15 @@ func (store *DefaultValueStore) auditPass(speed bool, notifyChan chan *bgNotific
 			if store.logDebug != nil {
 				store.logDebug("audit: compacted %s (total %d, rewrote %d, stale %d)", names[i], result.count, result.rewrote, result.stale)
 			}
+			go func() {
+				store.logError("audit: all audit actions require store restarts at this time.")
+				// TODO: This isn't correct, yet. I need to set a fresh locmap
+				// as well.
+				store.DisableAll()
+				store.Flush()
+				store.recovery()
+				store.EnableAll()
+			}()
 		}
 	}
 	return nil

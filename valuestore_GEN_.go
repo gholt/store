@@ -213,10 +213,6 @@ func NewValueStore(c *ValueStoreConfig) (*DefaultValueStore, error) {
 	for i := 0; i < len(store.pendingWriteReqChans); i++ {
 		go store.memWriter(store.pendingWriteReqChans[i])
 	}
-	err := store.recovery()
-	if err != nil {
-		return nil, err
-	}
 	store.tombstoneDiscardConfig(cfg)
 	store.compactionConfig(cfg)
 	store.auditConfig(cfg)
@@ -226,6 +222,10 @@ func NewValueStore(c *ValueStoreConfig) (*DefaultValueStore, error) {
 	store.bulkSetAckConfig(cfg)
 	store.flusherConfig(cfg)
 	store.diskWatcherConfig(cfg)
+	err := store.recovery()
+	if err != nil {
+		return nil, err
+	}
 	return store, nil
 }
 
