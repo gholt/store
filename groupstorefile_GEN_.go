@@ -435,6 +435,7 @@ L1:
 				k := keyB % workers
 				if batches[k] == nil {
 					batches[k] = <-freeBatchChans[k]
+					batches[k] = batches[k][:cap(batches[k])]
 					batchesPos[k] = 0
 				}
 				wr := &batches[k][batchesPos[k]]
