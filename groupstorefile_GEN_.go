@@ -382,6 +382,7 @@ func groupReadTOCEntriesBatched(fpr io.ReadSeeker, blockID uint32, freeBatchChan
 	workers := uint64(len(freeBatchChans))
 	batches := make([][]groupTOCEntry, workers)
 	batches[0] = <-freeBatchChans[0]
+	batches[0] = batches[0][:cap(batches[0])]
 	batchSize := len(batches[0])
 	batchesPos := make([]int, len(batches))
 	fromDiskCount := 0
