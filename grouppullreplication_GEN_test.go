@@ -65,7 +65,7 @@ func TestGroupPullReplicationSimple(t *testing.T) {
 	m := &msgRingGroupPullReplicationTester{ring: r}
 	cfg := lowMemGroupStoreConfig()
 	cfg.MsgRing = m
-	store, err := NewGroupStore(cfg)
+	store, _, err := NewGroupStore(cfg)
 	if err != nil {
 		t.Fatal("")
 	}

@@ -68,6 +68,7 @@ type DefaultValueStore struct {
 	userDisabled            bool
 	flusherState            valueFlusherState
 	diskWatcherState        valueDiskWatcherState
+	restartChan             chan error
 
 	statsLock                    sync.Mutex
 	lookups                      int32
@@ -133,13 +134,21 @@ type valueLocBlock interface {
 }
 
 // NewValueStore creates a DefaultValueStore for use in storing []byte values
-// referenced by 128 bit keys.
+// referenced by 128 bit keys; the store, restart channel (chan error), or any
+// error during construction is returned.
+//
+// The restart channel should be read from continually during the life of the
+// store and, upon any error from the channel, the store should be discarded
+// and a new one created in its place. This restart procedure is needed when
+// data on disk is detected as corrupted and cannot be easily recovered from; a
+// restart will cause only good entries to be loaded therefore discarding any
+// bad entries due to the corruption.
 //
 // Note that a lot of buffering, multiple cores, and background processes can
 // be in use and therefore DisableAll() and Flush() should be called prior to
 // the process exiting to ensure all processing is done and the buffers are
 // flushed.
-func NewValueStore(c *ValueStoreConfig) (*DefaultValueStore, error) {
+func NewValueStore(c *ValueStoreConfig) (*DefaultValueStore, chan error, error) {
 	cfg := resolveValueStoreConfig(c)
 	lcmap := cfg.ValueLocMap
 	if lcmap == nil {
@@ -168,6 +177,7 @@ func NewValueStore(c *ValueStoreConfig) (*DefaultValueStore, error) {
 		fileReaders:             cfg.FileReaders,
 		checksumInterval:        uint32(cfg.ChecksumInterval),
 		msgRing:                 cfg.MsgRing,
+		restartChan:             make(chan error),
 	}
 	store.freeableMemBlockChans = make([]chan *valueMemBlock, store.workers)
 	for i := 0; i < cap(store.freeableMemBlockChans); i++ {
@@ -189,7 +199,7 @@ func NewValueStore(c *ValueStoreConfig) (*DefaultValueStore, error) {
 		var err error
 		memBlock.id, err = store.addLocBlock(memBlock)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		store.freeMemBlockChan <- memBlock
 	}
@@ -224,9 +234,9 @@ func NewValueStore(c *ValueStoreConfig) (*DefaultValueStore, error) {
 	store.diskWatcherConfig(cfg)
 	err := store.recovery()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return store, nil
+	return store, store.restartChan, nil
 }
 
 // ValueCap returns the maximum length of a value the ValueStore can accept.

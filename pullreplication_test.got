@@ -65,7 +65,7 @@ func Test{{.T}}PullReplicationSimple(t *testing.T) {
     m := &msgRing{{.T}}PullReplicationTester{ring: r}
     cfg := lowMem{{.T}}StoreConfig()
     cfg.MsgRing = m
-    store, err := New{{.T}}Store(cfg)
+    store, _, err := New{{.T}}Store(cfg)
     if err != nil {
         t.Fatal("")
     }

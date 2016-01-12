@@ -11,7 +11,7 @@ import (
 func TestGroupBulkSetAckRead(t *testing.T) {
 	cfg := lowMemGroupStoreConfig()
 	cfg.MsgRing = &msgRingPlaceholder{}
-	store, err := NewGroupStore(cfg)
+	store, _, err := NewGroupStore(cfg)
 	if err != nil {
 		t.Fatal("")
 	}
@@ -43,7 +43,7 @@ func TestGroupBulkSetAckReadLowSendCap(t *testing.T) {
 	cfg := lowMemGroupStoreConfig()
 	cfg.MsgRing = &msgRingPlaceholder{}
 	cfg.BulkSetAckMsgCap = 1
-	store, err := NewGroupStore(cfg)
+	store, _, err := NewGroupStore(cfg)
 	if err != nil {
 		t.Fatal("")
 	}
@@ -71,7 +71,7 @@ func TestGroupBulkSetAckMsgIncoming(t *testing.T) {
 	cfg.MsgRing = m
 	cfg.InBulkSetAckWorkers = 1
 	cfg.InBulkSetAckMsgs = 1
-	store, err := NewGroupStore(cfg)
+	store, _, err := NewGroupStore(cfg)
 	if err != nil {
 		t.Fatal("")
 	}
@@ -123,7 +123,7 @@ func TestGroupBulkSetAckMsgIncomingNoRing(t *testing.T) {
 	cfg.MsgRing = m
 	cfg.InBulkSetAckWorkers = 1
 	cfg.InBulkSetAckMsgs = 1
-	store, err := NewGroupStore(cfg)
+	store, _, err := NewGroupStore(cfg)
 	if err != nil {
 		t.Fatal("")
 	}
@@ -173,7 +173,7 @@ func TestGroupBulkSetAckMsgIncomingNoRing(t *testing.T) {
 func TestGroupBulkSetAckMsgOut(t *testing.T) {
 	cfg := lowMemGroupStoreConfig()
 	cfg.MsgRing = &msgRingPlaceholder{}
-	store, err := NewGroupStore(cfg)
+	store, _, err := NewGroupStore(cfg)
 	if err != nil {
 		t.Fatal("")
 	}
@@ -237,7 +237,7 @@ func TestGroupBulkSetAckMsgOut(t *testing.T) {
 func TestGroupBulkSetAckMsgOutWriteError(t *testing.T) {
 	cfg := lowMemGroupStoreConfig()
 	cfg.MsgRing = &msgRingPlaceholder{}
-	store, err := NewGroupStore(cfg)
+	store, _, err := NewGroupStore(cfg)
 	if err != nil {
 		t.Fatal("")
 	}
@@ -254,7 +254,7 @@ func TestGroupBulkSetAckMsgOutHitCap(t *testing.T) {
 	cfg := lowMemGroupStoreConfig()
 	cfg.MsgRing = &msgRingPlaceholder{}
 	cfg.BulkSetAckMsgCap = _GROUP_BULK_SET_ACK_MSG_ENTRY_LENGTH + 3
-	store, err := NewGroupStore(cfg)
+	store, _, err := NewGroupStore(cfg)
 	if err != nil {
 		t.Fatal("")
 	}

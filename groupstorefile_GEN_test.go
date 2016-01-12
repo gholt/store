@@ -8,7 +8,7 @@ import (
 )
 
 func TestGroupValuesFileReading(t *testing.T) {
-	store, err := NewGroupStore(lowMemGroupStoreConfig())
+	store, _, err := NewGroupStore(lowMemGroupStoreConfig())
 	if err != nil {
 		t.Fatal("")
 	}
@@ -98,7 +98,7 @@ func TestGroupValuesFileReading(t *testing.T) {
 func TestGroupValuesFileWritingEmpty(t *testing.T) {
 	cfg := lowMemGroupStoreConfig()
 	cfg.ChecksumInterval = 64*1024 - 4
-	store, err := NewGroupStore(cfg)
+	store, _, err := NewGroupStore(cfg)
 	if err != nil {
 		t.Fatal("")
 	}
@@ -135,7 +135,7 @@ func TestGroupValuesFileWritingEmpty(t *testing.T) {
 func TestGroupValuesFileWritingEmpty2(t *testing.T) {
 	cfg := lowMemGroupStoreConfig()
 	cfg.ChecksumInterval = 64*1024 - 4
-	store, err := NewGroupStore(cfg)
+	store, _, err := NewGroupStore(cfg)
 	if err != nil {
 		t.Fatal("")
 	}
@@ -180,7 +180,7 @@ func TestGroupValuesFileWritingEmpty2(t *testing.T) {
 func TestGroupValuesFileWriting(t *testing.T) {
 	cfg := lowMemGroupStoreConfig()
 	cfg.ChecksumInterval = 64*1024 - 4
-	store, err := NewGroupStore(cfg)
+	store, _, err := NewGroupStore(cfg)
 	if err != nil {
 		t.Fatal("")
 	}
@@ -224,7 +224,7 @@ func TestGroupValuesFileWriting(t *testing.T) {
 func TestGroupValuesFileWritingMore(t *testing.T) {
 	cfg := lowMemGroupStoreConfig()
 	cfg.ChecksumInterval = 64*1024 - 4
-	store, err := NewGroupStore(cfg)
+	store, _, err := NewGroupStore(cfg)
 	if err != nil {
 		t.Fatal("")
 	}
@@ -267,7 +267,7 @@ func TestGroupValuesFileWritingMore(t *testing.T) {
 func TestGroupValuesFileWritingMultiple(t *testing.T) {
 	cfg := lowMemGroupStoreConfig()
 	cfg.ChecksumInterval = 64*1024 - 4
-	store, err := NewGroupStore(cfg)
+	store, _, err := NewGroupStore(cfg)
 	if err != nil {
 		t.Fatal("")
 	}

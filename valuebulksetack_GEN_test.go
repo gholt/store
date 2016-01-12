@@ -11,7 +11,7 @@ import (
 func TestValueBulkSetAckRead(t *testing.T) {
 	cfg := lowMemValueStoreConfig()
 	cfg.MsgRing = &msgRingPlaceholder{}
-	store, err := NewValueStore(cfg)
+	store, _, err := NewValueStore(cfg)
 	if err != nil {
 		t.Fatal("")
 	}
@@ -43,7 +43,7 @@ func TestValueBulkSetAckReadLowSendCap(t *testing.T) {
 	cfg := lowMemValueStoreConfig()
 	cfg.MsgRing = &msgRingPlaceholder{}
 	cfg.BulkSetAckMsgCap = 1
-	store, err := NewValueStore(cfg)
+	store, _, err := NewValueStore(cfg)
 	if err != nil {
 		t.Fatal("")
 	}
@@ -71,7 +71,7 @@ func TestValueBulkSetAckMsgIncoming(t *testing.T) {
 	cfg.MsgRing = m
 	cfg.InBulkSetAckWorkers = 1
 	cfg.InBulkSetAckMsgs = 1
-	store, err := NewValueStore(cfg)
+	store, _, err := NewValueStore(cfg)
 	if err != nil {
 		t.Fatal("")
 	}
@@ -123,7 +123,7 @@ func TestValueBulkSetAckMsgIncomingNoRing(t *testing.T) {
 	cfg.MsgRing = m
 	cfg.InBulkSetAckWorkers = 1
 	cfg.InBulkSetAckMsgs = 1
-	store, err := NewValueStore(cfg)
+	store, _, err := NewValueStore(cfg)
 	if err != nil {
 		t.Fatal("")
 	}
@@ -173,7 +173,7 @@ func TestValueBulkSetAckMsgIncomingNoRing(t *testing.T) {
 func TestValueBulkSetAckMsgOut(t *testing.T) {
 	cfg := lowMemValueStoreConfig()
 	cfg.MsgRing = &msgRingPlaceholder{}
-	store, err := NewValueStore(cfg)
+	store, _, err := NewValueStore(cfg)
 	if err != nil {
 		t.Fatal("")
 	}
@@ -231,7 +231,7 @@ func TestValueBulkSetAckMsgOut(t *testing.T) {
 func TestValueBulkSetAckMsgOutWriteError(t *testing.T) {
 	cfg := lowMemValueStoreConfig()
 	cfg.MsgRing = &msgRingPlaceholder{}
-	store, err := NewValueStore(cfg)
+	store, _, err := NewValueStore(cfg)
 	if err != nil {
 		t.Fatal("")
 	}
@@ -248,7 +248,7 @@ func TestValueBulkSetAckMsgOutHitCap(t *testing.T) {
 	cfg := lowMemValueStoreConfig()
 	cfg.MsgRing = &msgRingPlaceholder{}
 	cfg.BulkSetAckMsgCap = _VALUE_BULK_SET_ACK_MSG_ENTRY_LENGTH + 3
-	store, err := NewValueStore(cfg)
+	store, _, err := NewValueStore(cfg)
 	if err != nil {
 		t.Fatal("")
 	}

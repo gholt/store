@@ -1,6 +1,7 @@
 package store
 
 import (
+	"errors"
 	"io"
 	"os"
 	"path"
@@ -161,12 +162,22 @@ func (store *DefaultValueStore) auditPass(speed bool, notifyChan chan *bgNotific
 			continue
 		}
 		if namets == int64(atomic.LoadUint64(&store.activeTOCA)) || namets == int64(atomic.LoadUint64(&store.activeTOCB)) {
+			if store.logDebug != nil {
+				store.logDebug("audit: skipping current %s", names[i])
+			}
 			continue
 		}
 		if namets >= time.Now().UnixNano()-store.auditState.ageThreshold {
+			if store.logDebug != nil {
+				store.logDebug("audit: skipping young %s", names[i])
+			}
 			continue
 		}
+		if store.logDebug != nil {
+			store.logDebug("audit: checking %s", names[i])
+		}
 		failedAudit := uint32(0)
+		canceledAudit := uint32(0)
 		dataName := names[i][:len(names[i])-3]
 		fpr, err := osOpenReadSeeker(path.Join(store.path, dataName))
 		if err != nil {
@@ -201,7 +212,7 @@ func (store *DefaultValueStore) auditPass(speed bool, notifyChan chan *bgNotific
 			go func() {
 				select {
 				case n := <-notifyChan:
-					if atomic.AddUint32(&failedAudit, 1) == 0 {
+					if atomic.AddUint32(&canceledAudit, 1) == 0 {
 						close(controlChan)
 					}
 					nextNotificationChan <- n
@@ -259,14 +270,16 @@ func (store *DefaultValueStore) auditPass(speed bool, notifyChan chan *bgNotific
 				pendingBatchChans[i] <- nil
 			}
 			wg.Wait()
-			if atomic.LoadUint32(&failedAudit) == 0 {
-				close(controlChan)
-			}
+			close(controlChan)
 			if n := <-nextNotificationChan; n != nil {
 				return n
 			}
 		}
-		if atomic.LoadUint32(&failedAudit) == 0 {
+		if atomic.LoadUint32(&canceledAudit) != 0 {
+			if store.logDebug != nil {
+				store.logDebug("audit: canceled during %s", names[i])
+			}
+		} else if atomic.LoadUint32(&failedAudit) == 0 {
 			if store.logDebug != nil {
 				store.logDebug("audit: passed %s", names[i])
 			}
@@ -277,9 +290,14 @@ func (store *DefaultValueStore) auditPass(speed bool, notifyChan chan *bgNotific
 			// locmap so that replication can get them back in place from other
 			// servers.
 			blockID := store.locBlockIDFromTimestampnano(namets)
-			result, err := store.compactFile(path.Join(store.pathtoc, names[i]), blockID)
-			if err != nil {
-				store.logError("audit: %s", err)
+			if blockID != 0 {
+				result, err := store.compactFile(path.Join(store.pathtoc, names[i]), blockID)
+				if store.logDebug != nil {
+					store.logDebug("audit: compacted %s (total %d, rewrote %d, stale %d)", names[i], result.count, result.rewrote, result.stale)
+				}
+				if err != nil {
+					store.logError("audit: %s", err)
+				}
 			}
 			if err = os.Remove(path.Join(store.pathtoc, names[i])); err != nil {
 				store.logError("audit: unable to remove %s: %s", names[i], err)
@@ -290,18 +308,16 @@ func (store *DefaultValueStore) auditPass(speed bool, notifyChan chan *bgNotific
 			if err = store.closeLocBlock(blockID); err != nil {
 				store.logError("audit: error closing in-memory block for %s: %s", names[i], err)
 			}
-			if store.logDebug != nil {
-				store.logDebug("audit: compacted %s (total %d, rewrote %d, stale %d)", names[i], result.count, result.rewrote, result.stale)
-			}
 			go func() {
 				store.logError("audit: all audit actions require store restarts at this time.")
-				// TODO: This isn't correct, yet. I need to set a fresh locmap
-				// as well.
 				store.DisableAll()
 				store.Flush()
-				store.recovery()
-				store.EnableAll()
+				store.restartChan <- errors.New("audit failure occurred requiring a restart")
 			}()
+			return &bgNotification{
+				action:   _BG_DISABLE,
+				doneChan: make(chan struct{}, 1),
+			}
 		}
 	}
 	return nil
