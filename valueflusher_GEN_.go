@@ -75,7 +75,7 @@ func (store *DefaultValueStore) flusherLauncher(notifyChan chan *bgNotification)
 		}
 		m := atomic.LoadInt32(&store.modifications)
 		atomic.AddInt32(&store.modifications, -m)
-		if m > 0 && m < store.flusherState.flusherThreshold {
+		if store.logDebug != nil && m > 0 && m < store.flusherState.flusherThreshold {
 			store.logDebug("flusher: %d modifications under %d threshold; flushing.", m, store.flusherState.flusherThreshold)
 			store.Flush()
 		}
