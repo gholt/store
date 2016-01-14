@@ -164,7 +164,7 @@ func (store *DefaultGroupStore) inPullReplicationLauncher(notifyChan chan *bgNot
 			wg.Wait()
 			running = false
 		} else {
-			store.logCritical("out pull replication: invalid action requested: %d", notification.action)
+			store.logCritical("outPullReplication: invalid action requested: %d", notification.action)
 		}
 		notification.doneChan <- struct{}{}
 	}
@@ -353,7 +353,7 @@ func (store *DefaultGroupStore) outPullReplicationLauncher(notifyChan chan *bgNo
 			case _BG_DISABLE:
 				running = false
 			default:
-				store.logCritical("out pull replication: invalid action requested: %d", notification.action)
+				store.logCritical("outPullReplication: invalid action requested: %d", notification.action)
 			}
 			notification.doneChan <- struct{}{}
 			notification = nextNotification
@@ -370,7 +370,7 @@ func (store *DefaultGroupStore) outPullReplicationPass(notifyChan chan *bgNotifi
 	if store.logDebug != nil {
 		begin := time.Now()
 		defer func() {
-			store.logDebug("out pull replication pass took %s\n", time.Now().Sub(begin))
+			store.logDebug("outPullReplication: pass took %s", time.Now().Sub(begin))
 		}()
 	}
 	ring := store.msgRing.Ring()

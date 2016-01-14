@@ -125,18 +125,18 @@ func (store *DefaultGroupStore) compactionPass(notifyChan chan *bgNotification) 
 	if store.logDebug != nil {
 		begin := time.Now()
 		defer func() {
-			store.logDebug("compaction pass took %s\n", time.Now().Sub(begin))
+			store.logDebug("compaction: pass took %s", time.Now().Sub(begin))
 		}()
 	}
 	fp, err := os.Open(store.pathtoc)
 	if err != nil {
-		store.logError("%s\n", err)
+		store.logError("compaction: %s", err)
 		return nil
 	}
 	names, err := fp.Readdirnames(-1)
 	fp.Close()
 	if err != nil {
-		store.logError("%s\n", err)
+		store.logError("compaction: %s", err)
 		return nil
 	}
 	sort.Strings(names)
@@ -182,11 +182,11 @@ func (store *DefaultGroupStore) compactionCandidate(name string) (int64, bool) {
 	_, n := path.Split(name)
 	namets, err := strconv.ParseInt(n[:len(n)-len(".grouptoc")], 10, 64)
 	if err != nil {
-		store.logError("bad timestamp in name: %#v\n", name)
+		store.logError("compaction: bad timestamp in name: %#v", name)
 		return 0, false
 	}
 	if namets == 0 {
-		store.logError("bad timestamp in name: %#v\n", name)
+		store.logError("compaction: bad timestamp in name: %#v", name)
 		return namets, false
 	}
 	if namets == int64(atomic.LoadUint64(&store.activeTOCA)) || namets == int64(atomic.LoadUint64(&store.activeTOCB)) {
@@ -202,7 +202,7 @@ func (store *DefaultGroupStore) compactionWorker(jobChan chan *groupCompactionJo
 	for c := range jobChan {
 		total, err := groupTOCStat(c.fullPath, os.Stat, osOpenReadSeeker)
 		if err != nil {
-			store.logError("Unable to stat %s because: %v\n", c.fullPath, err)
+			store.logError("compaction: unable to stat %s because: %v", c.fullPath, err)
 			continue
 		}
 		// TODO: This 1000 should be in the Config.
@@ -218,11 +218,11 @@ func (store *DefaultGroupStore) compactionWorker(jobChan chan *groupCompactionJo
 			}
 			checked, stale, err := store.sampleTOC(c.fullPath, c.candidateBlockID, toCheck)
 			if err != nil {
-				store.logError("Unable to sample %s: %s", c.fullPath, err)
+				store.logError("compaction: unable to sample %s: %s", c.fullPath, err)
 				continue
 			}
 			if store.logDebug != nil {
-				store.logDebug("Compaction sample result: %s had %d entries; checked %d entries, %d were stale\n", c.fullPath, total, checked, stale)
+				store.logDebug("compaction: sample result: %s had %d entries; checked %d entries, %d were stale", c.fullPath, total, checked, stale)
 			}
 			if stale <= uint32(float64(checked)*store.compactionState.threshold) {
 				continue
@@ -231,20 +231,20 @@ func (store *DefaultGroupStore) compactionWorker(jobChan chan *groupCompactionJo
 		}
 		result, err := store.compactFile(c.fullPath, c.candidateBlockID)
 		if err != nil {
-			store.logCritical("%s\n", err)
+			store.logCritical("compaction: %s", err)
 			continue
 		}
 		if err = os.Remove(c.fullPath); err != nil {
-			store.logCritical("Unable to remove %s %s\n", c.fullPath, err)
+			store.logCritical("compaction: unable to remove %s %s", c.fullPath, err)
 		}
 		if err = os.Remove(c.fullPath[:len(c.fullPath)-len("toc")]); err != nil {
-			store.logCritical("Unable to remove %s %s\n", c.fullPath[:len(c.fullPath)-len("toc")], err)
+			store.logCritical("compaction: unable to remove %s %s", c.fullPath[:len(c.fullPath)-len("toc")], err)
 		}
 		if err = store.closeLocBlock(c.candidateBlockID); err != nil {
-			store.logCritical("error closing in-memory block for %s: %s\n", c.fullPath, err)
+			store.logCritical("compaction: error closing in-memory block for %s: %s", c.fullPath, err)
 		}
 		if store.logDebug != nil {
-			store.logDebug("Compacted %s (total %d, rewrote %d, stale %d)\n", c.fullPath, result.count, result.rewrote, result.stale)
+			store.logDebug("compaction: compacted %s (total %d, rewrote %d, stale %d)", c.fullPath, result.count, result.rewrote, result.stale)
 		}
 	}
 	wg.Done()
@@ -305,7 +305,7 @@ func (store *DefaultGroupStore) sampleTOC(fullPath string, candidateBlockID uint
 	}
 	_, errs := groupReadTOCEntriesBatched(fpr, candidateBlockID, freeBatchChans, pendingBatchChans, controlChan)
 	for _, err := range errs {
-		store.logError("Compaction check error with %s: %s", fullPath, err)
+		store.logError("compaction: check error with %s: %s", fullPath, err)
 		// TODO: The auditor should catch this eventually, but we should be
 		// proactive and notify the auditor of the issue here.
 	}
@@ -366,7 +366,7 @@ func (store *DefaultGroupStore) compactFile(fullPath string, candidateBlockID ui
 					}
 					_, err = store.write(wr.KeyA, wr.KeyB, wr.NameKeyA, wr.NameKeyB, wr.TimestampBits|_TSB_COMPACTION_REWRITE, value, true)
 					if err != nil {
-						store.logError("Compaction error with %s: %s", fullPath, err)
+						store.logError("compaction: error with %s: %s", fullPath, err)
 						atomic.AddUint32(&cr.errorCount, 1)
 						break
 					}
@@ -386,20 +386,20 @@ func (store *DefaultGroupStore) compactFile(fullPath string, candidateBlockID ui
 	fpr, err := osOpenReadSeeker(fullPath)
 	if err != nil {
 		spindown()
-		return cr, fmt.Errorf("Compaction error opening %s: %s\n", fullPath, err)
+		return cr, fmt.Errorf("compaction error opening %s: %s", fullPath, err)
 	}
 	fdc, errs := groupReadTOCEntriesBatched(fpr, candidateBlockID, freeBatchChans, pendingBatchChans, make(chan struct{}))
 	for _, err := range errs {
-		store.logError("Compaction error with %s: %s", fullPath, err)
+		store.logError("compaction: error with %s: %s", fullPath, err)
 		// NOTE: No need to notify the auditor since an attempt was just made
 		// to compact this file, which is what the auditor would try to do.
 	}
 	if len(errs) > 0 {
 		if fdc == 0 {
 			spindown()
-			return cr, fmt.Errorf("Compaction errors with %s and no entries were read; file will be retried later.", fullPath)
+			return cr, fmt.Errorf("compaction errors with %s and no entries were read; file will be retried later.", fullPath)
 		} else {
-			store.logError("Compaction errors with %s but some entries were read; assuming the recovery was as good as it could get and removing file.", fullPath)
+			store.logError("compaction: errors with %s but some entries were read; assuming the recovery was as good as it could get and removing file.", fullPath)
 		}
 	}
 	closeIfCloser(fpr)

@@ -93,7 +93,7 @@ func (store *DefaultValueStore) inBulkSetAckLauncher(notifyChan chan *bgNotifica
 			wg.Wait()
 			running = false
 		} else {
-			store.logCritical("in bulk set ack: invalid action requested: %d", notification.action)
+			store.logCritical("inBulkSetAck: invalid action requested: %d", notification.action)
 		}
 		notification.doneChan <- struct{}{}
 	}

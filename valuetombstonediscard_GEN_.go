@@ -111,7 +111,7 @@ func (store *DefaultValueStore) tombstoneDiscardLauncher(notifyChan chan *bgNoti
 			case _BG_DISABLE:
 				running = false
 			default:
-				store.logCritical("tombstone discard: invalid action requested: %d", notification.action)
+				store.logCritical("tombstoneDiscard: invalid action requested: %d", notification.action)
 			}
 			notification.doneChan <- struct{}{}
 			notification = nextNotification
@@ -125,7 +125,7 @@ func (store *DefaultValueStore) tombstoneDiscardPass(notifyChan chan *bgNotifica
 	if store.logDebug != nil {
 		begin := time.Now()
 		defer func() {
-			store.logDebug("tombstone discard pass took %s\n", time.Now().Sub(begin))
+			store.logDebug("tombstoneDiscard: pass took %s", time.Now().Sub(begin))
 		}()
 	}
 	if n := store.tombstoneDiscardPassLocalRemovals(notifyChan); n != nil {

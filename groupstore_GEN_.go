@@ -688,7 +688,7 @@ func (store *DefaultGroupStore) fileWriter() {
 			if fl != nil {
 				err := fl.closeWriting()
 				if err != nil {
-					store.logCritical("error closing %s: %s\n", fl.name, err)
+					store.logCritical("fileWriter: error closing %s: %s", fl.name, err)
 				}
 				fl = nil
 			}
@@ -701,7 +701,7 @@ func (store *DefaultGroupStore) fileWriter() {
 		if fl != nil && (tocLen+uint64(len(memBlock.toc)) >= uint64(store.fileCap) || valueLen+uint64(len(memBlock.values)) > uint64(store.fileCap)) {
 			err := fl.closeWriting()
 			if err != nil {
-				store.logCritical("error closing %s: %s\n", fl.name, err)
+				store.logCritical("fileWriter: error closing %s: %s", fl.name, err)
 			}
 			fl = nil
 		}
@@ -709,7 +709,7 @@ func (store *DefaultGroupStore) fileWriter() {
 			var err error
 			fl, err = createGroupReadWriteFile(store, osCreateWriteCloser, osOpenReadSeeker)
 			if err != nil {
-				store.logCritical("fileWriter: %s\n", err)
+				store.logCritical("fileWriter: %s", err)
 				break
 			}
 			tocLen = _GROUP_FILE_HEADER_SIZE
@@ -820,7 +820,7 @@ OuterLoop:
 		store.freeTOCBlockChan <- t[:0]
 	}
 	if err != nil {
-		store.logCritical("tocWriter: %s\n", err)
+		store.logCritical("tocWriter: %s", err)
 	}
 	if writerA != nil {
 		writerA.Close()
@@ -895,28 +895,28 @@ func (store *DefaultGroupStore) recovery() error {
 		}
 		namets := int64(0)
 		if namets, err = strconv.ParseInt(names[i][:len(names[i])-len(".grouptoc")], 10, 64); err != nil {
-			store.logError("bad timestamp in name: %#v\n", names[i])
+			store.logError("recovery: bad timestamp in name: %#v", names[i])
 			continue
 		}
 		if namets == 0 {
-			store.logError("bad timestamp in name: %#v\n", names[i])
+			store.logError("recovery: bad timestamp in name: %#v", names[i])
 			continue
 		}
 		fpr, err := osOpenReadSeeker(path.Join(store.pathtoc, names[i]))
 		if err != nil {
-			store.logError("error opening %s: %s\n", names[i], err)
+			store.logError("recovery: error opening %s: %s", names[i], err)
 			continue
 		}
 		fl, err := newGroupReadFile(store, namets, osOpenReadSeeker)
 		if err != nil {
-			store.logError("error opening %s: %s\n", names[i][:len(names[i])-3], err)
+			store.logError("recovery: error opening %s: %s", names[i][:len(names[i])-3], err)
 			closeIfCloser(fpr)
 			continue
 		}
 		fdc, errs := groupReadTOCEntriesBatched(fpr, fl.id, freeBatchChans, pendingBatchChans, make(chan struct{}))
 		fromDiskCount += fdc
 		for _, err := range errs {
-			store.logError("error with %s: %s", names[i], err)
+			store.logError("recovery: error with %s: %s", names[i], err)
 			// TODO: The auditor should catch this eventually, but we should be
 			// proactive and notify the auditor of the issue here.
 		}
@@ -926,7 +926,7 @@ func (store *DefaultGroupStore) recovery() error {
 	if store.logDebug != nil {
 		dur := time.Now().Sub(start)
 		stats := store.Stats(false).(*GroupStoreStats)
-		store.logInfo("%d key locations loaded in %s, %.0f/s; %d caused change; %d resulting locations referencing %d bytes.\n", fromDiskCount, dur, float64(fromDiskCount)/(float64(dur)/float64(time.Second)), causedChangeCount, stats.Values, stats.ValueBytes)
+		store.logInfo("recovery: %d key locations loaded in %s, %.0f/s; %d caused change; %d resulting locations referencing %d bytes.", fromDiskCount, dur, float64(fromDiskCount)/(float64(dur)/float64(time.Second)), causedChangeCount, stats.Values, stats.ValueBytes)
 	}
 	return nil
 }

@@ -298,7 +298,7 @@ func (fl *valueStoreFile) writer() {
 			continue
 		}
 		if _, err := fl.writerFP.Write(buf.buf); err != nil {
-			fl.store.logCritical("%s %s\n", fl.name, err)
+			fl.store.logCritical("storeFile: %s %s", fl.name, err)
 			break
 		}
 		if len(buf.memBlocks) > 0 {

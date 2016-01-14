@@ -111,7 +111,7 @@ func (store *Default{{.T}}Store) inBulkSetLauncher(notifyChan chan *bgNotificati
             wg.Wait()
             running = false
         } else {
-            store.logCritical("in bulk set: invalid action requested: %d", notification.action)
+            store.logCritical("inBulkSet: invalid action requested: %d", notification.action)
         }
         notification.doneChan <- struct{}{}
     }

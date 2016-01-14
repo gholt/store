@@ -83,7 +83,7 @@ func (store *Default{{.T}}Store) diskWatcherLauncher(notifyChan chan *bgNotifica
             if notification.action == _BG_DISABLE {
                 running = false
             } else {
-                store.logCritical("disk watcher: invalid action requested: %d", notification.action)
+                store.logCritical("diskWatcher: invalid action requested: %d", notification.action)
             }
             notification.doneChan <- struct{}{}
             continue
@@ -108,22 +108,22 @@ func (store *Default{{.T}}Store) diskWatcherLauncher(notifyChan chan *bgNotifica
 		atomic.StoreUint64(&store.diskWatcherState.usedtoc, usedtoc)
 		atomic.StoreUint64(&store.diskWatcherState.sizetoc, sizetoc)
 		if !disabled && store.diskWatcherState.freeDisableThreshold > 1 && (free <= store.diskWatcherState.freeDisableThreshold || freetoc <= store.diskWatcherState.freeDisableThreshold) {
-            store.logCritical("disk watcher: passed the free threshold for automatic disabling\n")
+            store.logCritical("diskWatcher: passed the free threshold for automatic disabling")
             store.enableWrites(false) // false indicates non-user call
             disabled = false
         }
         if !disabled && store.diskWatcherState.usageDisableThreshold > 0 && (usage >= store.diskWatcherState.usageDisableThreshold || usagetoc >= store.diskWatcherState.usageDisableThreshold) {
-            store.logCritical("disk watcher: passed the usage threshold for automatic disabling\n")
+            store.logCritical("diskWatcher: passed the usage threshold for automatic disabling")
             store.enableWrites(false) // false indicates non-user call
             disabled = false
         }
 		if disabled && store.diskWatcherState.freeReenableThreshold > 1 && free >= store.diskWatcherState.freeReenableThreshold && freetoc >= store.diskWatcherState.freeReenableThreshold {
-            store.logCritical("disk watcher: passed the free threshold for automatic re-enabling\n")
+            store.logCritical("diskWatcher: passed the free threshold for automatic re-enabling")
             store.enableWrites(false) // false indicates non-user call
             disabled = false
         }
         if disabled && store.diskWatcherState.usageReenableThreshold > 0 && usage <= store.diskWatcherState.usageReenableThreshold && usagetoc <= store.diskWatcherState.usageReenableThreshold {
-            store.logCritical("disk watcher: passed the usage threshold for automatic re-enabling\n")
+            store.logCritical("diskWatcher: passed the usage threshold for automatic re-enabling")
             store.enableWrites(false) // false indicates non-user call
             disabled = false
         }
