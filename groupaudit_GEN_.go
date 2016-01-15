@@ -287,7 +287,23 @@ func (store *DefaultGroupStore) auditPass(speed bool, notifyChan chan *bgNotific
 			}
 		} else {
 			store.logError("audit: failed %s", names[i])
-			store.compactFile(path.Join(store.pathtoc, names[i]), store.locBlockIDFromTimestampnano(namets))
+			nextNotificationChan := make(chan *bgNotification, 1)
+			controlChan := make(chan struct{})
+			controlChan2 := make(chan struct{})
+			go func() {
+				select {
+				case n := <-notifyChan:
+					close(controlChan)
+					nextNotificationChan <- n
+				case <-controlChan2:
+					nextNotificationChan <- nil
+				}
+			}()
+			store.compactFile(path.Join(store.pathtoc, names[i]), store.locBlockIDFromTimestampnano(namets), controlChan)
+			close(controlChan2)
+			if n := <-nextNotificationChan; n != nil {
+				return n
+			}
 			go func() {
 				store.logError("audit: all audit actions require store restarts at this time.")
 				store.DisableAll()

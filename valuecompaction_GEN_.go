@@ -141,35 +141,40 @@ func (store *DefaultValueStore) compactionPass(notifyChan chan *bgNotification) 
 		return nil
 	}
 	sort.Strings(names)
-	var abort uint32
 	jobChan := make(chan *valueCompactionJob, len(names))
+	controlChan := make(chan struct{})
 	wg := &sync.WaitGroup{}
 	for i := 0; i < store.compactionState.workerCount; i++ {
 		wg.Add(1)
-		go store.compactionWorker(jobChan, wg)
+		go store.compactionWorker(jobChan, controlChan, wg)
 	}
-	for _, name := range names {
-		if atomic.LoadUint32(&abort) != 0 {
-			break
-		}
-		namets, valid := store.compactionCandidate(name)
-		if valid {
-			jobChan <- &valueCompactionJob{path.Join(store.pathtoc, name), store.locBlockIDFromTimestampnano(namets)}
-		}
-	}
-	close(jobChan)
 	waitChan := make(chan struct{}, 1)
 	go func() {
 		wg.Wait()
 		close(waitChan)
 	}()
-	select {
-	case notification := <-notifyChan:
-		atomic.AddUint32(&abort, 1)
-		<-waitChan
-		return notification
-	case <-waitChan:
-		return nil
+	for _, name := range names {
+		select {
+		case notification := <-notifyChan:
+			close(controlChan)
+			<-waitChan
+			return notification
+		default:
+		}
+		if namets, valid := store.compactionCandidate(name); valid {
+			jobChan <- &valueCompactionJob{path.Join(store.pathtoc, name), store.locBlockIDFromTimestampnano(namets)}
+		}
+	}
+	close(jobChan)
+	for {
+		select {
+		case notification := <-notifyChan:
+			close(controlChan)
+			<-waitChan
+			return notification
+		case <-waitChan:
+			return nil
+		}
 	}
 }
 
@@ -199,8 +204,13 @@ func (store *DefaultValueStore) compactionCandidate(name string) (int64, bool) {
 	return namets, true
 }
 
-func (store *DefaultValueStore) compactionWorker(jobChan chan *valueCompactionJob, wg *sync.WaitGroup) {
+func (store *DefaultValueStore) compactionWorker(jobChan chan *valueCompactionJob, controlChan chan struct{}, wg *sync.WaitGroup) {
 	for c := range jobChan {
+		select {
+		case <-controlChan:
+			break
+		default:
+		}
 		total, err := valueTOCStat(c.fullPath, os.Stat, osOpenReadSeeker)
 		if err != nil {
 			store.logError("compaction: unable to stat %s because: %v", c.fullPath, err)
@@ -230,7 +240,7 @@ func (store *DefaultValueStore) compactionWorker(jobChan chan *valueCompactionJo
 			}
 			atomic.AddInt32(&store.compactions, 1)
 		}
-		store.compactFile(c.fullPath, c.candidateBlockID)
+		store.compactFile(c.fullPath, c.candidateBlockID, controlChan)
 	}
 	wg.Done()
 }
@@ -302,7 +312,7 @@ func (store *DefaultValueStore) sampleTOC(fullPath string, candidateBlockID uint
 	return checked, stale, nil
 }
 
-func (store *DefaultValueStore) compactFile(fullPath string, blockID uint32) {
+func (store *DefaultValueStore) compactFile(fullPath string, blockID uint32, controlChan chan struct{}) {
 	// TODO: Compaction needs to rewrite all the good entries it can, but also
 	// deliberately remove any known bad entries from the locmap so that
 	// replication can get them back in place from other servers.
@@ -398,15 +408,25 @@ func (store *DefaultValueStore) compactFile(fullPath string, blockID uint32) {
 		spindown(false)
 		return
 	}
-	fdc, errs := valueReadTOCEntriesBatched(fpr, blockID, freeBatchChans, pendingBatchChans, make(chan struct{}))
+	fdc, errs := valueReadTOCEntriesBatched(fpr, blockID, freeBatchChans, pendingBatchChans, controlChan)
 	closeIfCloser(fpr)
 	for _, err := range errs {
 		store.logError("compactFile: error with %s: %s", fullPath, err)
+	}
+	select {
+	case <-controlChan:
+		if store.logDebug != nil {
+			store.logDebug("compactFile: canceled compaction of %s.", fullPath)
+		}
+		spindown(false)
+		return
+	default:
 	}
 	if len(errs) > 0 {
 		if fdc == 0 {
 			store.logError("compactFile: errors with %s and no entries were read; file will be retried later.", fullPath)
 			spindown(false)
+			return
 		} else {
 			store.logError("compactFile: errors with %s but some entries were read; assuming the recovery was as good as it could get and removing file.", fullPath)
 		}
