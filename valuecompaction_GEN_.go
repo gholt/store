@@ -1,7 +1,6 @@
 package store
 
 import (
-	"fmt"
 	"os"
 	"path"
 	"sort"
@@ -106,6 +105,8 @@ func (store *DefaultValueStore) compactionLauncher(notifyChan chan *bgNotificati
 			case _BG_DISABLE:
 				running = false
 			default:
+				// Critical because there was a coding error that needs to be
+				// fixed by a person.
 				store.logCritical("compaction: invalid action requested: %d", notification.action)
 			}
 			notification.doneChan <- struct{}{}
@@ -229,23 +230,7 @@ func (store *DefaultValueStore) compactionWorker(jobChan chan *valueCompactionJo
 			}
 			atomic.AddInt32(&store.compactions, 1)
 		}
-		result, err := store.compactFile(c.fullPath, c.candidateBlockID)
-		if err != nil {
-			store.logCritical("compaction: %s", err)
-			continue
-		}
-		if err = os.Remove(c.fullPath); err != nil {
-			store.logCritical("compaction: unable to remove %s %s", c.fullPath, err)
-		}
-		if err = os.Remove(c.fullPath[:len(c.fullPath)-len("toc")]); err != nil {
-			store.logCritical("compaction: unable to remove %s %s", c.fullPath[:len(c.fullPath)-len("toc")], err)
-		}
-		if err = store.closeLocBlock(c.candidateBlockID); err != nil {
-			store.logCritical("compaction: error closing in-memory block for %s: %s", c.fullPath, err)
-		}
-		if store.logDebug != nil {
-			store.logDebug("compaction: compacted %s (total %d, rewrote %d, stale %d)", c.fullPath, result.count, result.rewrote, result.stale)
-		}
+		store.compactFile(c.fullPath, c.candidateBlockID)
 	}
 	wg.Done()
 }
@@ -317,15 +302,14 @@ func (store *DefaultValueStore) sampleTOC(fullPath string, candidateBlockID uint
 	return checked, stale, nil
 }
 
-type valueCompactionResult struct {
-	errorCount uint32
-	count      uint32
-	rewrote    uint32
-	stale      uint32
-}
-
-func (store *DefaultValueStore) compactFile(fullPath string, candidateBlockID uint32) (*valueCompactionResult, error) {
-	cr := &valueCompactionResult{}
+func (store *DefaultValueStore) compactFile(fullPath string, blockID uint32) {
+	// TODO: Compaction needs to rewrite all the good entries it can, but also
+	// deliberately remove any known bad entries from the locmap so that
+	// replication can get them back in place from other servers.
+	var errorCount uint32
+	var count uint32
+	var rewrote uint32
+	var stale uint32
 	// Compaction workers work on one file each; maybe we'll expand the workers
 	// under a compaction worker sometime, but for now, limit it.
 	workers := uint64(1)
@@ -348,61 +332,84 @@ func (store *DefaultValueStore) compactFile(fullPath string, candidateBlockID ui
 				if batch == nil {
 					break
 				}
-				if atomic.LoadUint32(&cr.errorCount) > 0 {
+				if atomic.LoadUint32(&errorCount) > 0 {
 					continue
 				}
 				for j := 0; j < len(batch); j++ {
-					atomic.AddUint32(&cr.count, 1)
+					atomic.AddUint32(&count, 1)
 					wr := &batch[j]
 					timestampBits, _, _, _ := store.lookup(wr.KeyA, wr.KeyB)
 					if timestampBits > wr.TimestampBits {
-						atomic.AddUint32(&cr.stale, 1)
+						atomic.AddUint32(&stale, 1)
 						continue
 					}
 					timestampBits, value, err := store.read(wr.KeyA, wr.KeyB, value[:0])
 					if timestampBits > wr.TimestampBits {
-						atomic.AddUint32(&cr.stale, 1)
+						atomic.AddUint32(&stale, 1)
 						continue
 					}
 					_, err = store.write(wr.KeyA, wr.KeyB, wr.TimestampBits|_TSB_COMPACTION_REWRITE, value, true)
 					if err != nil {
-						store.logError("compaction: error with %s: %s", fullPath, err)
-						atomic.AddUint32(&cr.errorCount, 1)
+						store.logError("compactFile: error with %s: %s", fullPath, err)
+						atomic.AddUint32(&errorCount, 1)
 						break
 					}
-					atomic.AddUint32(&cr.rewrote, 1)
+					atomic.AddUint32(&rewrote, 1)
 				}
 				freeBatchChan <- batch
 			}
 			wg.Done()
 		}(pendingBatchChans[i], freeBatchChans[i])
 	}
-	spindown := func() {
+	spindown := func(remove bool) {
 		for i := 0; i < len(pendingBatchChans); i++ {
 			pendingBatchChans[i] <- nil
 		}
 		wg.Wait()
+		if remove {
+			if err := os.Remove(fullPath); err != nil {
+				store.logError("compactFile: unable to remove %s %s", fullPath, err)
+				if err = os.Rename(fullPath, fullPath+".renamed"); err != nil {
+					// Critical level since future recoveries, compactions, and
+					// audits will keep hitting this file until a person
+					// corrects the file system issue.
+					store.logCritical("compactFile: also could not rename %s %s", fullPath, err)
+				}
+			}
+			if err := os.Remove(fullPath[:len(fullPath)-len("toc")]); err != nil {
+				store.logError("compactFile: unable to remove %s %s", fullPath[:len(fullPath)-len("toc")], err)
+				if err = os.Rename(fullPath[:len(fullPath)-len("toc")], fullPath[:len(fullPath)-len("toc")]+".renamed"); err != nil {
+					store.logError("compactFile: also count not rename %s %s", fullPath[:len(fullPath)-len("toc")], err)
+				}
+			}
+			if blockID != 0 {
+				if err := store.closeLocBlock(blockID); err != nil {
+					store.logError("compactFile: error closing in-memory block for %s: %s", fullPath, err)
+				}
+			}
+		}
+		if store.logDebug != nil {
+			store.logDebug("compactFile: %s (total %d, rewrote %d, stale %d)", fullPath, atomic.LoadUint32(&count), atomic.LoadUint32(&rewrote), atomic.LoadUint32(&stale))
+		}
 	}
 	fpr, err := osOpenReadSeeker(fullPath)
 	if err != nil {
-		spindown()
-		return cr, fmt.Errorf("compaction error opening %s: %s", fullPath, err)
+		store.logError("compactFile: error opening %s: %s", fullPath, err)
+		spindown(false)
+		return
 	}
-	fdc, errs := valueReadTOCEntriesBatched(fpr, candidateBlockID, freeBatchChans, pendingBatchChans, make(chan struct{}))
+	fdc, errs := valueReadTOCEntriesBatched(fpr, blockID, freeBatchChans, pendingBatchChans, make(chan struct{}))
+	closeIfCloser(fpr)
 	for _, err := range errs {
-		store.logError("compaction: error with %s: %s", fullPath, err)
-		// NOTE: No need to notify the auditor since an attempt was just made
-		// to compact this file, which is what the auditor would try to do.
+		store.logError("compactFile: error with %s: %s", fullPath, err)
 	}
 	if len(errs) > 0 {
 		if fdc == 0 {
-			spindown()
-			return cr, fmt.Errorf("compaction errors with %s and no entries were read; file will be retried later.", fullPath)
+			store.logError("compactFile: errors with %s and no entries were read; file will be retried later.", fullPath)
+			spindown(false)
 		} else {
-			store.logError("compaction: errors with %s but some entries were read; assuming the recovery was as good as it could get and removing file.", fullPath)
+			store.logError("compactFile: errors with %s but some entries were read; assuming the recovery was as good as it could get and removing file.", fullPath)
 		}
 	}
-	closeIfCloser(fpr)
-	spindown()
-	return cr, nil
+	spindown(true)
 }

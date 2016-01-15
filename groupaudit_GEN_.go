@@ -105,6 +105,8 @@ func (store *DefaultGroupStore) auditLauncher(notifyChan chan *bgNotification) {
 			case _BG_DISABLE:
 				running = false
 			default:
+				// Critical because there was a coding error that needs to be
+				// fixed by a person.
 				store.logCritical("audit: invalid action requested: %d", notification.action)
 			}
 			notification.doneChan <- struct{}{}
@@ -285,29 +287,7 @@ func (store *DefaultGroupStore) auditPass(speed bool, notifyChan chan *bgNotific
 			}
 		} else {
 			store.logError("audit: failed %s", names[i])
-			// TODO: Compaction needs to rewrite all the good entries it can,
-			// but also deliberately remove any known bad entries from the
-			// locmap so that replication can get them back in place from other
-			// servers.
-			blockID := store.locBlockIDFromTimestampnano(namets)
-			if blockID != 0 {
-				result, err := store.compactFile(path.Join(store.pathtoc, names[i]), blockID)
-				if store.logDebug != nil {
-					store.logDebug("audit: compacted %s (total %d, rewrote %d, stale %d)", names[i], result.count, result.rewrote, result.stale)
-				}
-				if err != nil {
-					store.logError("audit: %s", err)
-				}
-			}
-			if err = os.Remove(path.Join(store.pathtoc, names[i])); err != nil {
-				store.logError("audit: unable to remove %s: %s", names[i], err)
-			}
-			if err = os.Remove(path.Join(store.path, names[i][:len(names[i])-len("toc")])); err != nil {
-				store.logError("audit: unable to remove %s: %s", names[i][:len(names[i])-len("toc")], err)
-			}
-			if err = store.closeLocBlock(blockID); err != nil {
-				store.logError("audit: error closing in-memory block for %s: %s", names[i], err)
-			}
+			store.compactFile(path.Join(store.pathtoc, names[i]), store.locBlockIDFromTimestampnano(namets))
 			go func() {
 				store.logError("audit: all audit actions require store restarts at this time.")
 				store.DisableAll()
