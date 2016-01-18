@@ -227,15 +227,7 @@ func (store *DefaultGroupStore) compactionWorker(jobChan chan *groupCompactionJo
 			if toCheck > 1000000 {
 				toCheck = 1000000
 			}
-			checked, stale, err := store.sampleTOC(c.fullPath, c.candidateBlockID, toCheck)
-			if err != nil {
-				store.logError("compaction: unable to sample %s: %s", c.fullPath, err)
-				continue
-			}
-			if store.logDebug != nil {
-				store.logDebug("compaction: sample result: %s had %d entries; checked %d entries, %d were stale", c.fullPath, total, checked, stale)
-			}
-			if stale <= uint32(float64(checked)*store.compactionState.threshold) {
+			if !store.needsCompaction(c.fullPath, c.candidateBlockID, total, toCheck) {
 				continue
 			}
 			atomic.AddInt32(&store.compactions, 1)
@@ -245,7 +237,7 @@ func (store *DefaultGroupStore) compactionWorker(jobChan chan *groupCompactionJo
 	wg.Done()
 }
 
-func (store *DefaultGroupStore) sampleTOC(fullPath string, candidateBlockID uint32, toCheck uint32) (uint32, uint32, error) {
+func (store *DefaultGroupStore) needsCompaction(fullPath string, candidateBlockID uint32, total int, toCheck uint32) bool {
 	stale := uint32(0)
 	checked := uint32(0)
 	// Compaction workers work on one file each; maybe we'll expand the workers
@@ -296,20 +288,29 @@ func (store *DefaultGroupStore) sampleTOC(fullPath string, candidateBlockID uint
 	}
 	fpr, err := osOpenReadSeeker(fullPath)
 	if err != nil {
-		return 0, 0, err
+		// Critical level since future recoveries, compactions, and audits will
+		// keep hitting this file until a person corrects the file system
+		// issue.
+		store.logCritical("compaction: cannot open %s: %s", fullPath, err)
+		return false
 	}
 	_, errs := groupReadTOCEntriesBatched(fpr, candidateBlockID, freeBatchChans, pendingBatchChans, controlChan)
 	for _, err := range errs {
 		store.logError("compaction: check error with %s: %s", fullPath, err)
-		// TODO: The auditor should catch this eventually, but we should be
-		// proactive and notify the auditor of the issue here.
 	}
 	closeIfCloser(fpr)
 	for i := 0; i < len(pendingBatchChans); i++ {
 		pendingBatchChans[i] <- nil
 	}
 	wg.Wait()
-	return checked, stale, nil
+	if len(errs) > 0 {
+		store.logError("compaction: since there were errors while reading %s, compaction is needed", fullPath)
+		return true
+	}
+	if store.logDebug != nil {
+		store.logDebug("compaction: sample result: %s had %d entries; checked %d entries, %d were stale", fullPath, total, checked, stale)
+	}
+	return stale > uint32(float64(checked)*store.compactionState.threshold)
 }
 
 func (store *DefaultGroupStore) compactFile(fullPath string, blockID uint32, controlChan chan struct{}) {
