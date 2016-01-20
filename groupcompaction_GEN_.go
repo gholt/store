@@ -387,6 +387,8 @@ func (store *DefaultGroupStore) compactFile(fullPath string, blockID uint32, con
 					store.logCritical("compactFile: also could not rename %s %s", fullPath, err)
 				}
 			}
+			// TODO: This isn't right because the toc and data files could be
+			// in different directories.
 			if err := os.Remove(fullPath[:len(fullPath)-len("toc")]); err != nil {
 				store.logError("compactFile: unable to remove %s %s", fullPath[:len(fullPath)-len("toc")], err)
 				if err = os.Rename(fullPath[:len(fullPath)-len("toc")], fullPath[:len(fullPath)-len("toc")]+".renamed"); err != nil {

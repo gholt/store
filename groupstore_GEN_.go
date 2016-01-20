@@ -145,7 +145,9 @@ type groupLocBlock interface {
 // and a new one created in its place. This restart procedure is needed when
 // data on disk is detected as corrupted and cannot be easily recovered from; a
 // restart will cause only good entries to be loaded therefore discarding any
-// bad entries due to the corruption.
+// bad entries due to the corruption. A restart may also be requested if the
+// store reaches an unrecoverable state, such as no longer being able to open
+// new files.
 //
 // Note that a lot of buffering, multiple cores, and background processes can
 // be in use and therefore DisableAll() and Flush() should be called prior to
@@ -678,6 +680,9 @@ func (store *DefaultGroupStore) fileWriter() {
 	memWritersFlushLeft := len(store.pendingWriteReqChans)
 	var tocLen uint64
 	var valueLen uint64
+	var disabledDueToError error
+	freeableMemBlockChanIndex := 0
+	var disabledDueToErrorLogTime time.Time
 	for {
 		memBlock := <-store.fileMemBlockChan
 		if memBlock == flushGroupMemBlock {
@@ -688,7 +693,9 @@ func (store *DefaultGroupStore) fileWriter() {
 			if fl != nil {
 				err := fl.closeWriting()
 				if err != nil {
-					store.logCritical("fileWriter: error closing %s: %s", fl.name, err)
+					// TODO: Trigger an audit based on this file being in an
+					// unknown state.
+					store.logError("fileWriter: error closing %s: %s", fl.name, err)
 				}
 				fl = nil
 			}
@@ -698,10 +705,24 @@ func (store *DefaultGroupStore) fileWriter() {
 			memWritersFlushLeft = len(store.pendingWriteReqChans)
 			continue
 		}
+		if disabledDueToError != nil {
+			if disabledDueToErrorLogTime.Before(time.Now()) {
+				store.logCritical("fileWriter: disabled due to previous critical error: %s", disabledDueToError)
+				disabledDueToErrorLogTime = time.Now().Add(5 * time.Minute)
+			}
+			store.freeableMemBlockChans[freeableMemBlockChanIndex] <- memBlock
+			freeableMemBlockChanIndex++
+			if freeableMemBlockChanIndex >= len(store.freeableMemBlockChans) {
+				freeableMemBlockChanIndex = 0
+			}
+			continue
+		}
 		if fl != nil && (tocLen+uint64(len(memBlock.toc)) >= uint64(store.fileCap) || valueLen+uint64(len(memBlock.values)) > uint64(store.fileCap)) {
 			err := fl.closeWriting()
 			if err != nil {
-				store.logCritical("fileWriter: error closing %s: %s", fl.name, err)
+				// TODO: Trigger an audit based on this file being in an
+				// unknown state.
+				store.logError("fileWriter: error closing %s: %s", fl.name, err)
 			}
 			fl = nil
 		}
@@ -709,8 +730,14 @@ func (store *DefaultGroupStore) fileWriter() {
 			var err error
 			fl, err = createGroupReadWriteFile(store, osCreateWriteCloser, osOpenReadSeeker)
 			if err != nil {
-				store.logCritical("fileWriter: %s", err)
-				break
+				store.logCritical("fileWriter: must shutdown because no new files can be opened: %s", err)
+				disabledDueToError = err
+				disabledDueToErrorLogTime = time.Now().Add(5 * time.Minute)
+				go func() {
+					store.DisableAll()
+					store.Flush()
+					store.restartChan <- errors.New("no new files can be opened")
+				}()
 			}
 			tocLen = _GROUP_FILE_HEADER_SIZE
 			valueLen = _GROUP_FILE_HEADER_SIZE
@@ -889,6 +916,8 @@ func (store *DefaultGroupStore) recovery() error {
 	}
 	fromDiskCount := 0
 	sort.Strings(names)
+	var compactNames []string
+	var compactBlockIDs []uint32
 	for i := 0; i < len(names); i++ {
 		if !strings.HasSuffix(names[i], ".grouptoc") {
 			continue
@@ -920,13 +949,28 @@ func (store *DefaultGroupStore) recovery() error {
 			// TODO: The auditor should catch this eventually, but we should be
 			// proactive and notify the auditor of the issue here.
 		}
+		if len(errs) != 0 {
+			compactNames = append(compactNames, names[i])
+			compactBlockIDs = append(compactBlockIDs, fl.id)
+		}
 		closeIfCloser(fpr)
 	}
 	spindown()
 	if store.logDebug != nil {
 		dur := time.Now().Sub(start)
 		stats := store.Stats(false).(*GroupStoreStats)
-		store.logInfo("recovery: %d key locations loaded in %s, %.0f/s; %d caused change; %d resulting locations referencing %d bytes.", fromDiskCount, dur, float64(fromDiskCount)/(float64(dur)/float64(time.Second)), causedChangeCount, stats.Values, stats.ValueBytes)
+		store.logDebug("recovery: %d key locations loaded in %s, %.0f/s; %d caused change; %d resulting locations referencing %d bytes.", fromDiskCount, dur, float64(fromDiskCount)/(float64(dur)/float64(time.Second)), causedChangeCount, stats.Values, stats.ValueBytes)
+	}
+	if len(compactNames) > 0 {
+		if store.logDebug != nil {
+			store.logDebug("recovery: secondary recovery started for %d files.", len(compactNames))
+		}
+		for i, name := range compactNames {
+			store.compactFile(path.Join(store.pathtoc, name), compactBlockIDs[i], make(chan struct{}))
+		}
+		if store.logDebug != nil {
+			store.logDebug("recovery: secondary recovery completed.")
+		}
 	}
 	return nil
 }
