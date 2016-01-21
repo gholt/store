@@ -184,6 +184,8 @@ func New{{.T}}Store(c *{{.T}}StoreConfig) (*Default{{.T}}Store, chan error, erro
         msgRing:                    cfg.MsgRing,
         restartChan:                make(chan error),
     }
+    // freeableMemBlockChans is a slice of channels so that the individual
+    // memClearers can be communicated with later (flushes, etc.)
     store.freeableMemBlockChans = make([]chan *{{.t}}MemBlock, store.workers)
     for i := 0; i < cap(store.freeableMemBlockChans); i++ {
         store.freeableMemBlockChans[i] = make(chan *{{.t}}MemBlock, store.workers)

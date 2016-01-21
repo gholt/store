@@ -181,6 +181,8 @@ func NewValueStore(c *ValueStoreConfig) (*DefaultValueStore, chan error, error) 
 		msgRing:                 cfg.MsgRing,
 		restartChan:             make(chan error),
 	}
+	// freeableMemBlockChans is a slice of channels so that the individual
+	// memClearers can be communicated with later (flushes, etc.)
 	store.freeableMemBlockChans = make([]chan *valueMemBlock, store.workers)
 	for i := 0; i < cap(store.freeableMemBlockChans); i++ {
 		store.freeableMemBlockChans[i] = make(chan *valueMemBlock, store.workers)
