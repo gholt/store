@@ -178,15 +178,14 @@ func (store *DefaultGroupStore) compactionPass(notifyChan chan *bgNotification) 
 	}
 }
 
-// compactionCandidate verifies that the given toc is a valid candidate for
-// compaction and also returns the extracted namets.
+// compactionCandidate verifies that the given file name is a valid candidate
+// for compaction and also returns the extracted namets.
 func (store *DefaultGroupStore) compactionCandidate(name string) (int64, bool) {
 	if !strings.HasSuffix(name, ".grouptoc") {
 		return 0, false
 	}
 	var namets int64
-	_, n := path.Split(name)
-	namets, err := strconv.ParseInt(n[:len(n)-len(".grouptoc")], 10, 64)
+	namets, err := strconv.ParseInt(name[:len(name)-len(".grouptoc")], 10, 64)
 	if err != nil {
 		store.logError("compaction: bad timestamp in name: %#v", name)
 		return 0, false
@@ -227,7 +226,7 @@ func (store *DefaultGroupStore) compactionWorker(jobChan chan *groupCompactionJo
 			if toCheck > 1000000 {
 				toCheck = 1000000
 			}
-			if !store.needsCompaction(path.Join(store.pathtoc, c.nametoc), c.candidateBlockID, total, toCheck) {
+			if !store.needsCompaction(c.nametoc, c.candidateBlockID, total, toCheck) {
 				continue
 			}
 			atomic.AddInt32(&store.compactions, 1)
@@ -237,7 +236,7 @@ func (store *DefaultGroupStore) compactionWorker(jobChan chan *groupCompactionJo
 	wg.Done()
 }
 
-func (store *DefaultGroupStore) needsCompaction(fullpathtoc string, candidateBlockID uint32, total int, toCheck uint32) bool {
+func (store *DefaultGroupStore) needsCompaction(nametoc string, candidateBlockID uint32, total int, toCheck uint32) bool {
 	stale := uint32(0)
 	checked := uint32(0)
 	// Compaction workers work on one file each; maybe we'll expand the workers
@@ -286,17 +285,17 @@ func (store *DefaultGroupStore) needsCompaction(fullpathtoc string, candidateBlo
 			wg.Done()
 		}(pendingBatchChans[i], freeBatchChans[i])
 	}
-	fpr, err := osOpenReadSeeker(fullpathtoc)
+	fpr, err := osOpenReadSeeker(path.Join(store.pathtoc, nametoc))
 	if err != nil {
 		// Critical level since future recoveries, compactions, and audits will
 		// keep hitting this file until a person corrects the file system
 		// issue.
-		store.logCritical("compaction: cannot open %s: %s", fullpathtoc, err)
+		store.logCritical("compaction: cannot open %s: %s", nametoc, err)
 		return false
 	}
 	_, errs := groupReadTOCEntriesBatched(fpr, candidateBlockID, freeBatchChans, pendingBatchChans, controlChan)
 	for _, err := range errs {
-		store.logError("compaction: check error with %s: %s", fullpathtoc, err)
+		store.logError("compaction: check error with %s: %s", nametoc, err)
 	}
 	closeIfCloser(fpr)
 	for i := 0; i < len(pendingBatchChans); i++ {
@@ -304,11 +303,11 @@ func (store *DefaultGroupStore) needsCompaction(fullpathtoc string, candidateBlo
 	}
 	wg.Wait()
 	if len(errs) > 0 {
-		store.logError("compaction: since there were errors while reading %s, compaction is needed", fullpathtoc)
+		store.logError("compaction: since there were errors while reading %s, compaction is needed", nametoc)
 		return true
 	}
 	if store.logDebug != nil {
-		store.logDebug("compaction: sample result: %s had %d entries; checked %d entries, %d were stale", fullpathtoc, total, checked, stale)
+		store.logDebug("compaction: sample result: %s had %d entries; checked %d entries, %d were stale", nametoc, total, checked, stale)
 	}
 	return stale > uint32(float64(checked)*store.compactionState.threshold)
 }
