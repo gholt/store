@@ -14,7 +14,7 @@ func Test{{.T}}ValuesFileReading(t *testing.T) {
     }
     buf := &memBuf{buf: []byte("{{.TT}}STORE v0                   0123456789abcdef")}
     binary.BigEndian.PutUint32(buf.buf[28:], 65532)
-    openReadSeeker := func(name string) (io.ReadSeeker, error) {
+    openReadSeeker := func(fullPath string) (io.ReadSeeker, error) {
         return &memFile{buf: buf}, nil
     }
     fl, err := new{{.T}}ReadFile(store, 12345, openReadSeeker)
@@ -103,10 +103,10 @@ func Test{{.T}}ValuesFileWritingEmpty(t *testing.T) {
         t.Fatal("")
     }
     buf := &memBuf{}
-    createWriteCloser := func(name string) (io.WriteCloser, error) {
+    createWriteCloser := func(fullPath string) (io.WriteCloser, error) {
         return &memFile{buf: buf}, nil
     }
-    openReadSeeker := func(name string) (io.ReadSeeker, error) {
+    openReadSeeker := func(fullPath string) (io.ReadSeeker, error) {
         return &memFile{buf: buf}, nil
     }
     fl, err := create{{.T}}ReadWriteFile(store, createWriteCloser, openReadSeeker)
@@ -142,10 +142,10 @@ func Test{{.T}}ValuesFileWritingEmpty2(t *testing.T) {
     store.freeableMemBlockChans = make([]chan *{{.t}}MemBlock, 1)
     store.freeableMemBlockChans[0] = make(chan *{{.t}}MemBlock, 1)
     buf := &memBuf{}
-    createWriteCloser := func(name string) (io.WriteCloser, error) {
+    createWriteCloser := func(fullPath string) (io.WriteCloser, error) {
         return &memFile{buf: buf}, nil
     }
-    openReadSeeker := func(name string) (io.ReadSeeker, error) {
+    openReadSeeker := func(fullPath string) (io.ReadSeeker, error) {
         return &memFile{buf: buf}, nil
     }
     fl, err := create{{.T}}ReadWriteFile(store, createWriteCloser, openReadSeeker)
@@ -185,10 +185,10 @@ func Test{{.T}}ValuesFileWriting(t *testing.T) {
         t.Fatal("")
     }
     buf := &memBuf{}
-    createWriteCloser := func(name string) (io.WriteCloser, error) {
+    createWriteCloser := func(fullPath string) (io.WriteCloser, error) {
         return &memFile{buf: buf}, nil
     }
-    openReadSeeker := func(name string) (io.ReadSeeker, error) {
+    openReadSeeker := func(fullPath string) (io.ReadSeeker, error) {
         return &memFile{buf: buf}, nil
     }
     fl, err := create{{.T}}ReadWriteFile(store, createWriteCloser, openReadSeeker)
@@ -229,10 +229,10 @@ func Test{{.T}}ValuesFileWritingMore(t *testing.T) {
         t.Fatal("")
     }
     buf := &memBuf{}
-    createWriteCloser := func(name string) (io.WriteCloser, error) {
+    createWriteCloser := func(fullPath string) (io.WriteCloser, error) {
         return &memFile{buf: buf}, nil
     }
-    openReadSeeker := func(name string) (io.ReadSeeker, error) {
+    openReadSeeker := func(fullPath string) (io.ReadSeeker, error) {
         return &memFile{buf: buf}, nil
     }
     fl, err := create{{.T}}ReadWriteFile(store, createWriteCloser, openReadSeeker)
@@ -274,10 +274,10 @@ func Test{{.T}}ValuesFileWritingMultiple(t *testing.T) {
     store.freeableMemBlockChans = make([]chan *{{.t}}MemBlock, 1)
     store.freeableMemBlockChans[0] = make(chan *{{.t}}MemBlock, 2)
     buf := &memBuf{}
-    createWriteCloser := func(name string) (io.WriteCloser, error) {
+    createWriteCloser := func(fullPath string) (io.WriteCloser, error) {
         return &memFile{buf: buf}, nil
     }
-    openReadSeeker := func(name string) (io.ReadSeeker, error) {
+    openReadSeeker := func(fullPath string) (io.ReadSeeker, error) {
         return &memFile{buf: buf}, nil
     }
     fl, err := create{{.T}}ReadWriteFile(store, createWriteCloser, openReadSeeker)

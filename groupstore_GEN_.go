@@ -697,7 +697,7 @@ func (store *DefaultGroupStore) fileWriter() {
 				if err != nil {
 					// TODO: Trigger an audit based on this file being in an
 					// unknown state.
-					store.logError("fileWriter: error closing %s: %s", fl.name, err)
+					store.logError("fileWriter: error closing %s: %s", fl.fullPath, err)
 				}
 				fl = nil
 			}
@@ -724,7 +724,7 @@ func (store *DefaultGroupStore) fileWriter() {
 			if err != nil {
 				// TODO: Trigger an audit based on this file being in an
 				// unknown state.
-				store.logError("fileWriter: error closing %s: %s", fl.name, err)
+				store.logError("fileWriter: error closing %s: %s", fl.fullPath, err)
 			}
 			fl = nil
 		}

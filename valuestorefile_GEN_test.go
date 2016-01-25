@@ -14,7 +14,7 @@ func TestValueValuesFileReading(t *testing.T) {
 	}
 	buf := &memBuf{buf: []byte("VALUESTORE v0                   0123456789abcdef")}
 	binary.BigEndian.PutUint32(buf.buf[28:], 65532)
-	openReadSeeker := func(name string) (io.ReadSeeker, error) {
+	openReadSeeker := func(fullPath string) (io.ReadSeeker, error) {
 		return &memFile{buf: buf}, nil
 	}
 	fl, err := newValueReadFile(store, 12345, openReadSeeker)
@@ -103,10 +103,10 @@ func TestValueValuesFileWritingEmpty(t *testing.T) {
 		t.Fatal("")
 	}
 	buf := &memBuf{}
-	createWriteCloser := func(name string) (io.WriteCloser, error) {
+	createWriteCloser := func(fullPath string) (io.WriteCloser, error) {
 		return &memFile{buf: buf}, nil
 	}
-	openReadSeeker := func(name string) (io.ReadSeeker, error) {
+	openReadSeeker := func(fullPath string) (io.ReadSeeker, error) {
 		return &memFile{buf: buf}, nil
 	}
 	fl, err := createValueReadWriteFile(store, createWriteCloser, openReadSeeker)
@@ -142,10 +142,10 @@ func TestValueValuesFileWritingEmpty2(t *testing.T) {
 	store.freeableMemBlockChans = make([]chan *valueMemBlock, 1)
 	store.freeableMemBlockChans[0] = make(chan *valueMemBlock, 1)
 	buf := &memBuf{}
-	createWriteCloser := func(name string) (io.WriteCloser, error) {
+	createWriteCloser := func(fullPath string) (io.WriteCloser, error) {
 		return &memFile{buf: buf}, nil
 	}
-	openReadSeeker := func(name string) (io.ReadSeeker, error) {
+	openReadSeeker := func(fullPath string) (io.ReadSeeker, error) {
 		return &memFile{buf: buf}, nil
 	}
 	fl, err := createValueReadWriteFile(store, createWriteCloser, openReadSeeker)
@@ -185,10 +185,10 @@ func TestValueValuesFileWriting(t *testing.T) {
 		t.Fatal("")
 	}
 	buf := &memBuf{}
-	createWriteCloser := func(name string) (io.WriteCloser, error) {
+	createWriteCloser := func(fullPath string) (io.WriteCloser, error) {
 		return &memFile{buf: buf}, nil
 	}
-	openReadSeeker := func(name string) (io.ReadSeeker, error) {
+	openReadSeeker := func(fullPath string) (io.ReadSeeker, error) {
 		return &memFile{buf: buf}, nil
 	}
 	fl, err := createValueReadWriteFile(store, createWriteCloser, openReadSeeker)
@@ -229,10 +229,10 @@ func TestValueValuesFileWritingMore(t *testing.T) {
 		t.Fatal("")
 	}
 	buf := &memBuf{}
-	createWriteCloser := func(name string) (io.WriteCloser, error) {
+	createWriteCloser := func(fullPath string) (io.WriteCloser, error) {
 		return &memFile{buf: buf}, nil
 	}
-	openReadSeeker := func(name string) (io.ReadSeeker, error) {
+	openReadSeeker := func(fullPath string) (io.ReadSeeker, error) {
 		return &memFile{buf: buf}, nil
 	}
 	fl, err := createValueReadWriteFile(store, createWriteCloser, openReadSeeker)
@@ -274,10 +274,10 @@ func TestValueValuesFileWritingMultiple(t *testing.T) {
 	store.freeableMemBlockChans = make([]chan *valueMemBlock, 1)
 	store.freeableMemBlockChans[0] = make(chan *valueMemBlock, 2)
 	buf := &memBuf{}
-	createWriteCloser := func(name string) (io.WriteCloser, error) {
+	createWriteCloser := func(fullPath string) (io.WriteCloser, error) {
 		return &memFile{buf: buf}, nil
 	}
-	openReadSeeker := func(name string) (io.ReadSeeker, error) {
+	openReadSeeker := func(fullPath string) (io.ReadSeeker, error) {
 		return &memFile{buf: buf}, nil
 	}
 	fl, err := createValueReadWriteFile(store, createWriteCloser, openReadSeeker)

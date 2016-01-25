@@ -29,7 +29,7 @@ const _GROUP_FILE_TRAILER_SIZE = 8
 
 type groupStoreFile struct {
 	store                     *DefaultGroupStore
-	name                      string
+	fullPath                  string
 	id                        uint32
 	nameTimestamp             int64
 	readerFPs                 []brimutil.ChecksummedReader
@@ -52,15 +52,15 @@ type groupStoreFileWriteBuf struct {
 	memBlocks []*groupMemBlock
 }
 
-func newGroupReadFile(store *DefaultGroupStore, nameTimestamp int64, openReadSeeker func(name string) (io.ReadSeeker, error)) (*groupStoreFile, error) {
+func newGroupReadFile(store *DefaultGroupStore, nameTimestamp int64, openReadSeeker func(fullPath string) (io.ReadSeeker, error)) (*groupStoreFile, error) {
 	fl := &groupStoreFile{store: store, nameTimestamp: nameTimestamp}
-	fl.name = path.Join(store.path, fmt.Sprintf("%019d.group", fl.nameTimestamp))
+	fl.fullPath = path.Join(store.path, fmt.Sprintf("%019d.group", fl.nameTimestamp))
 	fl.readerFPs = make([]brimutil.ChecksummedReader, store.fileReaders)
 	fl.readerLocks = make([]sync.Mutex, len(fl.readerFPs))
 	fl.readerLens = make([][]byte, len(fl.readerFPs))
 	var checksumInterval uint32
 	for i := 0; i < len(fl.readerFPs); i++ {
-		fp, err := openReadSeeker(fl.name)
+		fp, err := openReadSeeker(fl.fullPath)
 		if err != nil {
 			return nil, err
 		}
@@ -81,10 +81,10 @@ func newGroupReadFile(store *DefaultGroupStore, nameTimestamp int64, openReadSee
 	return fl, nil
 }
 
-func createGroupReadWriteFile(store *DefaultGroupStore, createWriteCloser func(name string) (io.WriteCloser, error), openReadSeeker func(name string) (io.ReadSeeker, error)) (*groupStoreFile, error) {
+func createGroupReadWriteFile(store *DefaultGroupStore, createWriteCloser func(fullPath string) (io.WriteCloser, error), openReadSeeker func(fullPath string) (io.ReadSeeker, error)) (*groupStoreFile, error) {
 	fl := &groupStoreFile{store: store, nameTimestamp: time.Now().UnixNano()}
-	fl.name = path.Join(store.path, fmt.Sprintf("%019d.group", fl.nameTimestamp))
-	fp, err := createWriteCloser(fl.name)
+	fl.fullPath = path.Join(store.path, fmt.Sprintf("%019d.group", fl.nameTimestamp))
+	fp, err := createWriteCloser(fl.fullPath)
 	if err != nil {
 		return nil, err
 	}
@@ -109,7 +109,7 @@ func createGroupReadWriteFile(store *DefaultGroupStore, createWriteCloser func(n
 	fl.readerLocks = make([]sync.Mutex, len(fl.readerFPs))
 	fl.readerLens = make([][]byte, len(fl.readerFPs))
 	for i := 0; i < len(fl.readerFPs); i++ {
-		fp, err := openReadSeeker(fl.name)
+		fp, err := openReadSeeker(fl.fullPath)
 		if err != nil {
 			fl.writerFP.Close()
 			for j := 0; j < i; j++ {
@@ -298,7 +298,7 @@ func (fl *groupStoreFile) writer() {
 			continue
 		}
 		if _, err := fl.writerFP.Write(buf.buf); err != nil {
-			fl.store.logCritical("storeFile: %s %s", fl.name, err)
+			fl.store.logCritical("storeFile: %s %s", fl.fullPath, err)
 			break
 		}
 		if len(buf.memBlocks) > 0 {
@@ -472,12 +472,12 @@ L1:
 }
 
 // groupTOCStat returns the number of entries or an error.
-func groupTOCStat(path string, statter func(name string) (os.FileInfo, error), openReadSeeker func(name string) (io.ReadSeeker, error)) (int, error) {
-	fileInfo, err := statter(path)
+func groupTOCStat(fullPath string, statter func(fullPath string) (os.FileInfo, error), openReadSeeker func(fullPath string) (io.ReadSeeker, error)) (int, error) {
+	fileInfo, err := statter(fullPath)
 	if err != nil {
 		return 0, err
 	}
-	fpr, err := openReadSeeker(path)
+	fpr, err := openReadSeeker(fullPath)
 	if err != nil {
 		return 0, err
 	}

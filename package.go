@@ -154,16 +154,16 @@ var ErrDisabled error = errors.New("disabled")
 
 var toss []byte = make([]byte, 65536)
 
-func osOpenReadSeeker(name string) (io.ReadSeeker, error) {
-	return os.Open(name)
+func osOpenReadSeeker(fullPath string) (io.ReadSeeker, error) {
+	return os.Open(fullPath)
 }
 
-func osOpenWriteSeeker(name string) (io.WriteSeeker, error) {
-	return os.OpenFile(name, os.O_RDWR, 0666)
+func osOpenWriteSeeker(fullPath string) (io.WriteSeeker, error) {
+	return os.OpenFile(fullPath, os.O_RDWR, 0666)
 }
 
-func osCreateWriteCloser(name string) (io.WriteCloser, error) {
-	return os.Create(name)
+func osCreateWriteCloser(fullPath string) (io.WriteCloser, error) {
+	return os.Create(fullPath)
 }
 
 type LogFunc func(format string, v ...interface{})
