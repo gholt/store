@@ -46,6 +46,7 @@ func (store *Default{{.T}}Store) flusherLauncher(notifyChan chan *bgNotification
     store.randMutex.Lock()
     nextRun := time.Now().Add(time.Duration(interval + interval*store.rand.NormFloat64()*0.1))
     store.randMutex.Unlock()
+    justFlushed := false
     running := true
     for running {
         var notification *bgNotification
@@ -75,9 +76,14 @@ func (store *Default{{.T}}Store) flusherLauncher(notifyChan chan *bgNotification
         }
         m := atomic.LoadInt32(&store.modifications)
         atomic.AddInt32(&store.modifications, -m)
-        if store.logDebug != nil && m > 0 && m < store.flusherState.flusherThreshold {
-            store.logDebug("flusher: %d modifications under %d threshold; flushing.", m, store.flusherState.flusherThreshold)
+        if (m == 0 && !justFlushed) || (m > 0 && m < store.flusherState.flusherThreshold) {
+            if store.logDebug != nil {
+                store.logDebug("flusher: %d modifications under %d threshold; flushing.", m, store.flusherState.flusherThreshold)
+            }
             store.Flush()
+            justFlushed = true
+        } else {
+            justFlushed = false
         }
     }
 }
