@@ -36,8 +36,8 @@ type DefaultGroupStore struct {
 	freeWriteReqChans       []chan *groupWriteReq
 	pendingWriteReqChans    []chan *groupWriteReq
 	fileMemBlockChan        chan *groupMemBlock
-	freeTOCBlockChan        chan []byte
-	pendingTOCBlockChan     chan []byte
+	freeTOCBlockChan        chan *groupTOCBlock
+	pendingTOCBlockChan     chan *groupTOCBlock
 	activeTOCA              uint64
 	activeTOCB              uint64
 	flushedChan             chan struct{}
@@ -129,6 +129,11 @@ var enableGroupWriteReq *groupWriteReq = &groupWriteReq{}
 var disableGroupWriteReq *groupWriteReq = &groupWriteReq{}
 var flushGroupWriteReq *groupWriteReq = &groupWriteReq{}
 var flushGroupMemBlock *groupMemBlock = &groupMemBlock{}
+var flushGroupTOCBlock *groupTOCBlock = &groupTOCBlock{}
+
+type groupTOCBlock struct {
+	data []byte
+}
 
 type groupLocBlock interface {
 	timestampnano() int64
@@ -194,8 +199,8 @@ func NewGroupStore(c *GroupStoreConfig) (*DefaultGroupStore, chan error, error) 
 	store.freeWriteReqChans = make([]chan *groupWriteReq, store.workers)
 	store.pendingWriteReqChans = make([]chan *groupWriteReq, store.workers)
 	store.fileMemBlockChan = make(chan *groupMemBlock, store.workers)
-	store.freeTOCBlockChan = make(chan []byte, store.workers*2)
-	store.pendingTOCBlockChan = make(chan []byte, store.workers)
+	store.freeTOCBlockChan = make(chan *groupTOCBlock, store.workers*2)
+	store.pendingTOCBlockChan = make(chan *groupTOCBlock, store.workers)
 	store.flushedChan = make(chan struct{}, 1)
 	for i := 0; i < cap(store.freeMemBlockChan); i++ {
 		memBlock := &groupMemBlock{
@@ -220,7 +225,7 @@ func NewGroupStore(c *GroupStoreConfig) (*DefaultGroupStore, chan error, error) 
 		store.pendingWriteReqChans[i] = make(chan *groupWriteReq)
 	}
 	for i := 0; i < cap(store.freeTOCBlockChan); i++ {
-		store.freeTOCBlockChan <- make([]byte, 0, store.pageSize)
+		store.freeTOCBlockChan <- &groupTOCBlock{make([]byte, 0, store.pageSize)}
 	}
 	go store.tocWriter()
 	go store.fileWriter()
@@ -527,7 +532,7 @@ func (store *DefaultGroupStore) closeLocBlock(locBlockID uint32) error {
 }
 
 func (store *DefaultGroupStore) memClearer(freeableMemBlockChan chan *groupMemBlock) {
-	var tb []byte
+	var tb *groupTOCBlock
 	var tbTS int64
 	var tbOffset int
 	for {
@@ -537,7 +542,7 @@ func (store *DefaultGroupStore) memClearer(freeableMemBlockChan chan *groupMemBl
 				store.pendingTOCBlockChan <- tb
 				tb = nil
 			}
-			store.pendingTOCBlockChan <- nil
+			store.pendingTOCBlockChan <- flushGroupTOCBlock
 			continue
 		}
 		fl := store.locBlock(memBlock.fileID)
@@ -566,26 +571,27 @@ func (store *DefaultGroupStore) memClearer(freeableMemBlockChan chan *groupMemBl
 			if store.locmap.Set(keyA, keyB, nameKeyA, nameKeyB, timestampbits, blockID, offset, length, true) > timestampbits {
 				continue
 			}
-			if tb != nil && tbOffset+_GROUP_FILE_ENTRY_SIZE > cap(tb) {
+			if tb != nil && tbOffset+_GROUP_FILE_ENTRY_SIZE > cap(tb.data) {
 				store.pendingTOCBlockChan <- tb
 				tb = nil
 			}
 			if tb == nil {
 				tb = <-store.freeTOCBlockChan
 				tbTS = fl.timestampnano()
-				tb = tb[:8]
-				binary.BigEndian.PutUint64(tb, uint64(tbTS))
+				tb.data = tb.data[:8]
+				binary.BigEndian.PutUint64(tb.data, uint64(tbTS))
 				tbOffset = 8
 			}
-			tb = tb[:tbOffset+_GROUP_FILE_ENTRY_SIZE]
+			tb.data = tb.data[:tbOffset+_GROUP_FILE_ENTRY_SIZE]
+			tbd := tb.data[tbOffset : tbOffset+_GROUP_FILE_ENTRY_SIZE]
 
-			binary.BigEndian.PutUint64(tb[tbOffset:], keyA)
-			binary.BigEndian.PutUint64(tb[tbOffset+8:], keyB)
-			binary.BigEndian.PutUint64(tb[tbOffset+16:], nameKeyA)
-			binary.BigEndian.PutUint64(tb[tbOffset+24:], nameKeyB)
-			binary.BigEndian.PutUint64(tb[tbOffset+32:], timestampbits)
-			binary.BigEndian.PutUint32(tb[tbOffset+40:], offset)
-			binary.BigEndian.PutUint32(tb[tbOffset+44:], length)
+			binary.BigEndian.PutUint64(tbd, keyA)
+			binary.BigEndian.PutUint64(tbd[8:], keyB)
+			binary.BigEndian.PutUint64(tbd[16:], nameKeyA)
+			binary.BigEndian.PutUint64(tbd[24:], nameKeyB)
+			binary.BigEndian.PutUint64(tbd[32:], timestampbits)
+			binary.BigEndian.PutUint32(tbd[40:], offset)
+			binary.BigEndian.PutUint32(tbd[44:], length)
 
 			tbOffset += _GROUP_FILE_ENTRY_SIZE
 		}
@@ -770,7 +776,7 @@ func (store *DefaultGroupStore) tocWriter() {
 OuterLoop:
 	for {
 		t := <-store.pendingTOCBlockChan
-		if t == nil {
+		if t == flushGroupTOCBlock {
 			memClearersFlushLeft--
 			if memClearersFlushLeft > 0 {
 				continue
@@ -801,19 +807,19 @@ OuterLoop:
 			memClearersFlushLeft = len(store.freeableMemBlockChans)
 			continue
 		}
-		if len(t) > 8 {
-			bts := binary.BigEndian.Uint64(t)
+		if len(t.data) > 8 {
+			bts := binary.BigEndian.Uint64(t.data)
 			switch bts {
 			case atomic.LoadUint64(&store.activeTOCA):
-				if _, err = writerA.Write(t[8:]); err != nil {
+				if _, err = writerA.Write(t.data[8:]); err != nil {
 					break OuterLoop
 				}
-				offsetA += uint64(len(t) - 8)
+				offsetA += uint64(len(t.data) - 8)
 			case atomic.LoadUint64(&store.activeTOCB):
-				if _, err = writerB.Write(t[8:]); err != nil {
+				if _, err = writerB.Write(t.data[8:]); err != nil {
 					break OuterLoop
 				}
-				offsetB += uint64(len(t) - 8)
+				offsetB += uint64(len(t.data) - 8)
 			default:
 				// An assumption is made here: If the timestampnano for this
 				// toc block doesn't match the last two seen timestampnanos
@@ -840,13 +846,13 @@ OuterLoop:
 				if _, err = writerA.Write(head); err != nil {
 					break OuterLoop
 				}
-				if _, err = writerA.Write(t[8:]); err != nil {
+				if _, err = writerA.Write(t.data[8:]); err != nil {
 					break OuterLoop
 				}
-				offsetA = _GROUP_FILE_HEADER_SIZE + uint64(len(t)-8)
+				offsetA = _GROUP_FILE_HEADER_SIZE + uint64(len(t.data)-8)
 			}
 		}
-		store.freeTOCBlockChan <- t[:0]
+		store.freeTOCBlockChan <- t
 	}
 	if err != nil {
 		store.logCritical("tocWriter: %s", err)
