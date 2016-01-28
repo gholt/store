@@ -1,7 +1,6 @@
 package store
 
 import (
-	"os"
 	"path"
 	"sort"
 	"strconv"
@@ -129,13 +128,7 @@ func (store *DefaultValueStore) compactionPass(notifyChan chan *bgNotification) 
 			store.logDebug("compaction: pass took %s", time.Now().Sub(begin))
 		}()
 	}
-	fp, err := os.Open(store.pathtoc)
-	if err != nil {
-		store.logError("compaction: %s", err)
-		return nil
-	}
-	names, err := fp.Readdirnames(-1)
-	fp.Close()
+	names, err := store.readdirnames(store.pathtoc)
 	if err != nil {
 		store.logError("compaction: %s", err)
 		return nil
@@ -210,7 +203,7 @@ func (store *DefaultValueStore) compactionWorker(jobChan chan *valueCompactionJo
 			break
 		default:
 		}
-		total, err := valueTOCStat(path.Join(store.pathtoc, c.nametoc), os.Stat, osOpenReadSeeker)
+		total, err := valueTOCStat(path.Join(store.pathtoc, c.nametoc), store.stat, store.openReadSeeker)
 		if err != nil {
 			store.logError("compaction: unable to stat %s because: %v", path.Join(store.pathtoc, c.nametoc), err)
 			continue
@@ -379,18 +372,18 @@ func (store *DefaultValueStore) compactFile(nametoc string, blockID uint32, cont
 		}
 		wg.Wait()
 		if remove {
-			if err := os.Remove(fullpathtoc); err != nil {
+			if err := store.remove(fullpathtoc); err != nil {
 				store.logError("compactFile: unable to remove %s %s", fullpathtoc, err)
-				if err = os.Rename(fullpathtoc, fullpathtoc+".renamed"); err != nil {
+				if err = store.rename(fullpathtoc, fullpathtoc+".renamed"); err != nil {
 					// Critical level since future recoveries, compactions, and
 					// audits will keep hitting this file until a person
 					// corrects the file system issue.
 					store.logCritical("compactFile: also could not rename %s %s", fullpathtoc, err)
 				}
 			}
-			if err := os.Remove(fullpath); err != nil {
+			if err := store.remove(fullpath); err != nil {
 				store.logError("compactFile: unable to remove %s %s", fullpath, err)
-				if err = os.Rename(fullpath, fullpath+".renamed"); err != nil {
+				if err = store.rename(fullpath, fullpath+".renamed"); err != nil {
 					store.logError("compactFile: also could not rename %s %s", fullpath, err)
 				}
 			}

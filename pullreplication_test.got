@@ -65,12 +65,9 @@ func Test{{.T}}PullReplicationSimple(t *testing.T) {
     m := &msgRing{{.T}}PullReplicationTester{ring: r}
     cfg := lowMem{{.T}}StoreConfig()
     cfg.MsgRing = m
-    store, _, err := New{{.T}}Store(cfg)
-    if err != nil {
-        t.Fatal("")
-    }
-    store.EnableAll()
-    defer store.DisableAll()
+    store, _ := New{{.T}}Store(cfg)
+    store.Startup()
+    defer store.Shutdown()
     _, err = store.write(1, 2{{if eq .t "group"}}, 3, 4{{end}}, 0x500, []byte("testing"), false)
     if err != nil {
         t.Fatal(err)

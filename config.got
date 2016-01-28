@@ -1,6 +1,7 @@
 package store
 
 import (
+    "io"
     "log"
     "math"
     "math/rand"
@@ -251,6 +252,15 @@ type {{.T}}StoreConfig struct {
     // AuditAgeThreshold indicates how old a given file must be before it
     // is considered for an audit. Defaults to 604,800 seconds (1 week).
     AuditAgeThreshold int
+
+    OpenReadSeeker func(fullPath string) (io.ReadSeeker, error)
+    OpenWriteSeeker func(fullPath string) (io.WriteSeeker, error)
+    Readdirnames func(fullPath string) ([]string, error)
+    CreateWriteCloser func(fullPath string) (io.WriteCloser, error)
+    Stat func(fullPath string) (os.FileInfo, error)
+    Remove func(fullPath string) error
+    Rename func(oldFullPath string, newFullPath string) error
+    IsNotExist func(err error) bool
 }
 
 func resolve{{.T}}StoreConfig(c *{{.T}}StoreConfig) *{{.T}}StoreConfig {
@@ -832,6 +842,31 @@ func resolve{{.T}}StoreConfig(c *{{.T}}StoreConfig) *{{.T}}StoreConfig {
     }
     if cfg.AuditAgeThreshold < 1 {
         cfg.AuditAgeThreshold = 1
+    }
+
+    if cfg.OpenReadSeeker == nil {
+        cfg.OpenReadSeeker = osOpenReadSeeker
+    }
+    if cfg.OpenWriteSeeker == nil {
+        cfg.OpenWriteSeeker = osOpenWriteSeeker
+    }
+    if cfg.Readdirnames == nil {
+        cfg.Readdirnames = osReaddirnames
+    }
+    if cfg.CreateWriteCloser == nil {
+        cfg.CreateWriteCloser = osCreateWriteCloser
+    }
+    if cfg.Stat == nil {
+        cfg.Stat = os.Stat
+    }
+    if cfg.Remove == nil {
+        cfg.Remove = os.Remove
+    }
+    if cfg.Rename == nil {
+        cfg.Rename = os.Rename
+    }
+    if cfg.IsNotExist == nil {
+        cfg.IsNotExist = os.IsNotExist
     }
     return cfg
 }

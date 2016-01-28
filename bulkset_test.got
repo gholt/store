@@ -13,10 +13,7 @@ import (
 func Test{{.T}}BulkSetReadObviouslyTooShort(t *testing.T) {
     cfg := lowMem{{.T}}StoreConfig()
     cfg.MsgRing = &msgRingPlaceholder{}
-    store, _, err := New{{.T}}Store(cfg)
-    if err != nil {
-        t.Fatal("")
-    }
+    store, _ := New{{.T}}Store(cfg)
     store.DisableInBulkSet()
     n, err := store.newInBulkSetMsg(bytes.NewBuffer(make([]byte, 1)), 1)
     if err != nil {
@@ -45,10 +42,7 @@ func Test{{.T}}BulkSetReadObviouslyTooShort(t *testing.T) {
 func Test{{.T}}BulkSetRead(t *testing.T) {
     cfg := lowMem{{.T}}StoreConfig()
     cfg.MsgRing = &msgRingPlaceholder{}
-    store, _, err := New{{.T}}Store(cfg)
-    if err != nil {
-        t.Fatal("")
-    }
+    store, _ := New{{.T}}Store(cfg)
     store.DisableInBulkSet()
     n, err := store.newInBulkSetMsg(bytes.NewBuffer(make([]byte, 100)), 100)
     if err != nil {
@@ -90,10 +84,7 @@ func Test{{.T}}BulkSetReadLowSendCap(t *testing.T) {
     cfg := lowMem{{.T}}StoreConfig()
     cfg.MsgRing = &msgRingPlaceholder{}
     cfg.BulkSetMsgCap = _{{.TT}}_BULK_SET_MSG_HEADER_LENGTH + 1
-    store, _, err := New{{.T}}Store(cfg)
-    if err != nil {
-        t.Fatal("")
-    }
+    store, _ := New{{.T}}Store(cfg)
     store.DisableInBulkSet()
     for len(store.bulkSetState.inMsgChan) > 0 {
         time.Sleep(time.Millisecond)
@@ -121,12 +112,9 @@ func Test{{.T}}BulkSetMsgWithoutAck(t *testing.T) {
     cfg.MsgRing = m
     cfg.InBulkSetWorkers = 1
     cfg.InBulkSetMsgs = 1
-    store, _, err := New{{.T}}Store(cfg)
-    if err != nil {
-        t.Fatal("")
-    }
-    store.EnableAll()
-    defer store.DisableAll()
+    store, _ := New{{.T}}Store(cfg)
+    store.Startup()
+    defer store.Shutdown()
     bsm := <-store.bulkSetState.inFreeMsgChan
     bsm.body = bsm.body[:0]
     if !bsm.add(1, 2{{if eq .t "group"}}, 3, 4{{end}}, 0x500, []byte("testing")) {
@@ -167,12 +155,9 @@ func Test{{.T}}BulkSetMsgWithAck(t *testing.T) {
     cfg.MsgRing = m
     cfg.InBulkSetWorkers = 1
     cfg.InBulkSetMsgs = 1
-    store, _, err := New{{.T}}Store(cfg)
-    if err != nil {
-        t.Fatal("")
-    }
-    store.EnableAll()
-    defer store.DisableAll()
+    store, _ := New{{.T}}Store(cfg)
+    store.Startup()
+    defer store.Shutdown()
     bsm := <-store.bulkSetState.inFreeMsgChan
     binary.BigEndian.PutUint64(bsm.header, 123)
     bsm.body = bsm.body[:0]
@@ -213,12 +198,9 @@ func Test{{.T}}BulkSetMsgWithoutRing(t *testing.T) {
     cfg.MsgRing = m
     cfg.InBulkSetWorkers = 1
     cfg.InBulkSetMsgs = 1
-    store, _, err := New{{.T}}Store(cfg)
-    if err != nil {
-        t.Fatal("")
-    }
-    store.EnableAll()
-    defer store.DisableAll()
+    store, _ := New{{.T}}Store(cfg)
+    store.Startup()
+    defer store.Shutdown()
     bsm := <-store.bulkSetState.inFreeMsgChan
     binary.BigEndian.PutUint64(bsm.header, 123)
     bsm.body = bsm.body[:0]
@@ -250,10 +232,7 @@ func Test{{.T}}BulkSetMsgWithoutRing(t *testing.T) {
 func Test{{.T}}BulkSetMsgOut(t *testing.T) {
     cfg := lowMem{{.T}}StoreConfig()
     cfg.MsgRing = &msgRingPlaceholder{}
-    store, _, err := New{{.T}}Store(cfg)
-    if err != nil {
-        t.Fatal("")
-    }
+    store, _ := New{{.T}}Store(cfg)
     bsm := store.newOutBulkSetMsg()
     if bsm.MsgType() != _{{.TT}}_BULK_SET_MSG_TYPE {
         t.Fatal(bsm.MsgType())
@@ -326,10 +305,7 @@ func Test{{.T}}BulkSetMsgOutDefaultsToFromLocalNode(t *testing.T) {
     r.SetLocalNode(n.ID())
     cfg := lowMem{{.T}}StoreConfig()
     cfg.MsgRing = &msgRingPlaceholder{ring: r}
-    store, _, err := New{{.T}}Store(cfg)
-    if err != nil {
-        t.Fatal("")
-    }
+    store, _ := New{{.T}}Store(cfg)
     bsm := store.newOutBulkSetMsg()
     if binary.BigEndian.Uint64(bsm.header) != n.ID() {
         t.Fatal(bsm)
@@ -339,12 +315,9 @@ func Test{{.T}}BulkSetMsgOutDefaultsToFromLocalNode(t *testing.T) {
 func Test{{.T}}BulkSetMsgOutWriteError(t *testing.T) {
     cfg := lowMem{{.T}}StoreConfig()
     cfg.MsgRing = &msgRingPlaceholder{}
-    store, _, err := New{{.T}}Store(cfg)
-    if err != nil {
-        t.Fatal("")
-    }
+    store, _ := New{{.T}}Store(cfg)
     bsm := store.newOutBulkSetMsg()
-    _, err = bsm.WriteContent(&testErrorWriter{})
+    _, err := bsm.WriteContent(&testErrorWriter{})
     if err == nil {
         t.Fatal(err)
     }
@@ -355,10 +328,7 @@ func Test{{.T}}BulkSetMsgOutHitCap(t *testing.T) {
     cfg := lowMem{{.T}}StoreConfig()
     cfg.MsgRing = &msgRingPlaceholder{}
     cfg.BulkSetMsgCap = _{{.TT}}_BULK_SET_MSG_HEADER_LENGTH + _{{.TT}}_BULK_SET_MSG_ENTRY_HEADER_LENGTH + 3
-    store, _, err := New{{.T}}Store(cfg)
-    if err != nil {
-        t.Fatal("")
-    }
+    store, _ := New{{.T}}Store(cfg)
     bsm := store.newOutBulkSetMsg()
     if !bsm.add(1, 2{{if eq .t "group"}}, 3, 4{{end}}, 0x500, []byte("1")) {
         t.Fatal("")

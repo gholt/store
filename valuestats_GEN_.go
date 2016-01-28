@@ -167,23 +167,6 @@ type ValueStoreStats struct {
 	locmapDebugInfo            fmt.Stringer
 }
 
-// Stats returns overall information about the state of the ValueStore. Note
-// that this is a relatively expensive call; debug = true will make it even
-// more expensive.
-//
-// The public counter fields returned in the stats will reset with each read.
-// In other words, if Stats().WriteCount gives the value 10 and no more Writes
-// occur before Stats() is called again, that second Stats().WriteCount will
-// have the value 0.
-//
-// The various values reported when debug=true are left undocumented because
-// they are subject to change based on implementation. They are only provided
-// when the stats.String() is called.
-//
-// Note that this function returns a fmt.Stringer because other implementations
-// of ValueStore shouldn't be tied to this implementation's ValueStoreStats
-// struct. But, if it's known that DefaultValueStore is in use, a quick cast
-// can be done to gain access to individual fields.
 func (store *DefaultValueStore) Stats(debug bool) fmt.Stringer {
 	store.statsLock.Lock()
 	stats := &ValueStoreStats{

@@ -8,10 +8,7 @@ import (
 )
 
 func Test{{.T}}ValuesFileReading(t *testing.T) {
-    store, _, err := New{{.T}}Store(lowMem{{.T}}StoreConfig())
-    if err != nil {
-        t.Fatal("")
-    }
+    store, _ := New{{.T}}Store(lowMem{{.T}}StoreConfig())
     buf := &memBuf{buf: []byte("{{.TT}}STORE v0                   0123456789abcdef")}
     binary.BigEndian.PutUint32(buf.buf[28:], 65532)
     openReadSeeker := func(fullPath string) (io.ReadSeeker, error) {
@@ -98,10 +95,7 @@ func Test{{.T}}ValuesFileReading(t *testing.T) {
 func Test{{.T}}ValuesFileWritingEmpty(t *testing.T) {
     cfg := lowMem{{.T}}StoreConfig()
     cfg.ChecksumInterval = 64*1024 - 4
-    store, _, err := New{{.T}}Store(cfg)
-    if err != nil {
-        t.Fatal("")
-    }
+    store, _ := New{{.T}}Store(cfg)
     buf := &memBuf{}
     createWriteCloser := func(fullPath string) (io.WriteCloser, error) {
         return &memFile{buf: buf}, nil
@@ -135,10 +129,7 @@ func Test{{.T}}ValuesFileWritingEmpty(t *testing.T) {
 func Test{{.T}}ValuesFileWritingEmpty2(t *testing.T) {
     cfg := lowMem{{.T}}StoreConfig()
     cfg.ChecksumInterval = 64*1024 - 4
-    store, _, err := New{{.T}}Store(cfg)
-    if err != nil {
-        t.Fatal("")
-    }
+    store, _ := New{{.T}}Store(cfg)
     store.freeableMemBlockChans = make([]chan *{{.t}}MemBlock, 1)
     store.freeableMemBlockChans[0] = make(chan *{{.t}}MemBlock, 1)
     buf := &memBuf{}
@@ -180,10 +171,7 @@ func Test{{.T}}ValuesFileWritingEmpty2(t *testing.T) {
 func Test{{.T}}ValuesFileWriting(t *testing.T) {
     cfg := lowMem{{.T}}StoreConfig()
     cfg.ChecksumInterval = 64*1024 - 4
-    store, _, err := New{{.T}}Store(cfg)
-    if err != nil {
-        t.Fatal("")
-    }
+    store, _ := New{{.T}}Store(cfg)
     buf := &memBuf{}
     createWriteCloser := func(fullPath string) (io.WriteCloser, error) {
         return &memFile{buf: buf}, nil
@@ -224,10 +212,7 @@ func Test{{.T}}ValuesFileWriting(t *testing.T) {
 func Test{{.T}}ValuesFileWritingMore(t *testing.T) {
     cfg := lowMem{{.T}}StoreConfig()
     cfg.ChecksumInterval = 64*1024 - 4
-    store, _, err := New{{.T}}Store(cfg)
-    if err != nil {
-        t.Fatal("")
-    }
+    store, _ := New{{.T}}Store(cfg)
     buf := &memBuf{}
     createWriteCloser := func(fullPath string) (io.WriteCloser, error) {
         return &memFile{buf: buf}, nil
@@ -267,10 +252,7 @@ func Test{{.T}}ValuesFileWritingMore(t *testing.T) {
 func Test{{.T}}ValuesFileWritingMultiple(t *testing.T) {
     cfg := lowMem{{.T}}StoreConfig()
     cfg.ChecksumInterval = 64*1024 - 4
-    store, _, err := New{{.T}}Store(cfg)
-    if err != nil {
-        t.Fatal("")
-    }
+    store, _ := New{{.T}}Store(cfg)
     store.freeableMemBlockChans = make([]chan *{{.t}}MemBlock, 1)
     store.freeableMemBlockChans[0] = make(chan *{{.t}}MemBlock, 2)
     buf := &memBuf{}

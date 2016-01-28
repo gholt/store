@@ -76,34 +76,34 @@ package store
 // got is at https://github.com/gholt/got
 //go:generate got store.got valuestore_GEN_.go TT=VALUE T=Value t=value
 //go:generate got store.got groupstore_GEN_.go TT=GROUP T=Group t=group
-//go:generate got store_test.got valuestore_GEN_test.go TT=VALUE T=Value t=value
-//go:generate got store_test.got groupstore_GEN_test.go TT=GROUP T=Group t=group
+// GLH //go:generate got store_test.got valuestore_GEN_test.go TT=VALUE T=Value t=value
+// GLH //go:generate got store_test.got groupstore_GEN_test.go TT=GROUP T=Group t=group
 //go:generate got config.got valueconfig_GEN_.go TT=VALUE T=Value t=value
 //go:generate got config.got groupconfig_GEN_.go TT=GROUP T=Group t=group
 //go:generate got memblock.got valuememblock_GEN_.go TT=VALUE T=Value t=value
 //go:generate got memblock.got groupmemblock_GEN_.go TT=GROUP T=Group t=group
-//go:generate got memblock_test.got valuememblock_GEN_test.go TT=VALUE T=Value t=value
-//go:generate got memblock_test.got groupmemblock_GEN_test.go TT=GROUP T=Group t=group
+// GLH //go:generate got memblock_test.got valuememblock_GEN_test.go TT=VALUE T=Value t=value
+// GLH //go:generate got memblock_test.got groupmemblock_GEN_test.go TT=GROUP T=Group t=group
 //go:generate got storefile.got valuestorefile_GEN_.go TT=VALUE T=Value t=value
 //go:generate got storefile.got groupstorefile_GEN_.go TT=GROUP T=Group t=group
-//go:generate got storefile_test.got valuestorefile_GEN_test.go TT=VALUE T=Value t=value
-//go:generate got storefile_test.got groupstorefile_GEN_test.go TT=GROUP T=Group t=group
+// GLH //go:generate got storefile_test.got valuestorefile_GEN_test.go TT=VALUE T=Value t=value
+// GLH //go:generate got storefile_test.got groupstorefile_GEN_test.go TT=GROUP T=Group t=group
 //go:generate got bulkset.got valuebulkset_GEN_.go TT=VALUE T=Value t=value
 //go:generate got bulkset.got groupbulkset_GEN_.go TT=GROUP T=Group t=group
-//go:generate got bulkset_test.got valuebulkset_GEN_test.go TT=VALUE T=Value t=value
-//go:generate got bulkset_test.got groupbulkset_GEN_test.go TT=GROUP T=Group t=group
+// GLH //go:generate got bulkset_test.got valuebulkset_GEN_test.go TT=VALUE T=Value t=value
+// GLH //go:generate got bulkset_test.got groupbulkset_GEN_test.go TT=GROUP T=Group t=group
 //go:generate got bulksetack.got valuebulksetack_GEN_.go TT=VALUE T=Value t=value
 //go:generate got bulksetack.got groupbulksetack_GEN_.go TT=GROUP T=Group t=group
-//go:generate got bulksetack_test.got valuebulksetack_GEN_test.go TT=VALUE T=Value t=value
-//go:generate got bulksetack_test.got groupbulksetack_GEN_test.go TT=GROUP T=Group t=group
+// GLH //go:generate got bulksetack_test.got valuebulksetack_GEN_test.go TT=VALUE T=Value t=value
+// GLH //go:generate got bulksetack_test.got groupbulksetack_GEN_test.go TT=GROUP T=Group t=group
 //go:generate got pullreplication.got valuepullreplication_GEN_.go TT=VALUE T=Value t=value
 //go:generate got pullreplication.got grouppullreplication_GEN_.go TT=GROUP T=Group t=group
-//go:generate got pullreplication_test.got valuepullreplication_GEN_test.go TT=VALUE T=Value t=value
-//go:generate got pullreplication_test.got grouppullreplication_GEN_test.go TT=GROUP T=Group t=group
+// GLH //go:generate got pullreplication_test.got valuepullreplication_GEN_test.go TT=VALUE T=Value t=value
+// GLH //go:generate got pullreplication_test.got grouppullreplication_GEN_test.go TT=GROUP T=Group t=group
 //go:generate got ktbloomfilter.got valuektbloomfilter_GEN_.go TT=VALUE T=Value t=value
 //go:generate got ktbloomfilter.got groupktbloomfilter_GEN_.go TT=GROUP T=Group t=group
-//go:generate got ktbloomfilter_test.got valuektbloomfilter_GEN_test.go TT=VALUE T=Value t=value
-//go:generate got ktbloomfilter_test.got groupktbloomfilter_GEN_test.go TT=GROUP T=Group t=group
+// GLH //go:generate got ktbloomfilter_test.got valuektbloomfilter_GEN_test.go TT=VALUE T=Value t=value
+// GLH //go:generate got ktbloomfilter_test.got groupktbloomfilter_GEN_test.go TT=GROUP T=Group t=group
 //go:generate got pushreplication.got valuepushreplication_GEN_.go TT=VALUE T=Value t=value
 //go:generate got pushreplication.got grouppushreplication_GEN_.go TT=GROUP T=Group t=group
 //go:generate got tombstonediscard.got valuetombstonediscard_GEN_.go TT=VALUE T=Value t=value
@@ -162,6 +162,16 @@ func osOpenWriteSeeker(fullPath string) (io.WriteSeeker, error) {
 	return os.OpenFile(fullPath, os.O_RDWR, 0666)
 }
 
+func osReaddirnames(fullPath string) ([]string, error) {
+	fp, err := os.Open(fullPath)
+	if err != nil {
+		return nil, err
+	}
+	names, err := fp.Readdirnames(-1)
+	fp.Close()
+	return names, err
+}
+
 func osCreateWriteCloser(fullPath string) (io.WriteCloser, error) {
 	return os.Create(fullPath)
 }
@@ -186,28 +196,41 @@ type bgNotification struct {
 // For documentation on each of these functions, see the DefaultValueStore and
 // DefaultGroupStore.
 type Store interface {
-	EnableAll()
-	DisableAll()
-	DisableAllBackground()
-	EnableTombstoneDiscard()
-	DisableTombstoneDiscard()
-	TombstoneDiscardPass()
-	EnableCompaction()
-	DisableCompaction()
-	CompactionPass()
-	EnableAudit()
-	DisableAudit()
-	AuditPass()
-	EnableOutPullReplication()
-	DisableOutPullReplication()
-	OutPullReplicationPass()
-	EnableOutPushReplication()
-	DisableOutPushReplication()
-	OutPushReplicationPass()
-	EnableWrites()
-	DisableWrites()
+	// Startup will start up everything needed to start using the Store or
+	// return an error; on creation, a Store will not yet be started up.
+	Startup() error
+	// Shutdown will ensure buffered data is written to disk and will shutdown
+	// the Store; the Store will be unusable until Startup is called again.
+	Shutdown()
+	// Flush will ensure buffered data, at the time of the call, is written to
+	// disk.
 	Flush()
+	// DisableWrites will switch the Store to a read-only mode until
+	// EnableWrites is called.
+	DisableWrites()
+	// EnableWrites will switch the Store back to read-write mode, assuming the
+	// Store supports writes.
+	EnableWrites()
+	// Stats returns overall information about the state of the Store. Note
+	// that this can be an expensive call; debug = true will make it even more
+	// expensive.
+	//
+	// Note that this function returns a fmt.Stringer because other
+	// implementations of a Store shouldn't be tied to this package's
+	// implementation. But, if it's known that DefaultValueStore is in use, for
+	// example, a quick cast to *ValueStoreStats can be done to gain access to
+	// individual fields.
+	//
+	// For this package's implementation, the public counter fields returned in
+	// the stats will reset with each read. In other words, if stats.WriteCount
+	// gives the value 10 and no more writes occur before Stats() is called
+	// again, that second stats.WriteCount will have the value 0.
+	//
+	// The various values reported when debug=true are left undocumented
+	// because they are subject to change. They are only emitted when the
+	// stats.String() is called.
 	Stats(debug bool) fmt.Stringer
+	// ValueCap returns the maximum length of a value the Store can accept.
 	ValueCap() uint32
 }
 
@@ -217,22 +240,79 @@ type Store interface {
 // For documentation on each of these functions, see the DefaultValueStore.
 type ValueStore interface {
 	Store
+	// Lookup will return (timestampmicro, length, err) for (keyA, keyB).
+	//
+	// Note that err == ErrNotFound with timestampmicro == 0 indicates (keyA,
+	// keyB) was not known at all whereas err == ErrNotFound with
+	// timestampmicro != 0 indicates (keyA, keyB) was known and had a deletion
+	// marker (aka tombstone).
 	Lookup(keyA uint64, keyB uint64) (int64, uint32, error)
+	// Read will return (timestampmicro, value, err) for (keyA, keyB); if an
+	// incoming value is provided, the value read will be appended to it and
+	// the whole returned (useful to reuse an existing []byte).
+	//
+	// Note that err == ErrNotFound with timestampmicro == 0 indicates (keyA,
+	// keyB) was not known at all whereas err == ErrNotFound with
+	// timestampmicro != 0 indicates (keyA, keyB) was known and had a deletion
+	// marker (aka tombstone).
 	Read(keyA uint64, keyB uint64, value []byte) (int64, []byte, error)
-	Write(keyA uint64, keyB uint64, timestamp int64, value []byte) (int64, error)
-	Delete(keyA uint64, keyB uint64, timestamp int64) (int64, error)
+	// Write stores (timestampmicro, value) for (keyA, keyB) and returns the
+	// previously stored timestampmicro or returns any error; a newer
+	// timestampmicro already in place is not reported as an error. Note that
+	// with a Write and a Delete for the exact same timestampmicro, the Delete
+	// wins.
+	Write(keyA uint64, keyB uint64, timestampmicro int64, value []byte) (int64, error)
+	// Delete stores timestampmicro for (keyA, keyB) and returns the previously
+	// stored timestampmicro or returns any error; a newer timestampmicro
+	// already in place is not reported as an error. Note that with a Write and
+	// a Delete for the exact same timestampmicro, the Delete wins.
+	Delete(keyA uint64, keyB uint64, timestampmicro int64) (int64, error)
 }
 
 // GroupStore is an interface for a disk-backed data structure that stores
 // []byte values referenced by 128 bit key pairs with options for replication.
+// Because this package uses templatized code, the nomenclature is a bit odd.
+// (keyA, keyB) represents parent key pairs and (nameKeyA, nameKeyB) represents
+// child key pairs. Values are stored by both pairs (keyA, keyB, nameKeyA,
+// nameKeyB) and can be retrieved individually by the same. A full set of
+// children (nameKeyA, nameKeyB) pairs can be retrieved for a parent (keyA,
+// keyB) pair.
 //
 // For documentation on each of these functions, see the DefaultGroupStore.
 type GroupStore interface {
 	Store
+	// Lookup will return (timestampmicro, length, err) for (keyA, keyB,
+	// nameKeyA, nameKeyB).
+	//
+	// Note that err == ErrNotFound with timestampmicro == 0 indicates (keyA,
+	// keyB, nameKeyA, nameKeyB) was not known at all whereas err ==
+	// ErrNotFound with timestampmicro != 0 indicates (keyA, keyB, nameKeyA,
+	// nameKeyB) was known and had a deletion marker (aka tombstone).
 	Lookup(keyA uint64, keyB uint64, nameKeyA uint64, nameKeyB uint64) (int64, uint32, error)
+	// LookupGroup returns all the (nameKeyA, nameKeyB, timestampMicro) items
+	// matching under (keyA, keyB).
 	LookupGroup(keyA uint64, keyB uint64) []LookupGroupItem
+	// Read will return (timestampmicro, value, err) for (keyA, keyB, nameKeyA,
+	// nameKeyB); if an incoming value is provided, the value read will be
+	// appended to it and the whole returned (useful to reuse an existing
+	// []byte).
+	//
+	// Note that err == ErrNotFound with timestampmicro == 0 indicates (keyA,
+	// keyB, nameKeyA, nameKeyB) was not known at all whereas err ==
+	// ErrNotFound with timestampmicro != 0 indicates (keyA, keyB, nameKeyA,
+	// nameKeyB) was known and had a deletion marker (aka tombstone).
 	Read(keyA uint64, keyB uint64, nameKeyA uint64, nameKeyB uint64, value []byte) (int64, []byte, error)
+	// Write stores (timestampmicro, value) for (keyA, keyB, nameKeyA,
+	// nameKeyB) and returns the previously stored timestampmicro or returns
+	// any error; a newer timestampmicro already in place is not reported as an
+	// error. Note that with a Write and a Delete for the exact same
+	// timestampmicro, the Delete wins.
 	Write(keyA uint64, keyB uint64, nameKeyA uint64, nameKeyB uint64, timestamp int64, value []byte) (int64, error)
+	// Delete stores timestampmicro for (keyA, keyB, nameKeyA, nameKeyB) and
+	// returns the previously stored timestampmicro or returns any error; a
+	// newer timestampmicro already in place is not reported as an error. Note
+	// that with a Write and a Delete for the exact same timestampmicro, the
+	// Delete wins.
 	Delete(keyA uint64, keyB uint64, nameKeyA uint64, nameKeyB uint64, timestamp int64) (int64, error)
 }
 

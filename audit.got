@@ -3,7 +3,6 @@ package store
 import (
     "errors"
     "io"
-    "os"
     "path"
     "strconv"
     "strings"
@@ -127,13 +126,7 @@ func (store *Default{{.T}}Store) auditPass(speed bool, notifyChan chan *bgNotifi
             store.logDebug("audit: took %s", time.Now().Sub(begin))
         }()
     }
-    fp, err := os.Open(store.pathtoc)
-    if err != nil {
-        store.logError("audit: %s", err)
-        return nil
-    }
-    names, err := fp.Readdirnames(-1)
-    fp.Close()
+    names, err := store.readdirnames(store.pathtoc)
     if err != nil {
         store.logError("audit: %s", err)
         return nil
@@ -184,7 +177,7 @@ func (store *Default{{.T}}Store) auditPass(speed bool, notifyChan chan *bgNotifi
         fpr, err := osOpenReadSeeker(path.Join(store.path, dataName))
         if err != nil {
             atomic.AddUint32(&failedAudit, 1)
-            if os.IsNotExist(err) {
+            if store.isNotExist(err) {
                 if store.logDebug != nil {
                     store.logDebug("audit: error opening %s: %s", dataName, err)
                 }
@@ -253,7 +246,7 @@ func (store *Default{{.T}}Store) auditPass(speed bool, notifyChan chan *bgNotifi
             fpr, err = osOpenReadSeeker(path.Join(store.pathtoc, names[i]))
             if err != nil {
                 atomic.AddUint32(&failedAudit, 1)
-                if !os.IsNotExist(err) {
+                if !store.isNotExist(err) {
                     store.logError("audit: error opening %s: %s", names[i], err)
                 }
             } else {
@@ -306,8 +299,7 @@ func (store *Default{{.T}}Store) auditPass(speed bool, notifyChan chan *bgNotifi
             }
             go func() {
                 store.logError("audit: all audit actions require store restarts at this time.")
-                store.DisableAll()
-                store.Flush()
+                store.Shutdown()
                 store.restartChan <- errors.New("audit failure occurred requiring a restart")
             }()
             return &bgNotification{

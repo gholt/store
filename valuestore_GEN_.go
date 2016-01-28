@@ -24,6 +24,10 @@ import (
 
 // DefaultValueStore instances are created with NewValueStore.
 type DefaultValueStore struct {
+	runningLock sync.Mutex
+	// 0 = not running, 1 = running, 2 = can't run due to previous error
+	running int
+
 	logCritical             LogFunc
 	logError                LogFunc
 	logWarning              LogFunc
@@ -41,6 +45,7 @@ type DefaultValueStore struct {
 	activeTOCA              uint64
 	activeTOCB              uint64
 	flushedChan             chan struct{}
+	shutdownChan            chan struct{}
 	locBlocks               []valueLocBlock
 	locBlockIDer            uint64
 	path                    string
@@ -110,6 +115,15 @@ type DefaultValueStore struct {
 
 	// Used by the flusher only
 	modifications int32
+
+	openReadSeeker    func(fullPath string) (io.ReadSeeker, error)
+	openWriteSeeker   func(fullPath string) (io.WriteSeeker, error)
+	readdirnames      func(fullPath string) ([]string, error)
+	createWriteCloser func(fullPath string) (io.WriteCloser, error)
+	stat              func(fullPath string) (os.FileInfo, error)
+	remove            func(fullPath string) error
+	rename            func(oldFullPath string, newFullPath string) error
+	isNotExist        func(err error) bool
 }
 
 type valueWriteReq struct {
@@ -127,6 +141,9 @@ var disableValueWriteReq *valueWriteReq = &valueWriteReq{}
 var flushValueWriteReq *valueWriteReq = &valueWriteReq{}
 var flushValueMemBlock *valueMemBlock = &valueMemBlock{}
 var flushValueTOCBlock *valueTOCBlock = &valueTOCBlock{}
+var shutdownValueWriteReq *valueWriteReq = &valueWriteReq{}
+var shutdownValueMemBlock *valueMemBlock = &valueMemBlock{}
+var shutdownValueTOCBlock *valueTOCBlock = &valueTOCBlock{}
 
 type valueTOCBlock struct {
 	data []byte
@@ -152,10 +169,9 @@ type valueLocBlock interface {
 // new files.
 //
 // Note that a lot of buffering, multiple cores, and background processes can
-// be in use and therefore DisableAll() and Flush() should be called prior to
-// the process exiting to ensure all processing is done and the buffers are
-// flushed.
-func NewValueStore(c *ValueStoreConfig) (*DefaultValueStore, chan error, error) {
+// be in use and therefore Shutdown() should be called prior to the process
+// exiting to ensure all processing is done and the buffers are flushed.
+func NewValueStore(c *ValueStoreConfig) (*DefaultValueStore, chan error) {
 	cfg := resolveValueStoreConfig(c)
 	lcmap := cfg.ValueLocMap
 	if lcmap == nil {
@@ -169,7 +185,6 @@ func NewValueStore(c *ValueStoreConfig) (*DefaultValueStore, chan error, error) 
 		logInfo:                 cfg.LogInfo,
 		logDebug:                cfg.LogDebug,
 		rand:                    cfg.Rand,
-		locBlocks:               make([]valueLocBlock, math.MaxUint16),
 		path:                    cfg.Path,
 		pathtoc:                 cfg.PathTOC,
 		locmap:                  lcmap,
@@ -185,7 +200,72 @@ func NewValueStore(c *ValueStoreConfig) (*DefaultValueStore, chan error, error) 
 		checksumInterval:        uint32(cfg.ChecksumInterval),
 		msgRing:                 cfg.MsgRing,
 		restartChan:             make(chan error),
+		openReadSeeker:          cfg.OpenReadSeeker,
+		openWriteSeeker:         cfg.OpenWriteSeeker,
+		readdirnames:            cfg.Readdirnames,
+		createWriteCloser:       cfg.CreateWriteCloser,
+		stat:                    cfg.Stat,
+		remove:                  cfg.Remove,
+		rename:                  cfg.Rename,
+		isNotExist:              cfg.IsNotExist,
 	}
+	store.tombstoneDiscardConfig(cfg)
+	store.compactionConfig(cfg)
+	store.auditConfig(cfg)
+	store.pullReplicationConfig(cfg)
+	store.pushReplicationConfig(cfg)
+	store.bulkSetConfig(cfg)
+	store.bulkSetAckConfig(cfg)
+	store.flusherConfig(cfg)
+	store.diskWatcherConfig(cfg)
+	return store, store.restartChan
+}
+
+func (store *DefaultValueStore) ValueCap() uint32 {
+	return store.valueCap
+}
+
+func (store *DefaultValueStore) disableAll() {
+	store.disableAllBackground()
+	store.DisableWrites()
+}
+
+func (store *DefaultValueStore) disableAllBackground() {
+	wg := &sync.WaitGroup{}
+	for i, f := range []func(){
+		store.DisableDiskWatcher,
+		store.DisableFlusher,
+		store.DisableAudit,
+		store.DisableCompaction,
+		store.DisableInPullReplication,
+		store.DisableOutPullReplication,
+		store.DisableOutPushReplication,
+		store.DisableInBulkSet,
+		store.DisableInBulkSetAck,
+		store.DisableTombstoneDiscard,
+	} {
+		wg.Add(1)
+		go func(ii int, ff func()) {
+			ff()
+			wg.Done()
+		}(i, f)
+	}
+	wg.Wait()
+}
+
+func (store *DefaultValueStore) Startup() error {
+	store.runningLock.Lock()
+	switch store.running {
+	case 0: // not running
+	case 1: // running
+		store.runningLock.Unlock()
+		return nil
+	case 2: // can't run due to previous error
+		store.runningLock.Unlock()
+		return errors.New("can't Startup due to previous Startup error")
+	}
+	store.locBlocks = make([]valueLocBlock, math.MaxUint16)
+	store.locBlockIDer = 0
 	// freeableMemBlockChans is a slice of channels so that the individual
 	// memClearers can be communicated with later (flushes, etc.)
 	store.freeableMemBlockChans = make([]chan *valueMemBlock, store.workers)
@@ -198,7 +278,10 @@ func NewValueStore(c *ValueStoreConfig) (*DefaultValueStore, chan error, error) 
 	store.fileMemBlockChan = make(chan *valueMemBlock, store.workers)
 	store.freeTOCBlockChan = make(chan *valueTOCBlock, store.workers*2)
 	store.pendingTOCBlockChan = make(chan *valueTOCBlock, store.workers)
+	store.activeTOCA = 0
+	store.activeTOCB = 0
 	store.flushedChan = make(chan struct{}, 1)
+	store.shutdownChan = make(chan struct{}, 1)
 	for i := 0; i < cap(store.freeMemBlockChan); i++ {
 		memBlock := &valueMemBlock{
 			store:  store,
@@ -208,7 +291,9 @@ func NewValueStore(c *ValueStoreConfig) (*DefaultValueStore, chan error, error) 
 		var err error
 		memBlock.id, err = store.addLocBlock(memBlock)
 		if err != nil {
-			return nil, nil, err
+			store.running = 2 // can't run due to previous error
+			store.runningLock.Unlock()
+			return err
 		}
 		store.freeMemBlockChan <- memBlock
 	}
@@ -232,56 +317,45 @@ func NewValueStore(c *ValueStoreConfig) (*DefaultValueStore, chan error, error) 
 	for i := 0; i < len(store.pendingWriteReqChans); i++ {
 		go store.memWriter(store.pendingWriteReqChans[i])
 	}
-	store.tombstoneDiscardConfig(cfg)
-	store.compactionConfig(cfg)
-	store.auditConfig(cfg)
-	store.pullReplicationConfig(cfg)
-	store.pushReplicationConfig(cfg)
-	store.bulkSetConfig(cfg)
-	store.bulkSetAckConfig(cfg)
-	store.flusherConfig(cfg)
-	store.diskWatcherConfig(cfg)
 	err := store.recovery()
 	if err != nil {
-		return nil, nil, err
+		store.running = 2 // can't run due to previous error
+		store.runningLock.Unlock()
+		return err
 	}
-	return store, store.restartChan, nil
+	store.enableAll()
+	store.running = 1 // running
+	store.runningLock.Unlock()
+	return nil
 }
 
-// ValueCap returns the maximum length of a value the ValueStore can accept.
-func (store *DefaultValueStore) ValueCap() uint32 {
-	return store.valueCap
-}
-
-func (store *DefaultValueStore) DisableAll() {
-	store.DisableAllBackground()
-	store.DisableWrites()
-}
-
-func (store *DefaultValueStore) DisableAllBackground() {
-	wg := &sync.WaitGroup{}
-	for i, f := range []func(){
-		store.DisableDiskWatcher,
-		store.DisableFlusher,
-		store.DisableAudit,
-		store.DisableCompaction,
-		store.DisableInPullReplication,
-		store.DisableOutPullReplication,
-		store.DisableOutPushReplication,
-		store.DisableInBulkSet,
-		store.DisableInBulkSetAck,
-		store.DisableTombstoneDiscard,
-	} {
-		wg.Add(1)
-		go func(ii int, ff func()) {
-			ff()
-			wg.Done()
-		}(i, f)
+func (store *DefaultValueStore) Shutdown() {
+	store.runningLock.Lock()
+	if store.running != 1 { // running
+		store.runningLock.Unlock()
+		return
 	}
-	wg.Wait()
+	store.disableAll()
+	for _, c := range store.pendingWriteReqChans {
+		c <- shutdownValueWriteReq
+	}
+	<-store.shutdownChan
+	store.locmap.Clear()
+	store.locBlocks = nil
+	store.freeableMemBlockChans = nil
+	store.freeMemBlockChan = nil
+	store.freeWriteReqChans = nil
+	store.pendingWriteReqChans = nil
+	store.fileMemBlockChan = nil
+	store.freeTOCBlockChan = nil
+	store.pendingTOCBlockChan = nil
+	store.flushedChan = nil
+	store.shutdownChan = nil
+	store.running = 0 // not running
+	store.runningLock.Unlock()
 }
 
-func (store *DefaultValueStore) EnableAll() {
+func (store *DefaultValueStore) enableAll() {
 	wg := &sync.WaitGroup{}
 	for _, f := range []func(){
 		store.EnableWrites,
@@ -305,8 +379,6 @@ func (store *DefaultValueStore) EnableAll() {
 	wg.Wait()
 }
 
-// DisableWrites will cause any incoming Write or Delete requests to respond
-// with ErrDisabled until EnableWrites is called.
 func (store *DefaultValueStore) DisableWrites() {
 	store.disableWrites(true)
 }
@@ -322,7 +394,6 @@ func (store *DefaultValueStore) disableWrites(userCall bool) {
 	store.disableEnableWritesLock.Unlock()
 }
 
-// EnableWrites will resume accepting incoming Write and Delete requests.
 func (store *DefaultValueStore) EnableWrites() {
 	store.enableWrites(true)
 }
@@ -338,8 +409,6 @@ func (store *DefaultValueStore) enableWrites(userCall bool) {
 	store.disableEnableWritesLock.Unlock()
 }
 
-// Flush will ensure buffered data (at the time of the call) is written to
-// disk.
 func (store *DefaultValueStore) Flush() {
 	for _, c := range store.pendingWriteReqChans {
 		c <- flushValueWriteReq
@@ -347,12 +416,6 @@ func (store *DefaultValueStore) Flush() {
 	<-store.flushedChan
 }
 
-// Lookup will return timestampmicro, length, err for keyA, keyB.
-//
-// Note that err == ErrNotFound with timestampmicro == 0 indicates keyA, keyB
-// was not known at all whereas err == ErrNotFound with timestampmicro != 0
-// indicates keyA, keyB
-// was known and had a deletion marker (aka tombstone).
 func (store *DefaultValueStore) Lookup(keyA uint64, keyB uint64) (int64, uint32, error) {
 	atomic.AddInt32(&store.lookups, 1)
 	timestampbits, _, length, err := store.lookup(keyA, keyB)
@@ -370,13 +433,6 @@ func (store *DefaultValueStore) lookup(keyA uint64, keyB uint64) (uint64, uint32
 	return timestampbits, id, length, nil
 }
 
-// Read will return timestampmicro, value, err for keyA, keyB;
-// if an incoming value is provided, the read value will be appended to it and
-// the whole returned (useful to reuse an existing []byte).
-//
-// Note that err == ErrNotFound with timestampmicro == 0 indicates keyA, keyB
-// was not known at all whereas err == ErrNotFound with timestampmicro != 0
-// indicates keyA, keyB was known and had a deletion marker (aka tombstone).
 func (store *DefaultValueStore) Read(keyA uint64, keyB uint64, value []byte) (int64, []byte, error) {
 	atomic.AddInt32(&store.reads, 1)
 	timestampbits, value, err := store.read(keyA, keyB, value)
@@ -394,11 +450,6 @@ func (store *DefaultValueStore) read(keyA uint64, keyB uint64, value []byte) (ui
 	return store.locBlock(id).read(keyA, keyB, timestampbits, offset, length, value)
 }
 
-// Write stores timestampmicro, value for keyA, keyB
-// and returns the previously stored timestampmicro or returns any error; a
-// newer timestampmicro already in place is not reported as an error. Note that
-// with a write and a delete for the exact same timestampmicro, the delete
-// wins.
 func (store *DefaultValueStore) Write(keyA uint64, keyB uint64, timestampmicro int64, value []byte) (int64, error) {
 	atomic.AddInt32(&store.writes, 1)
 	if timestampmicro < TIMESTAMPMICRO_MIN {
@@ -439,11 +490,6 @@ func (store *DefaultValueStore) write(keyA uint64, keyB uint64, timestampbits ui
 	return ptimestampbits, err
 }
 
-// Delete stores timestampmicro for keyA, keyB
-// and returns the previously stored timestampmicro or returns any error; a
-// newer timestampmicro already in place is not reported as an error. Note that
-// with a write and a delete for the exact same timestampmicro, the delete
-// wins.
 func (store *DefaultValueStore) Delete(keyA uint64, keyB uint64, timestampmicro int64) (int64, error) {
 	atomic.AddInt32(&store.deletes, 1)
 	if timestampmicro < TIMESTAMPMICRO_MIN {
@@ -505,13 +551,17 @@ func (store *DefaultValueStore) memClearer(freeableMemBlockChan chan *valueMemBl
 	var tbOffset int
 	for {
 		memBlock := <-freeableMemBlockChan
-		if memBlock == flushValueMemBlock {
+		if memBlock == flushValueMemBlock || memBlock == shutdownValueMemBlock {
 			if tb != nil {
 				store.pendingTOCBlockChan <- tb
 				tb = nil
 			}
-			store.pendingTOCBlockChan <- flushValueTOCBlock
-			continue
+			if memBlock == flushValueMemBlock {
+				store.pendingTOCBlockChan <- flushValueTOCBlock
+				continue
+			}
+			store.pendingTOCBlockChan <- shutdownValueTOCBlock
+			break
 		}
 		fl := store.locBlock(memBlock.fileID)
 		if tb != nil && tbTS != fl.timestampnano() {
@@ -584,13 +634,17 @@ func (store *DefaultValueStore) memWriter(pendingWriteReqChan chan *valueWriteRe
 			enabled = false
 			continue
 		}
-		if writeReq == flushValueWriteReq {
+		if writeReq == flushValueWriteReq || writeReq == shutdownValueWriteReq {
 			if memBlock != nil && len(memBlock.toc) > 0 {
 				store.fileMemBlockChan <- memBlock
 				memBlock = nil
 			}
-			store.fileMemBlockChan <- flushValueMemBlock
-			continue
+			if writeReq == flushValueWriteReq {
+				store.fileMemBlockChan <- flushValueMemBlock
+				continue
+			}
+			store.fileMemBlockChan <- shutdownValueMemBlock
+			break
 		}
 		if !enabled && !writeReq.internal {
 			writeReq.errChan <- ErrDisabled
@@ -648,6 +702,7 @@ func (store *DefaultValueStore) memWriter(pendingWriteReqChan chan *valueWriteRe
 func (store *DefaultValueStore) fileWriter() {
 	var fl *valueStoreFile
 	memWritersFlushLeft := len(store.pendingWriteReqChans)
+	memWritersShutdownLeft := len(store.pendingWriteReqChans)
 	var tocLen uint64
 	var valueLen uint64
 	var disabledDueToError error
@@ -655,10 +710,17 @@ func (store *DefaultValueStore) fileWriter() {
 	var disabledDueToErrorLogTime time.Time
 	for {
 		memBlock := <-store.fileMemBlockChan
-		if memBlock == flushValueMemBlock {
-			memWritersFlushLeft--
-			if memWritersFlushLeft > 0 {
-				continue
+		if memBlock == flushValueMemBlock || memBlock == shutdownValueMemBlock {
+			if memBlock == flushValueMemBlock {
+				memWritersFlushLeft--
+				if memWritersFlushLeft > 0 {
+					continue
+				}
+			} else {
+				memWritersShutdownLeft--
+				if memWritersShutdownLeft > 0 {
+					continue
+				}
 			}
 			if fl != nil {
 				err := fl.closeWriting()
@@ -669,11 +731,17 @@ func (store *DefaultValueStore) fileWriter() {
 				}
 				fl = nil
 			}
-			for i := 0; i < len(store.freeableMemBlockChans); i++ {
-				store.freeableMemBlockChans[i] <- flushValueMemBlock
+			if memBlock == flushValueMemBlock {
+				for i := 0; i < len(store.freeableMemBlockChans); i++ {
+					store.freeableMemBlockChans[i] <- flushValueMemBlock
+				}
+				memWritersFlushLeft = len(store.pendingWriteReqChans)
+				continue
 			}
-			memWritersFlushLeft = len(store.pendingWriteReqChans)
-			continue
+			for i := 0; i < len(store.freeableMemBlockChans); i++ {
+				store.freeableMemBlockChans[i] <- shutdownValueMemBlock
+			}
+			break
 		}
 		if disabledDueToError != nil {
 			if disabledDueToErrorLogTime.Before(time.Now()) {
@@ -704,8 +772,7 @@ func (store *DefaultValueStore) fileWriter() {
 				disabledDueToError = err
 				disabledDueToErrorLogTime = time.Now().Add(5 * time.Minute)
 				go func() {
-					store.DisableAll()
-					store.Flush()
+					store.Shutdown()
 					store.restartChan <- errors.New("no new files can be opened")
 				}()
 			}
@@ -719,10 +786,11 @@ func (store *DefaultValueStore) fileWriter() {
 }
 
 func (store *DefaultValueStore) tocWriter() {
+	memClearersFlushLeft := len(store.freeableMemBlockChans)
+	memClearersShutdownLeft := len(store.freeableMemBlockChans)
 	// writerA is the current toc file while writerB is the previously active
 	// toc writerB is kept around in case a "late" key arrives to be flushed
 	// whom's value is actually in the previous value file.
-	memClearersFlushLeft := len(store.freeableMemBlockChans)
 	var writerA io.WriteCloser
 	var offsetA uint64
 	var writerB io.WriteCloser
@@ -738,10 +806,17 @@ func (store *DefaultValueStore) tocWriter() {
 OuterLoop:
 	for {
 		t := <-store.pendingTOCBlockChan
-		if t == flushValueTOCBlock {
-			memClearersFlushLeft--
-			if memClearersFlushLeft > 0 {
-				continue
+		if t == flushValueTOCBlock || t == shutdownValueTOCBlock {
+			if t == flushValueTOCBlock {
+				memClearersFlushLeft--
+				if memClearersFlushLeft > 0 {
+					continue
+				}
+			} else {
+				memClearersShutdownLeft--
+				if memClearersShutdownLeft > 0 {
+					continue
+				}
 			}
 			if writerB != nil {
 				if _, err = writerB.Write(term); err != nil {
@@ -765,9 +840,13 @@ OuterLoop:
 				atomic.StoreUint64(&store.activeTOCA, 0)
 				offsetA = 0
 			}
-			store.flushedChan <- struct{}{}
-			memClearersFlushLeft = len(store.freeableMemBlockChans)
-			continue
+			if t == flushValueTOCBlock {
+				store.flushedChan <- struct{}{}
+				memClearersFlushLeft = len(store.freeableMemBlockChans)
+				continue
+			}
+			store.shutdownChan <- struct{}{}
+			break
 		}
 		if len(t.data) > 8 {
 			bts := binary.BigEndian.Uint64(t.data)
@@ -799,8 +878,8 @@ OuterLoop:
 				writerB = writerA
 				offsetB = offsetA
 				atomic.StoreUint64(&store.activeTOCA, bts)
-				var fp *os.File
-				fp, err = os.Create(path.Join(store.pathtoc, fmt.Sprintf("%d.valuetoc", bts)))
+				var fp io.WriteSeeker
+				fp, err = store.openWriteSeeker(path.Join(store.pathtoc, fmt.Sprintf("%d.valuetoc", bts)))
 				if err != nil {
 					break OuterLoop
 				}
@@ -873,19 +952,13 @@ func (store *DefaultValueStore) recovery() error {
 		}
 		wg.Wait()
 	}
-	fp, err := os.Open(store.pathtoc)
+	names, err := store.readdirnames(store.pathtoc)
 	if err != nil {
 		spindown()
 		return err
 	}
-	names, err := fp.Readdirnames(-1)
-	fp.Close()
-	if err != nil {
-		spindown()
-		return err
-	}
-	fromDiskCount := 0
 	sort.Strings(names)
+	fromDiskCount := 0
 	var compactNames []string
 	var compactBlockIDs []uint32
 	for i := 0; i < len(names); i++ {
