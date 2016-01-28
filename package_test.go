@@ -2,6 +2,7 @@ package store
 
 import (
 	"io"
+	"os"
 	"sync"
 	"time"
 
@@ -104,4 +105,37 @@ func (w *testErrorWriter) Write(p []byte) (int, error) {
 		return n, io.EOF
 	}
 	return 0, io.EOF
+}
+
+type memFileInfo struct {
+	name    string
+	size    int64
+	mode    os.FileMode
+	modTime time.Time
+	isDir   bool
+	sys     interface{}
+}
+
+func (m *memFileInfo) Name() string {
+	return m.name
+}
+
+func (m *memFileInfo) Size() int64 {
+	return m.size
+}
+
+func (m *memFileInfo) Mode() os.FileMode {
+	return m.mode
+}
+
+func (m *memFileInfo) ModTime() time.Time {
+	return m.modTime
+}
+
+func (m *memFileInfo) IsDir() bool {
+	return m.isDir
+}
+
+func (m *memFileInfo) Sys() interface{} {
+	return m.sys
 }

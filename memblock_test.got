@@ -6,7 +6,7 @@ import (
 )
 
 func Test{{.T}}ValuesMemRead(t *testing.T) {
-    store, _ := New{{.T}}Store(lowMem{{.T}}StoreConfig())
+    store, _ := newTest{{.T}}Store(nil)
     memBlock1 := &{{.t}}MemBlock{id: 1, store: store, values: []byte("0123456789abcdef")}
     memBlock2 := &{{.t}}MemBlock{id: 2, store: store, values: []byte("fedcba9876543210")}
     store.locBlocks = []{{.t}}LocBlock{nil, memBlock1, memBlock2}

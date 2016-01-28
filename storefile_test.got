@@ -8,7 +8,11 @@ import (
 )
 
 func Test{{.T}}ValuesFileReading(t *testing.T) {
-    store, _ := New{{.T}}Store(lowMem{{.T}}StoreConfig())
+    store, _ := newTest{{.T}}Store(nil)
+    if err := store.Startup(); err != nil {
+        t.Fatal(err)
+    }
+    defer store.Shutdown()
     buf := &memBuf{buf: []byte("{{.TT}}STORE v0                   0123456789abcdef")}
     binary.BigEndian.PutUint32(buf.buf[28:], 65532)
     openReadSeeker := func(fullPath string) (io.ReadSeeker, error) {
@@ -93,9 +97,13 @@ func Test{{.T}}ValuesFileReading(t *testing.T) {
 }
 
 func Test{{.T}}ValuesFileWritingEmpty(t *testing.T) {
-    cfg := lowMem{{.T}}StoreConfig()
+    cfg := newTest{{.T}}StoreConfig()
     cfg.ChecksumInterval = 64*1024 - 4
-    store, _ := New{{.T}}Store(cfg)
+    store, _ := newTest{{.T}}Store(cfg)
+    if err := store.Startup(); err != nil {
+        t.Fatal(err)
+    }
+    defer store.Shutdown()
     buf := &memBuf{}
     createWriteCloser := func(fullPath string) (io.WriteCloser, error) {
         return &memFile{buf: buf}, nil
@@ -127,19 +135,23 @@ func Test{{.T}}ValuesFileWritingEmpty(t *testing.T) {
 }
 
 func Test{{.T}}ValuesFileWritingEmpty2(t *testing.T) {
-    cfg := lowMem{{.T}}StoreConfig()
+    cfg := newTest{{.T}}StoreConfig()
     cfg.ChecksumInterval = 64*1024 - 4
-    store, _ := New{{.T}}Store(cfg)
+    buf := &memBuf{}
+    cfg.CreateWriteCloser = func(fullPath string) (io.WriteCloser, error) {
+        return &memFile{buf: buf}, nil
+    }
+    cfg.OpenReadSeeker = func(fullPath string) (io.ReadSeeker, error) {
+        return &memFile{buf: buf}, nil
+    }
+    store, _ := newTest{{.T}}Store(cfg)
     store.freeableMemBlockChans = make([]chan *{{.t}}MemBlock, 1)
     store.freeableMemBlockChans[0] = make(chan *{{.t}}MemBlock, 1)
-    buf := &memBuf{}
-    createWriteCloser := func(fullPath string) (io.WriteCloser, error) {
-        return &memFile{buf: buf}, nil
+    if err := store.Startup(); err != nil {
+        t.Fatal(err)
     }
-    openReadSeeker := func(fullPath string) (io.ReadSeeker, error) {
-        return &memFile{buf: buf}, nil
-    }
-    fl, err := create{{.T}}ReadWriteFile(store, createWriteCloser, openReadSeeker)
+    defer store.Shutdown()
+    fl, err := create{{.T}}ReadWriteFile(store, store.createWriteCloser, store.openReadSeeker)
     if err != nil {
         t.Fatal("")
     }
@@ -169,9 +181,13 @@ func Test{{.T}}ValuesFileWritingEmpty2(t *testing.T) {
 }
 
 func Test{{.T}}ValuesFileWriting(t *testing.T) {
-    cfg := lowMem{{.T}}StoreConfig()
+    cfg := newTest{{.T}}StoreConfig()
     cfg.ChecksumInterval = 64*1024 - 4
-    store, _ := New{{.T}}Store(cfg)
+    store, _ := newTest{{.T}}Store(cfg)
+    if err := store.Startup(); err != nil {
+        t.Fatal(err)
+    }
+    defer store.Shutdown()
     buf := &memBuf{}
     createWriteCloser := func(fullPath string) (io.WriteCloser, error) {
         return &memFile{buf: buf}, nil
@@ -210,9 +226,13 @@ func Test{{.T}}ValuesFileWriting(t *testing.T) {
 }
 
 func Test{{.T}}ValuesFileWritingMore(t *testing.T) {
-    cfg := lowMem{{.T}}StoreConfig()
+    cfg := newTest{{.T}}StoreConfig()
     cfg.ChecksumInterval = 64*1024 - 4
-    store, _ := New{{.T}}Store(cfg)
+    store, _ := newTest{{.T}}Store(cfg)
+    if err := store.Startup(); err != nil {
+        t.Fatal(err)
+    }
+    defer store.Shutdown()
     buf := &memBuf{}
     createWriteCloser := func(fullPath string) (io.WriteCloser, error) {
         return &memFile{buf: buf}, nil
@@ -250,9 +270,13 @@ func Test{{.T}}ValuesFileWritingMore(t *testing.T) {
 }
 
 func Test{{.T}}ValuesFileWritingMultiple(t *testing.T) {
-    cfg := lowMem{{.T}}StoreConfig()
+    cfg := newTest{{.T}}StoreConfig()
     cfg.ChecksumInterval = 64*1024 - 4
-    store, _ := New{{.T}}Store(cfg)
+    store, _ := newTest{{.T}}Store(cfg)
+    if err := store.Startup(); err != nil {
+        t.Fatal(err)
+    }
+    defer store.Shutdown()
     store.freeableMemBlockChans = make([]chan *{{.t}}MemBlock, 1)
     store.freeableMemBlockChans[0] = make(chan *{{.t}}MemBlock, 2)
     buf := &memBuf{}
