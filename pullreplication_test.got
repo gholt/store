@@ -63,10 +63,12 @@ func Test{{.T}}PullReplicationSimple(t *testing.T) {
     r := b.Ring()
     r.SetLocalNode(n.ID())
     m := &msgRing{{.T}}PullReplicationTester{ring: r}
-    cfg := lowMem{{.T}}StoreConfig()
+    cfg := newTest{{.T}}StoreConfig()
     cfg.MsgRing = m
-    store, _ := New{{.T}}Store(cfg)
-    store.Startup()
+    store, _ := newTest{{.T}}Store(cfg)
+    if err := store.Startup(); err != nil {
+        t.Fatal(err)
+    }
     defer store.Shutdown()
     _, err = store.write(1, 2{{if eq .t "group"}}, 3, 4{{end}}, 0x500, []byte("testing"), false)
     if err != nil {

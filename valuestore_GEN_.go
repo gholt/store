@@ -766,7 +766,7 @@ func (store *DefaultValueStore) fileWriter() {
 		}
 		if fl == nil {
 			var err error
-			fl, err = createValueReadWriteFile(store, osCreateWriteCloser, osOpenReadSeeker)
+			fl, err = createValueReadWriteFile(store, store.createWriteCloser, store.openReadSeeker)
 			if err != nil {
 				store.logCritical("fileWriter: must shutdown because no new files can be opened: %s", err)
 				disabledDueToError = err
@@ -803,6 +803,15 @@ func (store *DefaultValueStore) tocWriter() {
 	// recovery).
 	term := make([]byte, store.checksumInterval)
 	copy(term[len(term)-8:], []byte("TERM v0 "))
+	disabled := false
+	fatal := func(point int, err error) {
+		store.logCritical("tocWriter: %d %s", point, err)
+		disabled = true
+		go func() {
+			store.Shutdown()
+			store.restartChan <- errors.New("tocWriter encountered a fatal error; restart required")
+		}()
+	}
 OuterLoop:
 	for {
 		t := <-store.pendingTOCBlockChan
@@ -810,20 +819,22 @@ OuterLoop:
 			if t == flushValueTOCBlock {
 				memClearersFlushLeft--
 				if memClearersFlushLeft > 0 {
-					continue
+					continue OuterLoop
 				}
 			} else {
 				memClearersShutdownLeft--
 				if memClearersShutdownLeft > 0 {
-					continue
+					continue OuterLoop
 				}
 			}
 			if writerB != nil {
 				if _, err = writerB.Write(term); err != nil {
-					break OuterLoop
+					fatal(1, err)
+					continue OuterLoop
 				}
 				if err = writerB.Close(); err != nil {
-					break OuterLoop
+					fatal(2, err)
+					continue OuterLoop
 				}
 				writerB = nil
 				atomic.StoreUint64(&store.activeTOCB, 0)
@@ -831,10 +842,12 @@ OuterLoop:
 			}
 			if writerA != nil {
 				if _, err = writerA.Write(term); err != nil {
-					break OuterLoop
+					fatal(3, err)
+					continue OuterLoop
 				}
 				if err = writerA.Close(); err != nil {
-					break OuterLoop
+					fatal(4, err)
+					continue OuterLoop
 				}
 				writerA = nil
 				atomic.StoreUint64(&store.activeTOCA, 0)
@@ -843,22 +856,28 @@ OuterLoop:
 			if t == flushValueTOCBlock {
 				store.flushedChan <- struct{}{}
 				memClearersFlushLeft = len(store.freeableMemBlockChans)
-				continue
+				continue OuterLoop
 			}
 			store.shutdownChan <- struct{}{}
 			break
+		}
+		if disabled {
+			store.freeTOCBlockChan <- t
+			continue OuterLoop
 		}
 		if len(t.data) > 8 {
 			bts := binary.BigEndian.Uint64(t.data)
 			switch bts {
 			case atomic.LoadUint64(&store.activeTOCA):
 				if _, err = writerA.Write(t.data[8:]); err != nil {
-					break OuterLoop
+					fatal(5, err)
+					continue OuterLoop
 				}
 				offsetA += uint64(len(t.data) - 8)
 			case atomic.LoadUint64(&store.activeTOCB):
 				if _, err = writerB.Write(t.data[8:]); err != nil {
-					break OuterLoop
+					fatal(6, err)
+					continue OuterLoop
 				}
 				offsetB += uint64(len(t.data) - 8)
 			default:
@@ -868,35 +887,37 @@ OuterLoop:
 				// timestampnano and can close that toc file.
 				if writerB != nil {
 					if _, err = writerB.Write(term); err != nil {
-						break OuterLoop
+						fatal(7, err)
+						continue OuterLoop
 					}
 					if err = writerB.Close(); err != nil {
-						break OuterLoop
+						fatal(8, err)
+						continue OuterLoop
 					}
 				}
 				atomic.StoreUint64(&store.activeTOCB, atomic.LoadUint64(&store.activeTOCA))
 				writerB = writerA
 				offsetB = offsetA
 				atomic.StoreUint64(&store.activeTOCA, bts)
-				var fp io.WriteSeeker
-				fp, err = store.openWriteSeeker(path.Join(store.pathtoc, fmt.Sprintf("%d.valuetoc", bts)))
+				var fp io.WriteCloser
+				fp, err = store.createWriteCloser(path.Join(store.pathtoc, fmt.Sprintf("%d.valuetoc", bts)))
 				if err != nil {
-					break OuterLoop
+					fatal(9, err)
+					continue OuterLoop
 				}
 				writerA = brimutil.NewMultiCoreChecksummedWriter(fp, int(store.checksumInterval), murmur3.New32, store.workers)
 				if _, err = writerA.Write(head); err != nil {
-					break OuterLoop
+					fatal(10, err)
+					continue OuterLoop
 				}
 				if _, err = writerA.Write(t.data[8:]); err != nil {
-					break OuterLoop
+					fatal(11, err)
+					continue OuterLoop
 				}
 				offsetA = _VALUE_FILE_HEADER_SIZE + uint64(len(t.data)-8)
 			}
 		}
 		store.freeTOCBlockChan <- t
-	}
-	if err != nil {
-		store.logCritical("tocWriter: %s", err)
 	}
 	if writerA != nil {
 		writerA.Close()
@@ -974,12 +995,12 @@ func (store *DefaultValueStore) recovery() error {
 			store.logError("recovery: bad timestamp in name: %#v", names[i])
 			continue
 		}
-		fpr, err := osOpenReadSeeker(path.Join(store.pathtoc, names[i]))
+		fpr, err := store.openReadSeeker(path.Join(store.pathtoc, names[i]))
 		if err != nil {
 			store.logError("recovery: error opening %s: %s", names[i], err)
 			continue
 		}
-		fl, err := newValueReadFile(store, namets, osOpenReadSeeker)
+		fl, err := newValueReadFile(store, namets, store.openReadSeeker)
 		if err != nil {
 			store.logError("recovery: error opening %s: %s", names[i][:len(names[i])-3], err)
 			closeIfCloser(fpr)

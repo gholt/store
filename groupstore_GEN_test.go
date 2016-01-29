@@ -34,16 +34,16 @@ func newTestGroupStoreConfig() *GroupStoreConfig {
 		OutPullReplicationBloomN:  1000,
 
 		OpenReadSeeker: func(fullPath string) (io.ReadSeeker, error) {
-			return &memFile{}, nil
+			return &memFile{buf: &memBuf{}}, nil
 		},
 		OpenWriteSeeker: func(fullPath string) (io.WriteSeeker, error) {
-			return &memFile{}, nil
+			return &memFile{buf: &memBuf{}}, nil
 		},
 		Readdirnames: func(fullPath string) ([]string, error) {
 			return nil, nil
 		},
 		CreateWriteCloser: func(fullPath string) (io.WriteCloser, error) {
-			return &memFile{}, nil
+			return &memFile{buf: &memBuf{}}, nil
 		},
 		Stat: func(fullPath string) (os.FileInfo, error) {
 			return &memFileInfo{}, nil

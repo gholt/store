@@ -174,7 +174,7 @@ func (store *DefaultGroupStore) auditPass(speed bool, notifyChan chan *bgNotific
 		failedAudit := uint32(0)
 		canceledAudit := uint32(0)
 		dataName := names[i][:len(names[i])-3]
-		fpr, err := osOpenReadSeeker(path.Join(store.path, dataName))
+		fpr, err := store.openReadSeeker(path.Join(store.path, dataName))
 		if err != nil {
 			atomic.AddUint32(&failedAudit, 1)
 			if store.isNotExist(err) {
@@ -243,7 +243,7 @@ func (store *DefaultGroupStore) auditPass(speed bool, notifyChan chan *bgNotific
 					wg.Done()
 				}(pendingBatchChans[i], freeBatchChans[i])
 			}
-			fpr, err = osOpenReadSeeker(path.Join(store.pathtoc, names[i]))
+			fpr, err = store.openReadSeeker(path.Join(store.pathtoc, names[i]))
 			if err != nil {
 				atomic.AddUint32(&failedAudit, 1)
 				if !store.isNotExist(err) {

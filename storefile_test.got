@@ -145,8 +145,6 @@ func Test{{.T}}ValuesFileWritingEmpty2(t *testing.T) {
         return &memFile{buf: buf}, nil
     }
     store, _ := newTest{{.T}}Store(cfg)
-    store.freeableMemBlockChans = make([]chan *{{.t}}MemBlock, 1)
-    store.freeableMemBlockChans[0] = make(chan *{{.t}}MemBlock, 1)
     if err := store.Startup(); err != nil {
         t.Fatal(err)
     }
@@ -158,13 +156,13 @@ func Test{{.T}}ValuesFileWritingEmpty2(t *testing.T) {
     if fl == nil {
         t.Fatal("")
     }
-    memBlock := &{{.t}}MemBlock{values: []byte{}}
+    memBlock := <-store.freeMemBlockChan
     memBlock.fileID = 123
     fl.write(memBlock)
-    fl.close()
     if memBlock.fileID != fl.id {
         t.Fatal(memBlock.fileID, fl.id)
     }
+    fl.close()
     bl := len(buf.buf)
     if bl != _{{.TT}}_FILE_HEADER_SIZE+cfg.ChecksumInterval+4 {
         t.Fatal(bl)
@@ -183,19 +181,19 @@ func Test{{.T}}ValuesFileWritingEmpty2(t *testing.T) {
 func Test{{.T}}ValuesFileWriting(t *testing.T) {
     cfg := newTest{{.T}}StoreConfig()
     cfg.ChecksumInterval = 64*1024 - 4
+    buf := &memBuf{}
+    cfg.CreateWriteCloser = func(fullPath string) (io.WriteCloser, error) {
+        return &memFile{buf: buf}, nil
+    }
+    cfg.OpenReadSeeker = func(fullPath string) (io.ReadSeeker, error) {
+        return &memFile{buf: buf}, nil
+    }
     store, _ := newTest{{.T}}Store(cfg)
     if err := store.Startup(); err != nil {
         t.Fatal(err)
     }
     defer store.Shutdown()
-    buf := &memBuf{}
-    createWriteCloser := func(fullPath string) (io.WriteCloser, error) {
-        return &memFile{buf: buf}, nil
-    }
-    openReadSeeker := func(fullPath string) (io.ReadSeeker, error) {
-        return &memFile{buf: buf}, nil
-    }
-    fl, err := create{{.T}}ReadWriteFile(store, createWriteCloser, openReadSeeker)
+    fl, err := create{{.T}}ReadWriteFile(store, store.createWriteCloser, store.openReadSeeker)
     if err != nil {
         t.Fatal("")
     }
@@ -205,7 +203,9 @@ func Test{{.T}}ValuesFileWriting(t *testing.T) {
     values := make([]byte, 1234)
     copy(values, []byte("0123456789abcdef"))
     values[1233] = 1
-    fl.write(&{{.t}}MemBlock{values: values})
+    memBlock := <-store.freeMemBlockChan
+    memBlock.values = values
+    fl.write(memBlock)
     fl.close()
     bl := len(buf.buf)
     if bl != 1234+_{{.TT}}_FILE_HEADER_SIZE+cfg.ChecksumInterval+4 {
@@ -228,19 +228,19 @@ func Test{{.T}}ValuesFileWriting(t *testing.T) {
 func Test{{.T}}ValuesFileWritingMore(t *testing.T) {
     cfg := newTest{{.T}}StoreConfig()
     cfg.ChecksumInterval = 64*1024 - 4
+    buf := &memBuf{}
+    cfg.CreateWriteCloser = func(fullPath string) (io.WriteCloser, error) {
+        return &memFile{buf: buf}, nil
+    }
+    cfg.OpenReadSeeker = func(fullPath string) (io.ReadSeeker, error) {
+        return &memFile{buf: buf}, nil
+    }
     store, _ := newTest{{.T}}Store(cfg)
     if err := store.Startup(); err != nil {
         t.Fatal(err)
     }
     defer store.Shutdown()
-    buf := &memBuf{}
-    createWriteCloser := func(fullPath string) (io.WriteCloser, error) {
-        return &memFile{buf: buf}, nil
-    }
-    openReadSeeker := func(fullPath string) (io.ReadSeeker, error) {
-        return &memFile{buf: buf}, nil
-    }
-    fl, err := create{{.T}}ReadWriteFile(store, createWriteCloser, openReadSeeker)
+    fl, err := create{{.T}}ReadWriteFile(store, store.createWriteCloser, store.openReadSeeker)
     if err != nil {
         t.Fatal("")
     }
@@ -250,7 +250,9 @@ func Test{{.T}}ValuesFileWritingMore(t *testing.T) {
     values := make([]byte, 123456)
     copy(values, []byte("0123456789abcdef"))
     values[1233] = 1
-    fl.write(&{{.t}}MemBlock{values: values})
+    memBlock := <-store.freeMemBlockChan
+    memBlock.values = values
+    fl.write(memBlock)
     fl.close()
     bl := len(buf.buf)
     dl := _{{.TT}}_FILE_HEADER_SIZE+123456+cfg.ChecksumInterval
@@ -272,21 +274,19 @@ func Test{{.T}}ValuesFileWritingMore(t *testing.T) {
 func Test{{.T}}ValuesFileWritingMultiple(t *testing.T) {
     cfg := newTest{{.T}}StoreConfig()
     cfg.ChecksumInterval = 64*1024 - 4
+    buf := &memBuf{}
+    cfg.CreateWriteCloser = func(fullPath string) (io.WriteCloser, error) {
+        return &memFile{buf: buf}, nil
+    }
+    cfg.OpenReadSeeker = func(fullPath string) (io.ReadSeeker, error) {
+        return &memFile{buf: buf}, nil
+    }
     store, _ := newTest{{.T}}Store(cfg)
     if err := store.Startup(); err != nil {
         t.Fatal(err)
     }
     defer store.Shutdown()
-    store.freeableMemBlockChans = make([]chan *{{.t}}MemBlock, 1)
-    store.freeableMemBlockChans[0] = make(chan *{{.t}}MemBlock, 2)
-    buf := &memBuf{}
-    createWriteCloser := func(fullPath string) (io.WriteCloser, error) {
-        return &memFile{buf: buf}, nil
-    }
-    openReadSeeker := func(fullPath string) (io.ReadSeeker, error) {
-        return &memFile{buf: buf}, nil
-    }
-    fl, err := create{{.T}}ReadWriteFile(store, createWriteCloser, openReadSeeker)
+    fl, err := create{{.T}}ReadWriteFile(store, store.createWriteCloser, store.openReadSeeker)
     if err != nil {
         t.Fatal("")
     }
@@ -295,19 +295,21 @@ func Test{{.T}}ValuesFileWritingMultiple(t *testing.T) {
     }
     values1 := make([]byte, 12345)
     copy(values1, []byte("0123456789abcdef"))
-    memBlock1 := &{{.t}}MemBlock{values: values1}
+    memBlock1 := <-store.freeMemBlockChan
+    memBlock1.values = values1
     fl.write(memBlock1)
-    values2 := make([]byte, 54321)
-    copy(values2, []byte("fedcba9876543210"))
-    memBlock2 := &{{.t}}MemBlock{values: values2}
-    fl.write(memBlock2)
-    fl.close()
     if memBlock1.fileID != fl.id {
         t.Fatal(memBlock1.fileID, fl.id)
     }
+    values2 := make([]byte, 54321)
+    copy(values2, []byte("fedcba9876543210"))
+    memBlock2 := <-store.freeMemBlockChan
+    memBlock2.values = values2
+    fl.write(memBlock2)
     if memBlock2.fileID != fl.id {
         t.Fatal(memBlock2.fileID, fl.id)
     }
+    fl.close()
     bl := len(buf.buf)
     dl := _{{.TT}}_FILE_HEADER_SIZE+12345+54321+cfg.ChecksumInterval
     el := dl+dl/cfg.ChecksumInterval*4

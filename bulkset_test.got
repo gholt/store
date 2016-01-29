@@ -2,7 +2,7 @@ package store
 
 import (
     "bytes"
-    "encoding/binary"
+    //"encoding/binary"
     "io"
     "testing"
     "time"
@@ -11,9 +11,13 @@ import (
 )
 
 func Test{{.T}}BulkSetReadObviouslyTooShort(t *testing.T) {
-    cfg := lowMem{{.T}}StoreConfig()
+    cfg := newTest{{.T}}StoreConfig()
     cfg.MsgRing = &msgRingPlaceholder{}
-    store, _ := New{{.T}}Store(cfg)
+    store, _ := newTest{{.T}}Store(cfg)
+    if err := store.Startup(); err != nil {
+        t.Fatal(err)
+    }
+    defer store.Shutdown()
     store.DisableInBulkSet()
     n, err := store.newInBulkSetMsg(bytes.NewBuffer(make([]byte, 1)), 1)
     if err != nil {
@@ -40,9 +44,13 @@ func Test{{.T}}BulkSetReadObviouslyTooShort(t *testing.T) {
 }
 
 func Test{{.T}}BulkSetRead(t *testing.T) {
-    cfg := lowMem{{.T}}StoreConfig()
+    cfg := newTest{{.T}}StoreConfig()
     cfg.MsgRing = &msgRingPlaceholder{}
-    store, _ := New{{.T}}Store(cfg)
+    store, _ := newTest{{.T}}Store(cfg)
+    if err := store.Startup(); err != nil {
+        t.Fatal(err)
+    }
+    defer store.Shutdown()
     store.DisableInBulkSet()
     n, err := store.newInBulkSetMsg(bytes.NewBuffer(make([]byte, 100)), 100)
     if err != nil {
@@ -81,10 +89,14 @@ func Test{{.T}}BulkSetRead(t *testing.T) {
 }
 
 func Test{{.T}}BulkSetReadLowSendCap(t *testing.T) {
-    cfg := lowMem{{.T}}StoreConfig()
+    cfg := newTest{{.T}}StoreConfig()
     cfg.MsgRing = &msgRingPlaceholder{}
     cfg.BulkSetMsgCap = _{{.TT}}_BULK_SET_MSG_HEADER_LENGTH + 1
-    store, _ := New{{.T}}Store(cfg)
+    store, _ := newTest{{.T}}Store(cfg)
+    if err := store.Startup(); err != nil {
+        t.Fatal(err)
+    }
+    defer store.Shutdown()
     store.DisableInBulkSet()
     for len(store.bulkSetState.inMsgChan) > 0 {
         time.Sleep(time.Millisecond)
@@ -108,12 +120,14 @@ func Test{{.T}}BulkSetMsgWithoutAck(t *testing.T) {
     r := b.Ring()
     r.SetLocalNode(n.ID())
     m := &msgRingPlaceholder{ring: r}
-    cfg := lowMem{{.T}}StoreConfig()
+    cfg := newTest{{.T}}StoreConfig()
     cfg.MsgRing = m
     cfg.InBulkSetWorkers = 1
     cfg.InBulkSetMsgs = 1
-    store, _ := New{{.T}}Store(cfg)
-    store.Startup()
+    store, _ := newTest{{.T}}Store(cfg)
+    if err := store.Startup(); err != nil {
+        t.Fatal(err)
+    }
     defer store.Shutdown()
     bsm := <-store.bulkSetState.inFreeMsgChan
     bsm.body = bsm.body[:0]
@@ -142,6 +156,7 @@ func Test{{.T}}BulkSetMsgWithoutAck(t *testing.T) {
     }
 }
 
+/*
 func Test{{.T}}BulkSetMsgWithAck(t *testing.T) {
     b := ring.NewBuilder(64)
     n, err := b.AddNode(true, 1, nil, nil, "", nil)
@@ -151,12 +166,14 @@ func Test{{.T}}BulkSetMsgWithAck(t *testing.T) {
     r := b.Ring()
     r.SetLocalNode(n.ID())
     m := &msgRingPlaceholder{ring: r}
-    cfg := lowMem{{.T}}StoreConfig()
+    cfg := newTest{{.T}}StoreConfig()
     cfg.MsgRing = m
     cfg.InBulkSetWorkers = 1
     cfg.InBulkSetMsgs = 1
-    store, _ := New{{.T}}Store(cfg)
-    store.Startup()
+    store, _ := newTest{{.T}}Store(cfg)
+    if err := store.Startup(); err != nil {
+        t.Fatal(err)
+    }
     defer store.Shutdown()
     bsm := <-store.bulkSetState.inFreeMsgChan
     binary.BigEndian.PutUint64(bsm.header, 123)
@@ -194,12 +211,14 @@ func Test{{.T}}BulkSetMsgWithAck(t *testing.T) {
 
 func Test{{.T}}BulkSetMsgWithoutRing(t *testing.T) {
     m := &msgRingPlaceholder{}
-    cfg := lowMem{{.T}}StoreConfig()
+    cfg := newTest{{.T}}StoreConfig()
     cfg.MsgRing = m
     cfg.InBulkSetWorkers = 1
     cfg.InBulkSetMsgs = 1
-    store, _ := New{{.T}}Store(cfg)
-    store.Startup()
+    store, _ := newTest{{.T}}Store(cfg)
+    if err := store.Startup(); err != nil {
+        t.Fatal(err)
+    }
     defer store.Shutdown()
     bsm := <-store.bulkSetState.inFreeMsgChan
     binary.BigEndian.PutUint64(bsm.header, 123)
@@ -230,9 +249,13 @@ func Test{{.T}}BulkSetMsgWithoutRing(t *testing.T) {
 }
 
 func Test{{.T}}BulkSetMsgOut(t *testing.T) {
-    cfg := lowMem{{.T}}StoreConfig()
+    cfg := newTest{{.T}}StoreConfig()
     cfg.MsgRing = &msgRingPlaceholder{}
-    store, _ := New{{.T}}Store(cfg)
+    store, _ := newTest{{.T}}Store(cfg)
+    if err := store.Startup(); err != nil {
+        t.Fatal(err)
+    }
+    defer store.Shutdown()
     bsm := store.newOutBulkSetMsg()
     if bsm.MsgType() != _{{.TT}}_BULK_SET_MSG_TYPE {
         t.Fatal(bsm.MsgType())
@@ -303,9 +326,13 @@ func Test{{.T}}BulkSetMsgOutDefaultsToFromLocalNode(t *testing.T) {
     }
     r := b.Ring()
     r.SetLocalNode(n.ID())
-    cfg := lowMem{{.T}}StoreConfig()
+    cfg := newTest{{.T}}StoreConfig()
     cfg.MsgRing = &msgRingPlaceholder{ring: r}
-    store, _ := New{{.T}}Store(cfg)
+    store, _ := newTest{{.T}}Store(cfg)
+    if err := store.Startup(); err != nil {
+        t.Fatal(err)
+    }
+    defer store.Shutdown()
     bsm := store.newOutBulkSetMsg()
     if binary.BigEndian.Uint64(bsm.header) != n.ID() {
         t.Fatal(bsm)
@@ -313,9 +340,13 @@ func Test{{.T}}BulkSetMsgOutDefaultsToFromLocalNode(t *testing.T) {
 }
 
 func Test{{.T}}BulkSetMsgOutWriteError(t *testing.T) {
-    cfg := lowMem{{.T}}StoreConfig()
+    cfg := newTest{{.T}}StoreConfig()
     cfg.MsgRing = &msgRingPlaceholder{}
-    store, _ := New{{.T}}Store(cfg)
+    store, _ := newTest{{.T}}Store(cfg)
+    if err := store.Startup(); err != nil {
+        t.Fatal(err)
+    }
+    defer store.Shutdown()
     bsm := store.newOutBulkSetMsg()
     _, err := bsm.WriteContent(&testErrorWriter{})
     if err == nil {
@@ -325,10 +356,14 @@ func Test{{.T}}BulkSetMsgOutWriteError(t *testing.T) {
 }
 
 func Test{{.T}}BulkSetMsgOutHitCap(t *testing.T) {
-    cfg := lowMem{{.T}}StoreConfig()
+    cfg := newTest{{.T}}StoreConfig()
     cfg.MsgRing = &msgRingPlaceholder{}
     cfg.BulkSetMsgCap = _{{.TT}}_BULK_SET_MSG_HEADER_LENGTH + _{{.TT}}_BULK_SET_MSG_ENTRY_HEADER_LENGTH + 3
-    store, _ := New{{.T}}Store(cfg)
+    store, _ := newTest{{.T}}Store(cfg)
+    if err := store.Startup(); err != nil {
+        t.Fatal(err)
+    }
+    defer store.Shutdown()
     bsm := store.newOutBulkSetMsg()
     if !bsm.add(1, 2{{if eq .t "group"}}, 3, 4{{end}}, 0x500, []byte("1")) {
         t.Fatal("")
@@ -337,3 +372,4 @@ func Test{{.T}}BulkSetMsgOutHitCap(t *testing.T) {
         t.Fatal("")
     }
 }
+*/

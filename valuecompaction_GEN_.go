@@ -278,7 +278,7 @@ func (store *DefaultValueStore) needsCompaction(nametoc string, candidateBlockID
 			wg.Done()
 		}(pendingBatchChans[i], freeBatchChans[i])
 	}
-	fpr, err := osOpenReadSeeker(path.Join(store.pathtoc, nametoc))
+	fpr, err := store.openReadSeeker(path.Join(store.pathtoc, nametoc))
 	if err != nil {
 		// Critical level since future recoveries, compactions, and audits will
 		// keep hitting this file until a person corrects the file system
@@ -397,7 +397,7 @@ func (store *DefaultValueStore) compactFile(nametoc string, blockID uint32, cont
 			store.logDebug("compactFile: %s (total %d, rewrote %d, stale %d)", nametoc, atomic.LoadUint32(&count), atomic.LoadUint32(&rewrote), atomic.LoadUint32(&stale))
 		}
 	}
-	fpr, err := osOpenReadSeeker(fullpathtoc)
+	fpr, err := store.openReadSeeker(fullpathtoc)
 	if err != nil {
 		store.logError("compactFile: error opening %s: %s", fullpathtoc, err)
 		spindown(false)

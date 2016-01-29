@@ -86,24 +86,24 @@ package store
 //go:generate got memblock_test.got groupmemblock_GEN_test.go TT=GROUP T=Group t=group
 //go:generate got storefile.got valuestorefile_GEN_.go TT=VALUE T=Value t=value
 //go:generate got storefile.got groupstorefile_GEN_.go TT=GROUP T=Group t=group
-// GLH //go:generate got storefile_test.got valuestorefile_GEN_test.go TT=VALUE T=Value t=value
-// GLH //go:generate got storefile_test.got groupstorefile_GEN_test.go TT=GROUP T=Group t=group
+//go:generate got storefile_test.got valuestorefile_GEN_test.go TT=VALUE T=Value t=value
+//go:generate got storefile_test.got groupstorefile_GEN_test.go TT=GROUP T=Group t=group
 //go:generate got bulkset.got valuebulkset_GEN_.go TT=VALUE T=Value t=value
 //go:generate got bulkset.got groupbulkset_GEN_.go TT=GROUP T=Group t=group
-// GLH //go:generate got bulkset_test.got valuebulkset_GEN_test.go TT=VALUE T=Value t=value
-// GLH //go:generate got bulkset_test.got groupbulkset_GEN_test.go TT=GROUP T=Group t=group
+//go:generate got bulkset_test.got valuebulkset_GEN_test.go TT=VALUE T=Value t=value
+//go:generate got bulkset_test.got groupbulkset_GEN_test.go TT=GROUP T=Group t=group
 //go:generate got bulksetack.got valuebulksetack_GEN_.go TT=VALUE T=Value t=value
 //go:generate got bulksetack.got groupbulksetack_GEN_.go TT=GROUP T=Group t=group
-// GLH //go:generate got bulksetack_test.got valuebulksetack_GEN_test.go TT=VALUE T=Value t=value
-// GLH //go:generate got bulksetack_test.got groupbulksetack_GEN_test.go TT=GROUP T=Group t=group
+//go:generate got bulksetack_test.got valuebulksetack_GEN_test.go TT=VALUE T=Value t=value
+//go:generate got bulksetack_test.got groupbulksetack_GEN_test.go TT=GROUP T=Group t=group
 //go:generate got pullreplication.got valuepullreplication_GEN_.go TT=VALUE T=Value t=value
 //go:generate got pullreplication.got grouppullreplication_GEN_.go TT=GROUP T=Group t=group
-// GLH //go:generate got pullreplication_test.got valuepullreplication_GEN_test.go TT=VALUE T=Value t=value
-// GLH //go:generate got pullreplication_test.got grouppullreplication_GEN_test.go TT=GROUP T=Group t=group
+//go:generate got pullreplication_test.got valuepullreplication_GEN_test.go TT=VALUE T=Value t=value
+//go:generate got pullreplication_test.got grouppullreplication_GEN_test.go TT=GROUP T=Group t=group
 //go:generate got ktbloomfilter.got valuektbloomfilter_GEN_.go TT=VALUE T=Value t=value
 //go:generate got ktbloomfilter.got groupktbloomfilter_GEN_.go TT=GROUP T=Group t=group
-// GLH //go:generate got ktbloomfilter_test.got valuektbloomfilter_GEN_test.go TT=VALUE T=Value t=value
-// GLH //go:generate got ktbloomfilter_test.got groupktbloomfilter_GEN_test.go TT=GROUP T=Group t=group
+//go:generate got ktbloomfilter_test.got valuektbloomfilter_GEN_test.go TT=VALUE T=Value t=value
+//go:generate got ktbloomfilter_test.got groupktbloomfilter_GEN_test.go TT=GROUP T=Group t=group
 //go:generate got pushreplication.got valuepushreplication_GEN_.go TT=VALUE T=Value t=value
 //go:generate got pushreplication.got grouppushreplication_GEN_.go TT=GROUP T=Group t=group
 //go:generate got tombstonediscard.got valuetombstonediscard_GEN_.go TT=VALUE T=Value t=value
