@@ -766,7 +766,7 @@ func (store *DefaultValueStore) fileWriter() {
 		}
 		if fl == nil {
 			var err error
-			fl, err = createValueReadWriteFile(store, store.createWriteCloser, store.openReadSeeker)
+			fl, err = store.createValueReadWriteFile()
 			if err != nil {
 				store.logCritical("fileWriter: must shutdown because no new files can be opened: %s", err)
 				disabledDueToError = err
@@ -1000,7 +1000,7 @@ func (store *DefaultValueStore) recovery() error {
 			store.logError("recovery: error opening %s: %s", names[i], err)
 			continue
 		}
-		fl, err := newValueReadFile(store, namets, store.openReadSeeker)
+		fl, err := store.newValueReadFile(namets)
 		if err != nil {
 			store.logError("recovery: error opening %s: %s", names[i][:len(names[i])-3], err)
 			closeIfCloser(fpr)

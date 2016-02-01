@@ -8,17 +8,18 @@ import (
 )
 
 func TestGroupValuesFileReading(t *testing.T) {
-	store, _ := newTestGroupStore(nil)
+	cfg := newTestGroupStoreConfig()
+	buf := &memBuf{buf: []byte("GROUPSTORE v0                   0123456789abcdef")}
+	binary.BigEndian.PutUint32(buf.buf[28:], 65532)
+	cfg.OpenReadSeeker = func(fullPath string) (io.ReadSeeker, error) {
+		return &memFile{buf: buf}, nil
+	}
+	store, _ := newTestGroupStore(cfg)
 	if err := store.Startup(); err != nil {
 		t.Fatal(err)
 	}
 	defer store.Shutdown()
-	buf := &memBuf{buf: []byte("GROUPSTORE v0                   0123456789abcdef")}
-	binary.BigEndian.PutUint32(buf.buf[28:], 65532)
-	openReadSeeker := func(fullPath string) (io.ReadSeeker, error) {
-		return &memFile{buf: buf}, nil
-	}
-	fl, err := newGroupReadFile(store, 12345, openReadSeeker)
+	fl, err := store.newGroupReadFile(12345)
 	if err != nil {
 		t.Fatal("")
 	}
@@ -99,19 +100,19 @@ func TestGroupValuesFileReading(t *testing.T) {
 func TestGroupValuesFileWritingEmpty(t *testing.T) {
 	cfg := newTestGroupStoreConfig()
 	cfg.ChecksumInterval = 64*1024 - 4
+	buf := &memBuf{}
+	cfg.CreateWriteCloser = func(fullPath string) (io.WriteCloser, error) {
+		return &memFile{buf: buf}, nil
+	}
+	cfg.OpenReadSeeker = func(fullPath string) (io.ReadSeeker, error) {
+		return &memFile{buf: buf}, nil
+	}
 	store, _ := newTestGroupStore(cfg)
 	if err := store.Startup(); err != nil {
 		t.Fatal(err)
 	}
 	defer store.Shutdown()
-	buf := &memBuf{}
-	createWriteCloser := func(fullPath string) (io.WriteCloser, error) {
-		return &memFile{buf: buf}, nil
-	}
-	openReadSeeker := func(fullPath string) (io.ReadSeeker, error) {
-		return &memFile{buf: buf}, nil
-	}
-	fl, err := createGroupReadWriteFile(store, createWriteCloser, openReadSeeker)
+	fl, err := store.createGroupReadWriteFile()
 	if err != nil {
 		t.Fatal("")
 	}
@@ -149,7 +150,7 @@ func TestGroupValuesFileWritingEmpty2(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Shutdown()
-	fl, err := createGroupReadWriteFile(store, store.createWriteCloser, store.openReadSeeker)
+	fl, err := store.createGroupReadWriteFile()
 	if err != nil {
 		t.Fatal("")
 	}
@@ -193,7 +194,7 @@ func TestGroupValuesFileWriting(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Shutdown()
-	fl, err := createGroupReadWriteFile(store, store.createWriteCloser, store.openReadSeeker)
+	fl, err := store.createGroupReadWriteFile()
 	if err != nil {
 		t.Fatal("")
 	}
@@ -240,7 +241,7 @@ func TestGroupValuesFileWritingMore(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Shutdown()
-	fl, err := createGroupReadWriteFile(store, store.createWriteCloser, store.openReadSeeker)
+	fl, err := store.createGroupReadWriteFile()
 	if err != nil {
 		t.Fatal("")
 	}
@@ -286,7 +287,7 @@ func TestGroupValuesFileWritingMultiple(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Shutdown()
-	fl, err := createGroupReadWriteFile(store, store.createWriteCloser, store.openReadSeeker)
+	fl, err := store.createGroupReadWriteFile()
 	if err != nil {
 		t.Fatal("")
 	}

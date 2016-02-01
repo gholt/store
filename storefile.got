@@ -55,7 +55,7 @@ type {{.t}}StoreFileWriteBuf struct {
     memBlocks   []*{{.t}}MemBlock
 }
 
-func new{{.T}}ReadFile(store *Default{{.T}}Store, nameTimestamp int64, openReadSeeker func(fullPath string) (io.ReadSeeker, error)) (*{{.t}}StoreFile, error) {
+func (store *Default{{.T}}Store) new{{.T}}ReadFile(nameTimestamp int64) (*{{.t}}StoreFile, error) {
     fl := &{{.t}}StoreFile{store: store, nameTimestamp: nameTimestamp}
     fl.fullPath = path.Join(store.path, fmt.Sprintf("%019d.{{.t}}", fl.nameTimestamp))
     fl.readerFPs = make([]brimutil.ChecksummedReader, store.fileReaders)
@@ -63,7 +63,7 @@ func new{{.T}}ReadFile(store *Default{{.T}}Store, nameTimestamp int64, openReadS
     fl.readerLens = make([][]byte, len(fl.readerFPs))
     var checksumInterval uint32
     for i := 0; i < len(fl.readerFPs); i++ {
-        fp, err := openReadSeeker(fl.fullPath)
+        fp, err := store.openReadSeeker(fl.fullPath)
         if err != nil {
             return nil, err
         }
@@ -84,10 +84,10 @@ func new{{.T}}ReadFile(store *Default{{.T}}Store, nameTimestamp int64, openReadS
     return fl, nil
 }
 
-func create{{.T}}ReadWriteFile(store *Default{{.T}}Store, createWriteCloser func(fullPath string) (io.WriteCloser, error), openReadSeeker func(fullPath string) (io.ReadSeeker, error)) (*{{.t}}StoreFile, error) {
+func (store *Default{{.T}}Store) create{{.T}}ReadWriteFile() (*{{.t}}StoreFile, error) {
     fl := &{{.t}}StoreFile{store: store, nameTimestamp: time.Now().UnixNano()}
     fl.fullPath = path.Join(store.path, fmt.Sprintf("%019d.{{.t}}", fl.nameTimestamp))
-    fp, err := createWriteCloser(fl.fullPath)
+    fp, err := store.createWriteCloser(fl.fullPath)
     if err != nil {
         return nil, err
     }
@@ -112,7 +112,7 @@ func create{{.T}}ReadWriteFile(store *Default{{.T}}Store, createWriteCloser func
     fl.readerLocks = make([]sync.Mutex, len(fl.readerFPs))
     fl.readerLens = make([][]byte, len(fl.readerFPs))
     for i := 0; i < len(fl.readerFPs); i++ {
-        fp, err := openReadSeeker(fl.fullPath)
+        fp, err := store.openReadSeeker(fl.fullPath)
         if err != nil {
             fl.writerFP.Close()
             for j := 0; j < i; j++ {

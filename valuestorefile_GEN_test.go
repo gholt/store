@@ -8,17 +8,18 @@ import (
 )
 
 func TestValueValuesFileReading(t *testing.T) {
-	store, _ := newTestValueStore(nil)
+	cfg := newTestValueStoreConfig()
+	buf := &memBuf{buf: []byte("VALUESTORE v0                   0123456789abcdef")}
+	binary.BigEndian.PutUint32(buf.buf[28:], 65532)
+	cfg.OpenReadSeeker = func(fullPath string) (io.ReadSeeker, error) {
+		return &memFile{buf: buf}, nil
+	}
+	store, _ := newTestValueStore(cfg)
 	if err := store.Startup(); err != nil {
 		t.Fatal(err)
 	}
 	defer store.Shutdown()
-	buf := &memBuf{buf: []byte("VALUESTORE v0                   0123456789abcdef")}
-	binary.BigEndian.PutUint32(buf.buf[28:], 65532)
-	openReadSeeker := func(fullPath string) (io.ReadSeeker, error) {
-		return &memFile{buf: buf}, nil
-	}
-	fl, err := newValueReadFile(store, 12345, openReadSeeker)
+	fl, err := store.newValueReadFile(12345)
 	if err != nil {
 		t.Fatal("")
 	}
@@ -99,19 +100,19 @@ func TestValueValuesFileReading(t *testing.T) {
 func TestValueValuesFileWritingEmpty(t *testing.T) {
 	cfg := newTestValueStoreConfig()
 	cfg.ChecksumInterval = 64*1024 - 4
+	buf := &memBuf{}
+	cfg.CreateWriteCloser = func(fullPath string) (io.WriteCloser, error) {
+		return &memFile{buf: buf}, nil
+	}
+	cfg.OpenReadSeeker = func(fullPath string) (io.ReadSeeker, error) {
+		return &memFile{buf: buf}, nil
+	}
 	store, _ := newTestValueStore(cfg)
 	if err := store.Startup(); err != nil {
 		t.Fatal(err)
 	}
 	defer store.Shutdown()
-	buf := &memBuf{}
-	createWriteCloser := func(fullPath string) (io.WriteCloser, error) {
-		return &memFile{buf: buf}, nil
-	}
-	openReadSeeker := func(fullPath string) (io.ReadSeeker, error) {
-		return &memFile{buf: buf}, nil
-	}
-	fl, err := createValueReadWriteFile(store, createWriteCloser, openReadSeeker)
+	fl, err := store.createValueReadWriteFile()
 	if err != nil {
 		t.Fatal("")
 	}
@@ -149,7 +150,7 @@ func TestValueValuesFileWritingEmpty2(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Shutdown()
-	fl, err := createValueReadWriteFile(store, store.createWriteCloser, store.openReadSeeker)
+	fl, err := store.createValueReadWriteFile()
 	if err != nil {
 		t.Fatal("")
 	}
@@ -193,7 +194,7 @@ func TestValueValuesFileWriting(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Shutdown()
-	fl, err := createValueReadWriteFile(store, store.createWriteCloser, store.openReadSeeker)
+	fl, err := store.createValueReadWriteFile()
 	if err != nil {
 		t.Fatal("")
 	}
@@ -240,7 +241,7 @@ func TestValueValuesFileWritingMore(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Shutdown()
-	fl, err := createValueReadWriteFile(store, store.createWriteCloser, store.openReadSeeker)
+	fl, err := store.createValueReadWriteFile()
 	if err != nil {
 		t.Fatal("")
 	}
@@ -286,7 +287,7 @@ func TestValueValuesFileWritingMultiple(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Shutdown()
-	fl, err := createValueReadWriteFile(store, store.createWriteCloser, store.openReadSeeker)
+	fl, err := store.createValueReadWriteFile()
 	if err != nil {
 		t.Fatal("")
 	}

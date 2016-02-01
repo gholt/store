@@ -52,7 +52,7 @@ type groupStoreFileWriteBuf struct {
 	memBlocks []*groupMemBlock
 }
 
-func newGroupReadFile(store *DefaultGroupStore, nameTimestamp int64, openReadSeeker func(fullPath string) (io.ReadSeeker, error)) (*groupStoreFile, error) {
+func (store *DefaultGroupStore) newGroupReadFile(nameTimestamp int64) (*groupStoreFile, error) {
 	fl := &groupStoreFile{store: store, nameTimestamp: nameTimestamp}
 	fl.fullPath = path.Join(store.path, fmt.Sprintf("%019d.group", fl.nameTimestamp))
 	fl.readerFPs = make([]brimutil.ChecksummedReader, store.fileReaders)
@@ -60,7 +60,7 @@ func newGroupReadFile(store *DefaultGroupStore, nameTimestamp int64, openReadSee
 	fl.readerLens = make([][]byte, len(fl.readerFPs))
 	var checksumInterval uint32
 	for i := 0; i < len(fl.readerFPs); i++ {
-		fp, err := openReadSeeker(fl.fullPath)
+		fp, err := store.openReadSeeker(fl.fullPath)
 		if err != nil {
 			return nil, err
 		}
@@ -81,10 +81,10 @@ func newGroupReadFile(store *DefaultGroupStore, nameTimestamp int64, openReadSee
 	return fl, nil
 }
 
-func createGroupReadWriteFile(store *DefaultGroupStore, createWriteCloser func(fullPath string) (io.WriteCloser, error), openReadSeeker func(fullPath string) (io.ReadSeeker, error)) (*groupStoreFile, error) {
+func (store *DefaultGroupStore) createGroupReadWriteFile() (*groupStoreFile, error) {
 	fl := &groupStoreFile{store: store, nameTimestamp: time.Now().UnixNano()}
 	fl.fullPath = path.Join(store.path, fmt.Sprintf("%019d.group", fl.nameTimestamp))
-	fp, err := createWriteCloser(fl.fullPath)
+	fp, err := store.createWriteCloser(fl.fullPath)
 	if err != nil {
 		return nil, err
 	}
@@ -109,7 +109,7 @@ func createGroupReadWriteFile(store *DefaultGroupStore, createWriteCloser func(f
 	fl.readerLocks = make([]sync.Mutex, len(fl.readerFPs))
 	fl.readerLens = make([][]byte, len(fl.readerFPs))
 	for i := 0; i < len(fl.readerFPs); i++ {
-		fp, err := openReadSeeker(fl.fullPath)
+		fp, err := store.openReadSeeker(fl.fullPath)
 		if err != nil {
 			fl.writerFP.Close()
 			for j := 0; j < i; j++ {

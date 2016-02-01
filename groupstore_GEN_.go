@@ -802,7 +802,7 @@ func (store *DefaultGroupStore) fileWriter() {
 		}
 		if fl == nil {
 			var err error
-			fl, err = createGroupReadWriteFile(store, store.createWriteCloser, store.openReadSeeker)
+			fl, err = store.createGroupReadWriteFile()
 			if err != nil {
 				store.logCritical("fileWriter: must shutdown because no new files can be opened: %s", err)
 				disabledDueToError = err
@@ -1036,7 +1036,7 @@ func (store *DefaultGroupStore) recovery() error {
 			store.logError("recovery: error opening %s: %s", names[i], err)
 			continue
 		}
-		fl, err := newGroupReadFile(store, namets, store.openReadSeeker)
+		fl, err := store.newGroupReadFile(namets)
 		if err != nil {
 			store.logError("recovery: error opening %s: %s", names[i][:len(names[i])-3], err)
 			closeIfCloser(fpr)
