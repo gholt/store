@@ -111,22 +111,22 @@ type ValueStoreStats struct {
 	// the store is shutdown and restarted.
 	SmallFileCompactions int32
 	// Free is the number of bytes free on the device containing the
-	// Config.Path for the DefaultValueStore.
+	// Config.Path for the defaultValueStore.
 	Free uint64
 	// Used is the number of bytes used on the device containing the
-	// Config.Path for the DefaultValueStore.
+	// Config.Path for the defaultValueStore.
 	Used uint64
 	// Size is the size in bytes of the device containing the Config.Path for
-	// the DefaultValueStore.
+	// the defaultValueStore.
 	Size uint64
 	// FreeTOC is the number of bytes free on the device containing the
-	// Config.PathTOC for the DefaultValueStore.
+	// Config.PathTOC for the defaultValueStore.
 	FreeTOC uint64
 	// UsedTOC is the number of bytes used on the device containing the
-	// Config.PathTOC for the DefaultValueStore.
+	// Config.PathTOC for the defaultValueStore.
 	UsedTOC uint64
 	// SizeTOC is the size in bytes of the device containing the Config.PathTOC
-	// for the DefaultValueStore.
+	// for the defaultValueStore.
 	SizeTOC uint64
 
 	debug                      bool
@@ -167,7 +167,7 @@ type ValueStoreStats struct {
 	locmapDebugInfo            fmt.Stringer
 }
 
-func (store *DefaultValueStore) Stats(debug bool) fmt.Stringer {
+func (store *defaultValueStore) Stats(debug bool) fmt.Stringer {
 	store.statsLock.Lock()
 	stats := &ValueStoreStats{
 		Lookups:                      atomic.LoadInt32(&store.lookups),

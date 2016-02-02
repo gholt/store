@@ -28,7 +28,7 @@ const _VALUE_FILE_ENTRY_SIZE = 32
 const _VALUE_FILE_TRAILER_SIZE = 8
 
 type valueStoreFile struct {
-	store                     *DefaultValueStore
+	store                     *defaultValueStore
 	fullPath                  string
 	id                        uint32
 	nameTimestamp             int64
@@ -52,7 +52,7 @@ type valueStoreFileWriteBuf struct {
 	memBlocks []*valueMemBlock
 }
 
-func (store *DefaultValueStore) newValueReadFile(nameTimestamp int64) (*valueStoreFile, error) {
+func (store *defaultValueStore) newValueReadFile(nameTimestamp int64) (*valueStoreFile, error) {
 	fl := &valueStoreFile{store: store, nameTimestamp: nameTimestamp}
 	fl.fullPath = path.Join(store.path, fmt.Sprintf("%019d.value", fl.nameTimestamp))
 	fl.readerFPs = make([]brimutil.ChecksummedReader, store.fileReaders)
@@ -81,7 +81,7 @@ func (store *DefaultValueStore) newValueReadFile(nameTimestamp int64) (*valueSto
 	return fl, nil
 }
 
-func (store *DefaultValueStore) createValueReadWriteFile() (*valueStoreFile, error) {
+func (store *defaultValueStore) createValueReadWriteFile() (*valueStoreFile, error) {
 	fl := &valueStoreFile{store: store, nameTimestamp: time.Now().UnixNano()}
 	fl.fullPath = path.Join(store.path, fmt.Sprintf("%019d.value", fl.nameTimestamp))
 	fp, err := store.createWriteCloser(fl.fullPath)

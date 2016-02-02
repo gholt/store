@@ -21,7 +21,7 @@ type {{.t}}PushReplicationState struct {
     outNotifyChan       chan *bgNotification
 }
 
-func (store *Default{{.T}}Store) pushReplicationConfig(cfg *{{.T}}StoreConfig) {
+func (store *default{{.T}}Store) pushReplicationConfig(cfg *{{.T}}StoreConfig) {
     store.pushReplicationState.outWorkers = cfg.OutPushReplicationWorkers
     store.pushReplicationState.outInterval = cfg.OutPushReplicationInterval
     if store.msgRing != nil {
@@ -37,7 +37,7 @@ func (store *Default{{.T}}Store) pushReplicationConfig(cfg *{{.T}}StoreConfig) {
 // push replication requests, but all the responses will almost certainly not
 // have been received when this function returns. These requests are stateless,
 // and so synchronization at that level is not possible.
-func (store *Default{{.T}}Store) OutPushReplicationPass() {
+func (store *default{{.T}}Store) OutPushReplicationPass() {
     store.pushReplicationState.outNotifyChanLock.Lock()
     if store.pushReplicationState.outNotifyChan == nil {
         store.outPushReplicationPass(make(chan *bgNotification))
@@ -53,7 +53,7 @@ func (store *Default{{.T}}Store) OutPushReplicationPass() {
 }
 
 // EnableOutPushReplication will resume outgoing push replication requests.
-func (store *Default{{.T}}Store) EnableOutPushReplication() {
+func (store *default{{.T}}Store) EnableOutPushReplication() {
     store.pushReplicationState.outNotifyChanLock.Lock()
     if store.pushReplicationState.outNotifyChan == nil {
         store.pushReplicationState.outNotifyChan = make(chan *bgNotification, 1)
@@ -64,7 +64,7 @@ func (store *Default{{.T}}Store) EnableOutPushReplication() {
 
 // DisableOutPushReplication will stop any outgoing push replication requests
 // until EnableOutPushReplication is called.
-func (store *Default{{.T}}Store) DisableOutPushReplication() {
+func (store *default{{.T}}Store) DisableOutPushReplication() {
     store.pushReplicationState.outNotifyChanLock.Lock()
     if store.pushReplicationState.outNotifyChan != nil {
         c := make(chan struct{}, 1)
@@ -78,7 +78,7 @@ func (store *Default{{.T}}Store) DisableOutPushReplication() {
     store.pushReplicationState.outNotifyChanLock.Unlock()
 }
 
-func (store *Default{{.T}}Store) outPushReplicationLauncher(notifyChan chan *bgNotification) {
+func (store *default{{.T}}Store) outPushReplicationLauncher(notifyChan chan *bgNotification) {
     interval := float64(store.pushReplicationState.outInterval) * float64(time.Second)
     store.randMutex.Lock()
     nextRun := time.Now().Add(time.Duration(interval + interval*store.rand.NormFloat64()*0.1))
@@ -121,7 +121,7 @@ func (store *Default{{.T}}Store) outPushReplicationLauncher(notifyChan chan *bgN
     }
 }
 
-func (store *Default{{.T}}Store) outPushReplicationPass(notifyChan chan *bgNotification) *bgNotification {
+func (store *default{{.T}}Store) outPushReplicationPass(notifyChan chan *bgNotification) *bgNotification {
     if store.msgRing == nil {
         return nil
     }

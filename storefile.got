@@ -31,7 +31,7 @@ const _{{.TT}}_FILE_ENTRY_SIZE = 48
 const _{{.TT}}_FILE_TRAILER_SIZE = 8
 
 type {{.t}}StoreFile struct {
-    store                       *Default{{.T}}Store
+    store                       *default{{.T}}Store
     fullPath                    string
     id                          uint32
     nameTimestamp               int64
@@ -55,7 +55,7 @@ type {{.t}}StoreFileWriteBuf struct {
     memBlocks   []*{{.t}}MemBlock
 }
 
-func (store *Default{{.T}}Store) new{{.T}}ReadFile(nameTimestamp int64) (*{{.t}}StoreFile, error) {
+func (store *default{{.T}}Store) new{{.T}}ReadFile(nameTimestamp int64) (*{{.t}}StoreFile, error) {
     fl := &{{.t}}StoreFile{store: store, nameTimestamp: nameTimestamp}
     fl.fullPath = path.Join(store.path, fmt.Sprintf("%019d.{{.t}}", fl.nameTimestamp))
     fl.readerFPs = make([]brimutil.ChecksummedReader, store.fileReaders)
@@ -84,7 +84,7 @@ func (store *Default{{.T}}Store) new{{.T}}ReadFile(nameTimestamp int64) (*{{.t}}
     return fl, nil
 }
 
-func (store *Default{{.T}}Store) create{{.T}}ReadWriteFile() (*{{.t}}StoreFile, error) {
+func (store *default{{.T}}Store) create{{.T}}ReadWriteFile() (*{{.t}}StoreFile, error) {
     fl := &{{.t}}StoreFile{store: store, nameTimestamp: time.Now().UnixNano()}
     fl.fullPath = path.Join(store.path, fmt.Sprintf("%019d.{{.t}}", fl.nameTimestamp))
     fp, err := store.createWriteCloser(fl.fullPath)

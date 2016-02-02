@@ -7,12 +7,12 @@ import (
 	"github.com/gholt/locmap"
 )
 
-func newTestGroupStore(c *GroupStoreConfig) (*DefaultGroupStore, chan error) {
+func newTestGroupStore(c *GroupStoreConfig) (*defaultGroupStore, chan error) {
 	if c == nil {
 		c = newTestGroupStoreConfig()
 	}
 	s, err := NewGroupStore(c)
-	ds := s.(*DefaultGroupStore)
+	ds := s.(*defaultGroupStore)
 	return ds, err
 }
 

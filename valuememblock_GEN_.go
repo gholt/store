@@ -6,7 +6,7 @@ import (
 )
 
 type valueMemBlock struct {
-	store       *DefaultValueStore
+	store       *defaultValueStore
 	id          uint32
 	fileID      uint32
 	fileOffset  uint32

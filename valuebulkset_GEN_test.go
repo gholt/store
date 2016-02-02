@@ -312,7 +312,7 @@ func TestValueBulkSetMsgOut(t *testing.T) {
     bsm.Free()
 }
 
-func TestValueBulkSetMsgOutDefaultsToFromLocalNode(t *testing.T) {
+func TestValueBulkSetMsgOutdefaultsToFromLocalNode(t *testing.T) {
     b := ring.NewBuilder(64)
     n, err := b.AddNode(true, 1, nil, nil, "", nil)
     if err != nil {

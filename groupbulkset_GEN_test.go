@@ -318,7 +318,7 @@ func TestGroupBulkSetMsgOut(t *testing.T) {
     bsm.Free()
 }
 
-func TestGroupBulkSetMsgOutDefaultsToFromLocalNode(t *testing.T) {
+func TestGroupBulkSetMsgOutdefaultsToFromLocalNode(t *testing.T) {
     b := ring.NewBuilder(64)
     n, err := b.AddNode(true, 1, nil, nil, "", nil)
     if err != nil {

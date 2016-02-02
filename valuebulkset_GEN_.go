@@ -28,12 +28,12 @@ type valueBulkSetState struct {
 }
 
 type valueBulkSetMsg struct {
-	store  *DefaultValueStore
+	store  *defaultValueStore
 	header []byte
 	body   []byte
 }
 
-func (store *DefaultValueStore) bulkSetConfig(cfg *ValueStoreConfig) {
+func (store *defaultValueStore) bulkSetConfig(cfg *ValueStoreConfig) {
 	store.bulkSetState.msgCap = cfg.BulkSetMsgCap
 	store.bulkSetState.inWorkers = cfg.InBulkSetWorkers
 	store.bulkSetState.inResponseMsgTimeout = time.Duration(cfg.InBulkSetResponseMsgTimeout) * time.Millisecond
@@ -60,7 +60,7 @@ func (store *DefaultValueStore) bulkSetConfig(cfg *ValueStoreConfig) {
 }
 
 // EnableInBulkSet will resume handling incoming bulk set requests.
-func (store *DefaultValueStore) EnableInBulkSet() {
+func (store *defaultValueStore) EnableInBulkSet() {
 	store.bulkSetState.inNotifyChanLock.Lock()
 	if store.bulkSetState.inNotifyChan == nil {
 		store.bulkSetState.inNotifyChan = make(chan *bgNotification, 1)
@@ -71,7 +71,7 @@ func (store *DefaultValueStore) EnableInBulkSet() {
 
 // DisableInBulkSet will stop handling any incoming bulk set requests (they
 // will be dropped) until EnableInBulkSet is called.
-func (store *DefaultValueStore) DisableInBulkSet() {
+func (store *defaultValueStore) DisableInBulkSet() {
 	store.bulkSetState.inNotifyChanLock.Lock()
 	if store.bulkSetState.inNotifyChan != nil {
 		c := make(chan struct{}, 1)
@@ -85,7 +85,7 @@ func (store *DefaultValueStore) DisableInBulkSet() {
 	store.bulkSetState.inNotifyChanLock.Unlock()
 }
 
-func (store *DefaultValueStore) inBulkSetLauncher(notifyChan chan *bgNotification) {
+func (store *defaultValueStore) inBulkSetLauncher(notifyChan chan *bgNotification) {
 	wg := &sync.WaitGroup{}
 	wg.Add(store.bulkSetState.inWorkers)
 	for i := 0; i < store.bulkSetState.inWorkers; i++ {
@@ -110,7 +110,7 @@ func (store *DefaultValueStore) inBulkSetLauncher(notifyChan chan *bgNotificatio
 
 // newInBulkSetMsg reads bulk-set messages from the MsgRing and puts them on
 // the inMsgChan for the inBulkSet workers to work on.
-func (store *DefaultValueStore) newInBulkSetMsg(r io.Reader, l uint64) (uint64, error) {
+func (store *defaultValueStore) newInBulkSetMsg(r io.Reader, l uint64) (uint64, error) {
 	var bsm *valueBulkSetMsg
 	select {
 	case bsm = <-store.bulkSetState.inFreeMsgChan:
@@ -201,7 +201,7 @@ func (store *DefaultValueStore) newInBulkSetMsg(r io.Reader, l uint64) (uint64, 
 
 // inBulkSet actually processes incoming bulk-set messages; there may be more
 // than one of these workers.
-func (store *DefaultValueStore) inBulkSet(wg *sync.WaitGroup) {
+func (store *defaultValueStore) inBulkSet(wg *sync.WaitGroup) {
 	for {
 		bsm := <-store.bulkSetState.inMsgChan
 		if bsm == nil {
@@ -262,7 +262,7 @@ func (store *DefaultValueStore) inBulkSet(wg *sync.WaitGroup) {
 // is a fixed number of outgoing valueBulkSetMsg instances that can exist at
 // any given time, capping memory usage. Once the limit is reached, this method
 // will block until a valueBulkSetMsg is available to return.
-func (store *DefaultValueStore) newOutBulkSetMsg() *valueBulkSetMsg {
+func (store *defaultValueStore) newOutBulkSetMsg() *valueBulkSetMsg {
 	bsm := <-store.bulkSetState.outFreeMsgChan
 	if store.msgRing != nil {
 		if r := store.msgRing.Ring(); r != nil {

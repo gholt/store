@@ -24,7 +24,7 @@ type groupDiskWatcherState struct {
 	notifyChan             chan *bgNotification
 }
 
-func (store *DefaultGroupStore) diskWatcherConfig(cfg *GroupStoreConfig) {
+func (store *defaultGroupStore) diskWatcherConfig(cfg *GroupStoreConfig) {
 	store.diskWatcherState.interval = 60
 	store.diskWatcherState.freeDisableThreshold = cfg.FreeDisableThreshold
 	store.diskWatcherState.freeReenableThreshold = cfg.FreeReenableThreshold
@@ -32,7 +32,7 @@ func (store *DefaultGroupStore) diskWatcherConfig(cfg *GroupStoreConfig) {
 	store.diskWatcherState.usageReenableThreshold = cfg.UsageReenableThreshold
 }
 
-func (store *DefaultGroupStore) EnableDiskWatcher() {
+func (store *defaultGroupStore) EnableDiskWatcher() {
 	store.diskWatcherState.notifyChanLock.Lock()
 	if store.diskWatcherState.notifyChan == nil {
 		store.diskWatcherState.notifyChan = make(chan *bgNotification, 1)
@@ -41,7 +41,7 @@ func (store *DefaultGroupStore) EnableDiskWatcher() {
 	store.diskWatcherState.notifyChanLock.Unlock()
 }
 
-func (store *DefaultGroupStore) DisableDiskWatcher() {
+func (store *defaultGroupStore) DisableDiskWatcher() {
 	store.diskWatcherState.notifyChanLock.Lock()
 	if store.diskWatcherState.notifyChan != nil {
 		c := make(chan struct{}, 1)
@@ -55,7 +55,7 @@ func (store *DefaultGroupStore) DisableDiskWatcher() {
 	store.diskWatcherState.notifyChanLock.Unlock()
 }
 
-func (store *DefaultGroupStore) diskWatcherLauncher(notifyChan chan *bgNotification) {
+func (store *defaultGroupStore) diskWatcherLauncher(notifyChan chan *bgNotification) {
 	interval := float64(store.diskWatcherState.interval) * float64(time.Second)
 	store.randMutex.Lock()
 	nextRun := time.Now().Add(time.Duration(interval + interval*store.rand.NormFloat64()*0.1))

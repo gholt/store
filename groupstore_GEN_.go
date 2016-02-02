@@ -22,8 +22,8 @@ import (
 	"gopkg.in/gholt/brimutil.v1"
 )
 
-// DefaultGroupStore instances are created with NewGroupStore.
-type DefaultGroupStore struct {
+// defaultGroupStore instances are created with NewGroupStore.
+type defaultGroupStore struct {
 	runningLock sync.Mutex
 	// 0 = not running, 1 = running, 2 = can't run due to previous error
 	running int
@@ -181,7 +181,7 @@ func NewGroupStore(c *GroupStoreConfig) (GroupStore, chan error) {
 		lcmap = locmap.NewGroupLocMap(nil)
 	}
 	lcmap.SetInactiveMask(_TSB_INACTIVE)
-	store := &DefaultGroupStore{
+	store := &defaultGroupStore{
 		logCritical:             cfg.LogCritical,
 		logError:                cfg.LogError,
 		logWarning:              cfg.LogWarning,
@@ -224,11 +224,11 @@ func NewGroupStore(c *GroupStoreConfig) (GroupStore, chan error) {
 	return store, store.restartChan
 }
 
-func (store *DefaultGroupStore) ValueCap() uint32 {
+func (store *defaultGroupStore) ValueCap() uint32 {
 	return store.valueCap
 }
 
-func (store *DefaultGroupStore) Startup() error {
+func (store *defaultGroupStore) Startup() error {
 	store.runningLock.Lock()
 	switch store.running {
 	case 0: // not running
@@ -315,7 +315,7 @@ func (store *DefaultGroupStore) Startup() error {
 	return nil
 }
 
-func (store *DefaultGroupStore) Shutdown() {
+func (store *defaultGroupStore) Shutdown() {
 	store.runningLock.Lock()
 	if store.running != 1 { // running
 		store.runningLock.Unlock()
@@ -352,12 +352,12 @@ func (store *DefaultGroupStore) Shutdown() {
 	store.runningLock.Unlock()
 }
 
-func (store *DefaultGroupStore) disableAll() {
+func (store *defaultGroupStore) disableAll() {
 	store.disableAllBackground()
 	store.DisableWrites()
 }
 
-func (store *DefaultGroupStore) disableAllBackground() {
+func (store *defaultGroupStore) disableAllBackground() {
 	wg := &sync.WaitGroup{}
 	for i, f := range []func(){
 		store.DisableDiskWatcher,
@@ -379,7 +379,7 @@ func (store *DefaultGroupStore) disableAllBackground() {
 	wg.Wait()
 }
 
-func (store *DefaultGroupStore) enableAll() {
+func (store *defaultGroupStore) enableAll() {
 	wg := &sync.WaitGroup{}
 	for _, f := range []func(){
 		store.EnableWrites,
@@ -402,11 +402,11 @@ func (store *DefaultGroupStore) enableAll() {
 	wg.Wait()
 }
 
-func (store *DefaultGroupStore) DisableWrites() {
+func (store *defaultGroupStore) DisableWrites() {
 	store.disableWrites(true)
 }
 
-func (store *DefaultGroupStore) disableWrites(userCall bool) {
+func (store *defaultGroupStore) disableWrites(userCall bool) {
 	store.disableEnableWritesLock.Lock()
 	if userCall {
 		store.userDisabled = true
@@ -417,11 +417,11 @@ func (store *DefaultGroupStore) disableWrites(userCall bool) {
 	store.disableEnableWritesLock.Unlock()
 }
 
-func (store *DefaultGroupStore) EnableWrites() {
+func (store *defaultGroupStore) EnableWrites() {
 	store.enableWrites(true)
 }
 
-func (store *DefaultGroupStore) enableWrites(userCall bool) {
+func (store *defaultGroupStore) enableWrites(userCall bool) {
 	store.disableEnableWritesLock.Lock()
 	if userCall || !store.userDisabled {
 		store.userDisabled = false
@@ -432,14 +432,14 @@ func (store *DefaultGroupStore) enableWrites(userCall bool) {
 	store.disableEnableWritesLock.Unlock()
 }
 
-func (store *DefaultGroupStore) Flush() {
+func (store *defaultGroupStore) Flush() {
 	for _, c := range store.pendingWriteReqChans {
 		c <- flushGroupWriteReq
 	}
 	<-store.flushedChan
 }
 
-func (store *DefaultGroupStore) Lookup(keyA uint64, keyB uint64, nameKeyA uint64, nameKeyB uint64) (int64, uint32, error) {
+func (store *defaultGroupStore) Lookup(keyA uint64, keyB uint64, nameKeyA uint64, nameKeyB uint64) (int64, uint32, error) {
 	atomic.AddInt32(&store.lookups, 1)
 	timestampbits, _, length, err := store.lookup(keyA, keyB, nameKeyA, nameKeyB)
 	if err != nil {
@@ -448,7 +448,7 @@ func (store *DefaultGroupStore) Lookup(keyA uint64, keyB uint64, nameKeyA uint64
 	return int64(timestampbits >> _TSB_UTIL_BITS), length, err
 }
 
-func (store *DefaultGroupStore) lookup(keyA uint64, keyB uint64, nameKeyA uint64, nameKeyB uint64) (uint64, uint32, uint32, error) {
+func (store *defaultGroupStore) lookup(keyA uint64, keyB uint64, nameKeyA uint64, nameKeyB uint64) (uint64, uint32, uint32, error) {
 	timestampbits, id, _, length := store.locmap.Get(keyA, keyB, nameKeyA, nameKeyB)
 	if id == 0 || timestampbits&_TSB_DELETION != 0 {
 		return timestampbits, id, 0, ErrNotFound
@@ -463,7 +463,7 @@ type LookupGroupItem struct {
 	Length         uint32
 }
 
-func (store *DefaultGroupStore) LookupGroup(keyA uint64, keyB uint64) []LookupGroupItem {
+func (store *defaultGroupStore) LookupGroup(keyA uint64, keyB uint64) []LookupGroupItem {
 	atomic.AddInt32(&store.lookupGroups, 1)
 	items := store.locmap.GetGroup(keyA, keyB)
 	if len(items) == 0 {
@@ -480,7 +480,7 @@ func (store *DefaultGroupStore) LookupGroup(keyA uint64, keyB uint64) []LookupGr
 	return rv
 }
 
-func (store *DefaultGroupStore) Read(keyA uint64, keyB uint64, nameKeyA uint64, nameKeyB uint64, value []byte) (int64, []byte, error) {
+func (store *defaultGroupStore) Read(keyA uint64, keyB uint64, nameKeyA uint64, nameKeyB uint64, value []byte) (int64, []byte, error) {
 	atomic.AddInt32(&store.reads, 1)
 	timestampbits, value, err := store.read(keyA, keyB, nameKeyA, nameKeyB, value)
 	if err != nil {
@@ -489,7 +489,7 @@ func (store *DefaultGroupStore) Read(keyA uint64, keyB uint64, nameKeyA uint64, 
 	return int64(timestampbits >> _TSB_UTIL_BITS), value, err
 }
 
-func (store *DefaultGroupStore) read(keyA uint64, keyB uint64, nameKeyA uint64, nameKeyB uint64, value []byte) (uint64, []byte, error) {
+func (store *defaultGroupStore) read(keyA uint64, keyB uint64, nameKeyA uint64, nameKeyB uint64, value []byte) (uint64, []byte, error) {
 	timestampbits, id, offset, length := store.locmap.Get(keyA, keyB, nameKeyA, nameKeyB)
 	if id == 0 || timestampbits&_TSB_DELETION != 0 || timestampbits&_TSB_LOCAL_REMOVAL != 0 {
 		return timestampbits, value, ErrNotFound
@@ -497,7 +497,7 @@ func (store *DefaultGroupStore) read(keyA uint64, keyB uint64, nameKeyA uint64, 
 	return store.locBlock(id).read(keyA, keyB, nameKeyA, nameKeyB, timestampbits, offset, length, value)
 }
 
-func (store *DefaultGroupStore) Write(keyA uint64, keyB uint64, nameKeyA uint64, nameKeyB uint64, timestampmicro int64, value []byte) (int64, error) {
+func (store *defaultGroupStore) Write(keyA uint64, keyB uint64, nameKeyA uint64, nameKeyB uint64, timestampmicro int64, value []byte) (int64, error) {
 	atomic.AddInt32(&store.writes, 1)
 	if timestampmicro < TIMESTAMPMICRO_MIN {
 		atomic.AddInt32(&store.writeErrors, 1)
@@ -516,7 +516,7 @@ func (store *DefaultGroupStore) Write(keyA uint64, keyB uint64, nameKeyA uint64,
 	return int64(timestampbits >> _TSB_UTIL_BITS), err
 }
 
-func (store *DefaultGroupStore) write(keyA uint64, keyB uint64, nameKeyA uint64, nameKeyB uint64, timestampbits uint64, value []byte, internal bool) (uint64, error) {
+func (store *defaultGroupStore) write(keyA uint64, keyB uint64, nameKeyA uint64, nameKeyB uint64, timestampbits uint64, value []byte, internal bool) (uint64, error) {
 	i := int(keyA>>1) % len(store.freeWriteReqChans)
 	writeReq := <-store.freeWriteReqChans[i]
 	writeReq.keyA = keyA
@@ -540,7 +540,7 @@ func (store *DefaultGroupStore) write(keyA uint64, keyB uint64, nameKeyA uint64,
 	return ptimestampbits, err
 }
 
-func (store *DefaultGroupStore) Delete(keyA uint64, keyB uint64, nameKeyA uint64, nameKeyB uint64, timestampmicro int64) (int64, error) {
+func (store *defaultGroupStore) Delete(keyA uint64, keyB uint64, nameKeyA uint64, nameKeyB uint64, timestampmicro int64) (int64, error) {
 	atomic.AddInt32(&store.deletes, 1)
 	if timestampmicro < TIMESTAMPMICRO_MIN {
 		atomic.AddInt32(&store.deleteErrors, 1)
@@ -559,11 +559,11 @@ func (store *DefaultGroupStore) Delete(keyA uint64, keyB uint64, nameKeyA uint64
 	return int64(ptimestampbits >> _TSB_UTIL_BITS), err
 }
 
-func (store *DefaultGroupStore) locBlock(locBlockID uint32) groupLocBlock {
+func (store *defaultGroupStore) locBlock(locBlockID uint32) groupLocBlock {
 	return store.locBlocks[locBlockID]
 }
 
-func (store *DefaultGroupStore) addLocBlock(block groupLocBlock) (uint32, error) {
+func (store *defaultGroupStore) addLocBlock(block groupLocBlock) (uint32, error) {
 	id := atomic.AddUint64(&store.locBlockIDer, 1)
 	// TODO: We should probably issue a restart request if
 	// id >= math.MaxUint32 / 2 since it's almost certainly not the case that
@@ -578,7 +578,7 @@ func (store *DefaultGroupStore) addLocBlock(block groupLocBlock) (uint32, error)
 	return uint32(id), nil
 }
 
-func (store *DefaultGroupStore) locBlockIDFromTimestampnano(tsn int64) uint32 {
+func (store *defaultGroupStore) locBlockIDFromTimestampnano(tsn int64) uint32 {
 	for i := 1; i <= len(store.locBlocks); i++ {
 		if store.locBlocks[i] == nil {
 			return 0
@@ -591,11 +591,11 @@ func (store *DefaultGroupStore) locBlockIDFromTimestampnano(tsn int64) uint32 {
 	return 0
 }
 
-func (store *DefaultGroupStore) closeLocBlock(locBlockID uint32) error {
+func (store *defaultGroupStore) closeLocBlock(locBlockID uint32) error {
 	return store.locBlocks[locBlockID].close()
 }
 
-func (store *DefaultGroupStore) memClearer(freeableMemBlockChan chan *groupMemBlock) {
+func (store *defaultGroupStore) memClearer(freeableMemBlockChan chan *groupMemBlock) {
 	var tb *groupTOCBlock
 	var tbTS int64
 	var tbOffset int
@@ -673,7 +673,7 @@ func (store *DefaultGroupStore) memClearer(freeableMemBlockChan chan *groupMemBl
 	}
 }
 
-func (store *DefaultGroupStore) memWriter(pendingWriteReqChan chan *groupWriteReq) {
+func (store *defaultGroupStore) memWriter(pendingWriteReqChan chan *groupWriteReq) {
 	var enabled bool
 	var memBlock *groupMemBlock
 	var memBlockTOCOffset int
@@ -755,7 +755,7 @@ func (store *DefaultGroupStore) memWriter(pendingWriteReqChan chan *groupWriteRe
 	}
 }
 
-func (store *DefaultGroupStore) fileWriter() {
+func (store *defaultGroupStore) fileWriter() {
 	var fl *groupStoreFile
 	memWritersFlushLeft := len(store.pendingWriteReqChans)
 	memWritersShutdownLeft := len(store.pendingWriteReqChans)
@@ -841,7 +841,7 @@ func (store *DefaultGroupStore) fileWriter() {
 	}
 }
 
-func (store *DefaultGroupStore) tocWriter() {
+func (store *defaultGroupStore) tocWriter() {
 	memClearersFlushLeft := len(store.freeableMemBlockChans)
 	memClearersShutdownLeft := len(store.freeableMemBlockChans)
 	// writerA is the current toc file while writerB is the previously active
@@ -983,7 +983,7 @@ OuterLoop:
 	}
 }
 
-func (store *DefaultGroupStore) recovery() error {
+func (store *defaultGroupStore) recovery() error {
 	start := time.Now()
 	causedChangeCount := int64(0)
 	workers := uint64(store.workers)

@@ -6,7 +6,7 @@ import (
 )
 
 type groupMemBlock struct {
-	store       *DefaultGroupStore
+	store       *defaultGroupStore
 	id          uint32
 	fileID      uint32
 	fileOffset  uint32

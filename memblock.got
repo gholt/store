@@ -6,7 +6,7 @@ import (
 )
 
 type {{.t}}MemBlock struct {
-    store       *Default{{.T}}Store
+    store       *default{{.T}}Store
     id          uint32
     fileID      uint32
     fileOffset  uint32

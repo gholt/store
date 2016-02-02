@@ -13,12 +13,12 @@ type groupFlusherState struct {
 	notifyChan       chan *bgNotification
 }
 
-func (store *DefaultGroupStore) flusherConfig(cfg *GroupStoreConfig) {
+func (store *defaultGroupStore) flusherConfig(cfg *GroupStoreConfig) {
 	store.flusherState.interval = 60
 	store.flusherState.flusherThreshold = cfg.FlusherThreshold
 }
 
-func (store *DefaultGroupStore) EnableFlusher() {
+func (store *defaultGroupStore) EnableFlusher() {
 	store.flusherState.notifyChanLock.Lock()
 	if store.flusherState.notifyChan == nil {
 		store.flusherState.notifyChan = make(chan *bgNotification, 1)
@@ -27,7 +27,7 @@ func (store *DefaultGroupStore) EnableFlusher() {
 	store.flusherState.notifyChanLock.Unlock()
 }
 
-func (store *DefaultGroupStore) DisableFlusher() {
+func (store *defaultGroupStore) DisableFlusher() {
 	store.flusherState.notifyChanLock.Lock()
 	if store.flusherState.notifyChan != nil {
 		c := make(chan struct{}, 1)
@@ -41,7 +41,7 @@ func (store *DefaultGroupStore) DisableFlusher() {
 	store.flusherState.notifyChanLock.Unlock()
 }
 
-func (store *DefaultGroupStore) flusherLauncher(notifyChan chan *bgNotification) {
+func (store *defaultGroupStore) flusherLauncher(notifyChan chan *bgNotification) {
 	interval := float64(store.flusherState.interval) * float64(time.Second)
 	store.randMutex.Lock()
 	nextRun := time.Now().Add(time.Duration(interval + interval*store.rand.NormFloat64()*0.1))

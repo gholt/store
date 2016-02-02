@@ -28,7 +28,7 @@ const _GROUP_FILE_ENTRY_SIZE = 48
 const _GROUP_FILE_TRAILER_SIZE = 8
 
 type groupStoreFile struct {
-	store                     *DefaultGroupStore
+	store                     *defaultGroupStore
 	fullPath                  string
 	id                        uint32
 	nameTimestamp             int64
@@ -52,7 +52,7 @@ type groupStoreFileWriteBuf struct {
 	memBlocks []*groupMemBlock
 }
 
-func (store *DefaultGroupStore) newGroupReadFile(nameTimestamp int64) (*groupStoreFile, error) {
+func (store *defaultGroupStore) newGroupReadFile(nameTimestamp int64) (*groupStoreFile, error) {
 	fl := &groupStoreFile{store: store, nameTimestamp: nameTimestamp}
 	fl.fullPath = path.Join(store.path, fmt.Sprintf("%019d.group", fl.nameTimestamp))
 	fl.readerFPs = make([]brimutil.ChecksummedReader, store.fileReaders)
@@ -81,7 +81,7 @@ func (store *DefaultGroupStore) newGroupReadFile(nameTimestamp int64) (*groupSto
 	return fl, nil
 }
 
-func (store *DefaultGroupStore) createGroupReadWriteFile() (*groupStoreFile, error) {
+func (store *defaultGroupStore) createGroupReadWriteFile() (*groupStoreFile, error) {
 	fl := &groupStoreFile{store: store, nameTimestamp: time.Now().UnixNano()}
 	fl.fullPath = path.Join(store.path, fmt.Sprintf("%019d.group", fl.nameTimestamp))
 	fp, err := store.createWriteCloser(fl.fullPath)

@@ -19,12 +19,12 @@ type {{.t}}AuditState struct {
     notifyChan      chan *bgNotification
 }
 
-func (store *Default{{.T}}Store) auditConfig(cfg *{{.T}}StoreConfig) {
+func (store *default{{.T}}Store) auditConfig(cfg *{{.T}}StoreConfig) {
     store.auditState.interval = cfg.AuditInterval
     store.auditState.ageThreshold = int64(cfg.AuditAgeThreshold) * int64(time.Second)
 }
 
-func (store *Default{{.T}}Store) auditStartup() {
+func (store *default{{.T}}Store) auditStartup() {
     store.auditState.notifyChanLock.Lock()
     if store.auditState.notifyChan == nil {
         store.auditState.notifyChan = make(chan *bgNotification, 1)
@@ -33,7 +33,7 @@ func (store *Default{{.T}}Store) auditStartup() {
     store.auditState.notifyChanLock.Unlock()
 }
 
-func (store *Default{{.T}}Store) auditShutdown() {
+func (store *default{{.T}}Store) auditShutdown() {
     store.auditState.notifyChanLock.Lock()
     if store.auditState.notifyChan != nil {
         c := make(chan struct{}, 1)
@@ -52,7 +52,7 @@ func (store *Default{{.T}}Store) auditShutdown() {
 // standard slow-audit pass. If a pass is currently executing, it will be
 // stopped and restarted so that a call to this function ensures one complete
 // pass occurs.
-func (store *Default{{.T}}Store) AuditPass() {
+func (store *default{{.T}}Store) AuditPass() {
     store.auditState.notifyChanLock.Lock()
     if store.auditState.notifyChan == nil {
         store.auditPass(true, make(chan *bgNotification))
@@ -67,7 +67,7 @@ func (store *Default{{.T}}Store) AuditPass() {
     store.auditState.notifyChanLock.Unlock()
 }
 
-func (store *Default{{.T}}Store) auditLauncher(notifyChan chan *bgNotification) {
+func (store *default{{.T}}Store) auditLauncher(notifyChan chan *bgNotification) {
     interval := float64(store.auditState.interval) * float64(time.Second)
     store.randMutex.Lock()
     nextRun := time.Now().Add(time.Duration(interval + interval*store.rand.NormFloat64()*0.1))
@@ -115,7 +115,7 @@ func (store *Default{{.T}}Store) auditLauncher(notifyChan chan *bgNotification) 
 // NOTE: For now, there is no difference between speed=true and speed=false;
 // eventually the background audits will try to slow themselves down to finish
 // in approximately the store.auditState.interval.
-func (store *Default{{.T}}Store) auditPass(speed bool, notifyChan chan *bgNotification) *bgNotification {
+func (store *default{{.T}}Store) auditPass(speed bool, notifyChan chan *bgNotification) *bgNotification {
     if store.logDebug != nil {
         begin := time.Now()
         defer func() {

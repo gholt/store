@@ -111,22 +111,22 @@ type GroupStoreStats struct {
 	// the store is shutdown and restarted.
 	SmallFileCompactions int32
 	// Free is the number of bytes free on the device containing the
-	// Config.Path for the DefaultGroupStore.
+	// Config.Path for the defaultGroupStore.
 	Free uint64
 	// Used is the number of bytes used on the device containing the
-	// Config.Path for the DefaultGroupStore.
+	// Config.Path for the defaultGroupStore.
 	Used uint64
 	// Size is the size in bytes of the device containing the Config.Path for
-	// the DefaultGroupStore.
+	// the defaultGroupStore.
 	Size uint64
 	// FreeTOC is the number of bytes free on the device containing the
-	// Config.PathTOC for the DefaultGroupStore.
+	// Config.PathTOC for the defaultGroupStore.
 	FreeTOC uint64
 	// UsedTOC is the number of bytes used on the device containing the
-	// Config.PathTOC for the DefaultGroupStore.
+	// Config.PathTOC for the defaultGroupStore.
 	UsedTOC uint64
 	// SizeTOC is the size in bytes of the device containing the Config.PathTOC
-	// for the DefaultGroupStore.
+	// for the defaultGroupStore.
 	SizeTOC uint64
 
 	debug                      bool
@@ -167,7 +167,7 @@ type GroupStoreStats struct {
 	locmapDebugInfo            fmt.Stringer
 }
 
-func (store *DefaultGroupStore) Stats(debug bool) fmt.Stringer {
+func (store *defaultGroupStore) Stats(debug bool) fmt.Stringer {
 	store.statsLock.Lock()
 	stats := &GroupStoreStats{
 		Lookups:                      atomic.LoadInt32(&store.lookups),

@@ -111,22 +111,22 @@ type {{.T}}StoreStats struct {
     // the store is shutdown and restarted.
     SmallFileCompactions int32
     // Free is the number of bytes free on the device containing the
-    // Config.Path for the Default{{.T}}Store.
+    // Config.Path for the default{{.T}}Store.
     Free uint64
     // Used is the number of bytes used on the device containing the
-    // Config.Path for the Default{{.T}}Store.
+    // Config.Path for the default{{.T}}Store.
     Used uint64
     // Size is the size in bytes of the device containing the Config.Path for
-    // the Default{{.T}}Store.
+    // the default{{.T}}Store.
     Size uint64
     // FreeTOC is the number of bytes free on the device containing the
-    // Config.PathTOC for the Default{{.T}}Store.
+    // Config.PathTOC for the default{{.T}}Store.
     FreeTOC uint64
     // UsedTOC is the number of bytes used on the device containing the
-    // Config.PathTOC for the Default{{.T}}Store.
+    // Config.PathTOC for the default{{.T}}Store.
     UsedTOC uint64
     // SizeTOC is the size in bytes of the device containing the Config.PathTOC
-    // for the Default{{.T}}Store.
+    // for the default{{.T}}Store.
     SizeTOC uint64
 
     debug                       bool
@@ -167,7 +167,7 @@ type {{.T}}StoreStats struct {
     locmapDebugInfo             fmt.Stringer
 }
 
-func (store *Default{{.T}}Store) Stats(debug bool) fmt.Stringer {
+func (store *default{{.T}}Store) Stats(debug bool) fmt.Stringer {
     store.statsLock.Lock()
     stats := &{{.T}}StoreStats{
         Lookups:                      atomic.LoadInt32(&store.lookups),

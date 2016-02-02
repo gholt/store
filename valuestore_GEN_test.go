@@ -7,12 +7,12 @@ import (
 	"github.com/gholt/locmap"
 )
 
-func newTestValueStore(c *ValueStoreConfig) (*DefaultValueStore, chan error) {
+func newTestValueStore(c *ValueStoreConfig) (*defaultValueStore, chan error) {
 	if c == nil {
 		c = newTestValueStoreConfig()
 	}
 	s, err := NewValueStore(c)
-	ds := s.(*DefaultValueStore)
+	ds := s.(*defaultValueStore)
 	return ds, err
 }
 

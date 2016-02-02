@@ -28,11 +28,11 @@ type {{.t}}BulkSetAckState struct {
 }
 
 type {{.t}}BulkSetAckMsg struct {
-    store   *Default{{.T}}Store
+    store   *default{{.T}}Store
     body    []byte
 }
 
-func (store *Default{{.T}}Store) bulkSetAckConfig(cfg *{{.T}}StoreConfig) {
+func (store *default{{.T}}Store) bulkSetAckConfig(cfg *{{.T}}StoreConfig) {
     store.bulkSetAckState.inWorkers = cfg.InBulkSetAckWorkers
     store.bulkSetAckState.inMsgChan = make(chan *{{.t}}BulkSetAckMsg, cfg.InBulkSetAckMsgs)
     store.bulkSetAckState.inFreeMsgChan = make(chan *{{.t}}BulkSetAckMsg, cfg.InBulkSetAckMsgs)
@@ -55,7 +55,7 @@ func (store *Default{{.T}}Store) bulkSetAckConfig(cfg *{{.T}}StoreConfig) {
 }
 
 // EnableInBulkSetAck will resume handling incoming bulk set ack messages.
-func (store *Default{{.T}}Store) EnableInBulkSetAck() {
+func (store *default{{.T}}Store) EnableInBulkSetAck() {
     store.bulkSetAckState.inNotifyChanLock.Lock()
     if store.bulkSetAckState.inNotifyChan == nil {
         store.bulkSetAckState.inNotifyChan = make(chan *bgNotification, 1)
@@ -66,7 +66,7 @@ func (store *Default{{.T}}Store) EnableInBulkSetAck() {
 
 // DisableInBulkSetAck will stop handling any incoming bulk set ack messages
 // (they will be dropped) until EnableInBulkSetAck is called.
-func (store *Default{{.T}}Store) DisableInBulkSetAck() {
+func (store *default{{.T}}Store) DisableInBulkSetAck() {
     store.bulkSetAckState.inNotifyChanLock.Lock()
     if store.bulkSetAckState.inNotifyChan != nil {
         c := make(chan struct{}, 1)
@@ -80,7 +80,7 @@ func (store *Default{{.T}}Store) DisableInBulkSetAck() {
     store.bulkSetAckState.inNotifyChanLock.Unlock()
 }
 
-func (store *Default{{.T}}Store) inBulkSetAckLauncher(notifyChan chan *bgNotification) {
+func (store *default{{.T}}Store) inBulkSetAckLauncher(notifyChan chan *bgNotification) {
     wg := &sync.WaitGroup{}
     wg.Add(store.bulkSetAckState.inWorkers)
     for i := 0; i < store.bulkSetAckState.inWorkers; i++ {
@@ -105,7 +105,7 @@ func (store *Default{{.T}}Store) inBulkSetAckLauncher(notifyChan chan *bgNotific
 
 // newInBulkSetAckMsg reads bulk-set-ack messages from the MsgRing and puts
 // them on the inMsgChan for the inBulkSetAck workers to work on.
-func (store *Default{{.T}}Store) newInBulkSetAckMsg(r io.Reader, l uint64) (uint64, error) {
+func (store *default{{.T}}Store) newInBulkSetAckMsg(r io.Reader, l uint64) (uint64, error) {
     var bsam *{{.t}}BulkSetAckMsg
     select {
     case bsam = <-store.bulkSetAckState.inFreeMsgChan:
@@ -155,7 +155,7 @@ func (store *Default{{.T}}Store) newInBulkSetAckMsg(r io.Reader, l uint64) (uint
 
 // inBulkSetAck actually processes incoming bulk-set-ack messages; there may be
 // more than one of these workers.
-func (store *Default{{.T}}Store) inBulkSetAck(wg *sync.WaitGroup) {
+func (store *default{{.T}}Store) inBulkSetAck(wg *sync.WaitGroup) {
     for {
         bsam := <-store.bulkSetAckState.inMsgChan
         if bsam == nil {
@@ -195,7 +195,7 @@ func (store *Default{{.T}}Store) inBulkSetAck(wg *sync.WaitGroup) {
 // {{.t}}BulkSetAckMsg instances that can exist at any given time, capping
 // memory usage. Once the limit is reached, this method will block until a
 // {{.t}}BulkSetAckMsg is available to return.
-func (store *Default{{.T}}Store) newOutBulkSetAckMsg() *{{.t}}BulkSetAckMsg {
+func (store *default{{.T}}Store) newOutBulkSetAckMsg() *{{.t}}BulkSetAckMsg {
     bsam := <-store.bulkSetAckState.outFreeMsgChan
     bsam.body = bsam.body[:0]
     return bsam

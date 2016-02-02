@@ -193,8 +193,8 @@ type bgNotification struct {
 // Store is an interface for a disk-backed data structure that stores
 // []byte values referenced by keys with options for replication.
 //
-// For documentation on each of these functions, see the DefaultValueStore and
-// DefaultGroupStore.
+// For documentation on each of these functions, see the defaultValueStore and
+// defaultGroupStore.
 type Store interface {
 	// Startup will start up everything needed to start using the Store or
 	// return an error; on creation, a Store will not yet be started up.
@@ -223,7 +223,7 @@ type Store interface {
 	//
 	// Note that this function returns a fmt.Stringer because other
 	// implementations of a Store shouldn't be tied to this package's
-	// implementation. But, if it's known that DefaultValueStore is in use, for
+	// implementation. But, if it's known that defaultValueStore is in use, for
 	// example, a quick cast to *ValueStoreStats can be done to gain access to
 	// individual fields.
 	//
@@ -243,7 +243,7 @@ type Store interface {
 // ValueStore is an interface for a disk-backed data structure that stores
 // []byte values referenced by 128 bit keys with options for replication.
 //
-// For documentation on each of these functions, see the DefaultValueStore.
+// For documentation on each of these functions, see the defaultValueStore.
 type ValueStore interface {
 	Store
 	// Lookup will return (timestampmicro, length, err) for (keyA, keyB).
@@ -284,7 +284,7 @@ type ValueStore interface {
 // children (nameKeyA, nameKeyB) pairs can be retrieved for a parent (keyA,
 // keyB) pair.
 //
-// For documentation on each of these functions, see the DefaultGroupStore.
+// For documentation on each of these functions, see the defaultGroupStore.
 type GroupStore interface {
 	Store
 	// Lookup will return (timestampmicro, length, err) for (keyA, keyB,
