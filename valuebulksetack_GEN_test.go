@@ -16,7 +16,11 @@ func TestValueBulkSetAckRead(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Shutdown()
-	store.DisableInBulkSetAck()
+	imc := store.bulkSetAckState.inMsgChan
+	ifmc := store.bulkSetAckState.inFreeMsgChan
+	store.bulkSetAckShutdown()
+	store.bulkSetAckState.inMsgChan = imc
+	store.bulkSetAckState.inFreeMsgChan = ifmc
 	n, err := store.newInBulkSetAckMsg(bytes.NewBuffer(make([]byte, 100)), 100)
 	if err != nil {
 		t.Fatal(err)
@@ -49,7 +53,11 @@ func TestValueBulkSetAckReadLowSendCap(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Shutdown()
-	store.DisableInBulkSetAck()
+	imc := store.bulkSetAckState.inMsgChan
+	ifmc := store.bulkSetAckState.inFreeMsgChan
+	store.bulkSetAckShutdown()
+	store.bulkSetAckState.inMsgChan = imc
+	store.bulkSetAckState.inFreeMsgChan = ifmc
 	n, err := store.newInBulkSetAckMsg(bytes.NewBuffer(make([]byte, 100)), 100)
 	if err != nil {
 		t.Fatal(err)

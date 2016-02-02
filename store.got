@@ -302,6 +302,7 @@ func (store *default{{.T}}Store) Startup() error {
     for i, f := range []func(){
         store.auditStartup,
         store.bulkSetStartup,
+        store.bulkSetAckStartup,
     } {
         wg.Add(1)
         go func(ii int, ff func()) {
@@ -326,6 +327,7 @@ func (store *default{{.T}}Store) Shutdown() {
     for i, f := range []func(){
         store.auditShutdown,
         store.bulkSetShutdown,
+        store.bulkSetAckShutdown,
     } {
         wg.Add(1)
         go func(ii int, ff func()) {
@@ -368,7 +370,6 @@ func (store *default{{.T}}Store) disableAllBackground() {
         store.DisableInPullReplication,
         store.DisableOutPullReplication,
         store.DisableOutPushReplication,
-        store.DisableInBulkSetAck,
         store.DisableTombstoneDiscard,
     } {
         wg.Add(1)
@@ -385,7 +386,6 @@ func (store *default{{.T}}Store) enableAll() {
     for _, f := range []func(){
         store.EnableWrites,
         store.EnableTombstoneDiscard,
-        store.EnableInBulkSetAck,
         store.EnableOutPushReplication,
         store.EnableOutPullReplication,
         store.EnableInPullReplication,
