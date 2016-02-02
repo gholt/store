@@ -9,7 +9,8 @@ import (
 type {{.t}}FlusherState struct {
     interval            int
     flusherThreshold    int32
-    notifyChanLock      sync.Mutex
+
+    startupShutdownLock sync.Mutex
     notifyChan          chan *bgNotification
 }
 
@@ -18,17 +19,17 @@ func (store *default{{.T}}Store) flusherConfig(cfg *{{.T}}StoreConfig) {
     store.flusherState.flusherThreshold = cfg.FlusherThreshold
 }
 
-func (store *default{{.T}}Store) EnableFlusher() {
-    store.flusherState.notifyChanLock.Lock()
+func (store *default{{.T}}Store) flusherStartup() {
+    store.flusherState.startupShutdownLock.Lock()
     if store.flusherState.notifyChan == nil {
         store.flusherState.notifyChan = make(chan *bgNotification, 1)
         go store.flusherLauncher(store.flusherState.notifyChan)
     }
-    store.flusherState.notifyChanLock.Unlock()
+    store.flusherState.startupShutdownLock.Unlock()
 }
 
-func (store *default{{.T}}Store) DisableFlusher() {
-    store.flusherState.notifyChanLock.Lock()
+func (store *default{{.T}}Store) flusherShutdown() {
+    store.flusherState.startupShutdownLock.Lock()
     if store.flusherState.notifyChan != nil {
         c := make(chan struct{}, 1)
         store.flusherState.notifyChan <- &bgNotification{
@@ -38,7 +39,7 @@ func (store *default{{.T}}Store) DisableFlusher() {
         <-c
         store.flusherState.notifyChan = nil
     }
-    store.flusherState.notifyChanLock.Unlock()
+    store.flusherState.startupShutdownLock.Unlock()
 }
 
 func (store *default{{.T}}Store) flusherLauncher(notifyChan chan *bgNotification) {
