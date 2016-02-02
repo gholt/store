@@ -11,12 +11,13 @@ import (
 )
 
 type groupCompactionState struct {
-	interval       int
-	threshold      float64
-	ageThreshold   int64
-	workerCount    int
-	notifyChanLock sync.Mutex
-	notifyChan     chan *bgNotification
+	interval     int
+	threshold    float64
+	ageThreshold int64
+	workerCount  int
+
+	startupShutdownLock sync.Mutex
+	notifyChan          chan *bgNotification
 }
 
 func (store *defaultGroupStore) compactionConfig(cfg *GroupStoreConfig) {
@@ -26,39 +27,17 @@ func (store *defaultGroupStore) compactionConfig(cfg *GroupStoreConfig) {
 	store.compactionState.workerCount = cfg.CompactionWorkers
 }
 
-// CompactionPass will immediately execute a compaction pass to compact stale
-// files.
-func (store *defaultGroupStore) CompactionPass() {
-	store.compactionState.notifyChanLock.Lock()
-	if store.compactionState.notifyChan == nil {
-		store.compactionPass(make(chan *bgNotification))
-	} else {
-		c := make(chan struct{}, 1)
-		store.compactionState.notifyChan <- &bgNotification{
-			action:   _BG_PASS,
-			doneChan: c,
-		}
-		<-c
-	}
-	store.compactionState.notifyChanLock.Unlock()
-}
-
-// EnableCompaction will resume compaction passes. A compaction pass searches
-// for files with a percentage of XX deleted entries.
-func (store *defaultGroupStore) EnableCompaction() {
-	store.compactionState.notifyChanLock.Lock()
+func (store *defaultGroupStore) compactionStartup() {
+	store.compactionState.startupShutdownLock.Lock()
 	if store.compactionState.notifyChan == nil {
 		store.compactionState.notifyChan = make(chan *bgNotification, 1)
 		go store.compactionLauncher(store.compactionState.notifyChan)
 	}
-	store.compactionState.notifyChanLock.Unlock()
+	store.compactionState.startupShutdownLock.Unlock()
 }
 
-// DisableCompaction will stop any compaction passes until EnableCompaction is
-// called. A compaction pass searches for files with a percentage of XX deleted
-// entries.
-func (store *defaultGroupStore) DisableCompaction() {
-	store.compactionState.notifyChanLock.Lock()
+func (store *defaultGroupStore) compactionShutdown() {
+	store.compactionState.startupShutdownLock.Lock()
 	if store.compactionState.notifyChan != nil {
 		c := make(chan struct{}, 1)
 		store.compactionState.notifyChan <- &bgNotification{
@@ -68,7 +47,7 @@ func (store *defaultGroupStore) DisableCompaction() {
 		<-c
 		store.compactionState.notifyChan = nil
 	}
-	store.compactionState.notifyChanLock.Unlock()
+	store.compactionState.startupShutdownLock.Unlock()
 }
 
 func (store *defaultGroupStore) compactionLauncher(notifyChan chan *bgNotification) {
