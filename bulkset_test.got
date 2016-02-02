@@ -5,7 +5,6 @@ import (
     //"encoding/binary"
     "io"
     "testing"
-    "time"
 
     "github.com/gholt/ring"
 )
@@ -18,7 +17,7 @@ func Test{{.T}}BulkSetReadObviouslyTooShort(t *testing.T) {
         t.Fatal(err)
     }
     defer store.Shutdown()
-    store.DisableInBulkSet()
+    store.bulkSetShutdown()
     n, err := store.newInBulkSetMsg(bytes.NewBuffer(make([]byte, 1)), 1)
     if err != nil {
         t.Fatal(err)
@@ -51,7 +50,11 @@ func Test{{.T}}BulkSetRead(t *testing.T) {
         t.Fatal(err)
     }
     defer store.Shutdown()
-    store.DisableInBulkSet()
+    imc := store.bulkSetState.inMsgChan
+    ifmc := store.bulkSetState.inFreeMsgChan
+    store.bulkSetShutdown()
+    store.bulkSetState.inMsgChan = imc
+    store.bulkSetState.inFreeMsgChan = ifmc
     n, err := store.newInBulkSetMsg(bytes.NewBuffer(make([]byte, 100)), 100)
     if err != nil {
         t.Fatal(err)
@@ -97,10 +100,11 @@ func Test{{.T}}BulkSetReadLowSendCap(t *testing.T) {
         t.Fatal(err)
     }
     defer store.Shutdown()
-    store.DisableInBulkSet()
-    for len(store.bulkSetState.inMsgChan) > 0 {
-        time.Sleep(time.Millisecond)
-    }
+    imc := store.bulkSetState.inMsgChan
+    ifmc := store.bulkSetState.inFreeMsgChan
+    store.bulkSetShutdown()
+    store.bulkSetState.inMsgChan = imc
+    store.bulkSetState.inFreeMsgChan = ifmc
     n, err := store.newInBulkSetMsg(bytes.NewBuffer(make([]byte, 100)), 100)
     if err != nil {
         t.Fatal(err)
@@ -108,7 +112,6 @@ func Test{{.T}}BulkSetReadLowSendCap(t *testing.T) {
     if n != 100 {
         t.Fatal(n)
     }
-    <-store.bulkSetState.inMsgChan
 }
 
 func Test{{.T}}BulkSetMsgWithoutAck(t *testing.T) {

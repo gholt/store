@@ -19,12 +19,14 @@ type groupBulkSetState struct {
 	msgCap               int
 	inWorkers            int
 	inResponseMsgTimeout time.Duration
-	inMsgChan            chan *groupBulkSetMsg
-	inFreeMsgChan        chan *groupBulkSetMsg
-	outFreeMsgChan       chan *groupBulkSetMsg
+	inBulkSetMsgs        int
+	outBulkSetMsgs       int
 
-	inNotifyChanLock sync.Mutex
-	inNotifyChan     chan *bgNotification
+	startupShutdownLock sync.Mutex
+	inNotifyChan        chan *bgNotification
+	inMsgChan           chan *groupBulkSetMsg
+	inFreeMsgChan       chan *groupBulkSetMsg
+	outFreeMsgChan      chan *groupBulkSetMsg
 }
 
 type groupBulkSetMsg struct {
@@ -37,42 +39,41 @@ func (store *defaultGroupStore) bulkSetConfig(cfg *GroupStoreConfig) {
 	store.bulkSetState.msgCap = cfg.BulkSetMsgCap
 	store.bulkSetState.inWorkers = cfg.InBulkSetWorkers
 	store.bulkSetState.inResponseMsgTimeout = time.Duration(cfg.InBulkSetResponseMsgTimeout) * time.Millisecond
-	store.bulkSetState.inMsgChan = make(chan *groupBulkSetMsg, cfg.InBulkSetMsgs)
-	store.bulkSetState.inFreeMsgChan = make(chan *groupBulkSetMsg, cfg.InBulkSetMsgs)
-	for i := 0; i < cap(store.bulkSetState.inFreeMsgChan); i++ {
-		store.bulkSetState.inFreeMsgChan <- &groupBulkSetMsg{
-			store:  store,
-			header: make([]byte, _GROUP_BULK_SET_MSG_HEADER_LENGTH),
-			body:   make([]byte, cfg.BulkSetMsgCap),
-		}
-	}
-	store.bulkSetState.outFreeMsgChan = make(chan *groupBulkSetMsg, cfg.OutBulkSetMsgs)
-	for i := 0; i < cap(store.bulkSetState.outFreeMsgChan); i++ {
-		store.bulkSetState.outFreeMsgChan <- &groupBulkSetMsg{
-			store:  store,
-			header: make([]byte, _GROUP_BULK_SET_MSG_HEADER_LENGTH),
-			body:   make([]byte, cfg.BulkSetMsgCap),
-		}
-	}
+	store.bulkSetState.inBulkSetMsgs = cfg.InBulkSetMsgs
+	store.bulkSetState.outBulkSetMsgs = cfg.OutBulkSetMsgs
 	if store.msgRing != nil {
 		store.msgRing.SetMsgHandler(_GROUP_BULK_SET_MSG_TYPE, store.newInBulkSetMsg)
 	}
 }
 
-// EnableInBulkSet will resume handling incoming bulk set requests.
-func (store *defaultGroupStore) EnableInBulkSet() {
-	store.bulkSetState.inNotifyChanLock.Lock()
+func (store *defaultGroupStore) bulkSetStartup() {
+	store.bulkSetState.startupShutdownLock.Lock()
 	if store.bulkSetState.inNotifyChan == nil {
 		store.bulkSetState.inNotifyChan = make(chan *bgNotification, 1)
+		store.bulkSetState.inMsgChan = make(chan *groupBulkSetMsg, store.bulkSetState.inBulkSetMsgs)
+		store.bulkSetState.inFreeMsgChan = make(chan *groupBulkSetMsg, store.bulkSetState.inBulkSetMsgs)
+		for i := 0; i < cap(store.bulkSetState.inFreeMsgChan); i++ {
+			store.bulkSetState.inFreeMsgChan <- &groupBulkSetMsg{
+				store:  store,
+				header: make([]byte, _GROUP_BULK_SET_MSG_HEADER_LENGTH),
+				body:   make([]byte, store.bulkSetState.msgCap),
+			}
+		}
+		store.bulkSetState.outFreeMsgChan = make(chan *groupBulkSetMsg, store.bulkSetState.outBulkSetMsgs)
+		for i := 0; i < cap(store.bulkSetState.outFreeMsgChan); i++ {
+			store.bulkSetState.outFreeMsgChan <- &groupBulkSetMsg{
+				store:  store,
+				header: make([]byte, _GROUP_BULK_SET_MSG_HEADER_LENGTH),
+				body:   make([]byte, store.bulkSetState.msgCap),
+			}
+		}
 		go store.inBulkSetLauncher(store.bulkSetState.inNotifyChan)
 	}
-	store.bulkSetState.inNotifyChanLock.Unlock()
+	store.bulkSetState.startupShutdownLock.Unlock()
 }
 
-// DisableInBulkSet will stop handling any incoming bulk set requests (they
-// will be dropped) until EnableInBulkSet is called.
-func (store *defaultGroupStore) DisableInBulkSet() {
-	store.bulkSetState.inNotifyChanLock.Lock()
+func (store *defaultGroupStore) bulkSetShutdown() {
+	store.bulkSetState.startupShutdownLock.Lock()
 	if store.bulkSetState.inNotifyChan != nil {
 		c := make(chan struct{}, 1)
 		store.bulkSetState.inNotifyChan <- &bgNotification{
@@ -81,8 +82,11 @@ func (store *defaultGroupStore) DisableInBulkSet() {
 		}
 		<-c
 		store.bulkSetState.inNotifyChan = nil
+		store.bulkSetState.inMsgChan = nil
+		store.bulkSetState.inFreeMsgChan = nil
+		store.bulkSetState.outFreeMsgChan = nil
 	}
-	store.bulkSetState.inNotifyChanLock.Unlock()
+	store.bulkSetState.startupShutdownLock.Unlock()
 }
 
 func (store *defaultGroupStore) inBulkSetLauncher(notifyChan chan *bgNotification) {
@@ -169,11 +173,11 @@ func (store *defaultGroupStore) newInBulkSetMsg(r io.Reader, l uint64) (uint64, 
 		}
 	}
 	l -= uint64(len(bsm.header))
-	// TODO: I think we should cap the body size to store.bulkSetState.msgCap but
-	// that also means that the inBulkSet worker will need to handle the likely
-	// trailing truncated entry. Once all this is done, the overall cluster
-	// should work even if the caps are set differently from node to node
-	// (definitely not recommended though), as the bulk-set messages would
+	// TODO: I think we should cap the body size to store.bulkSetState.msgCap
+	// but that also means that the inBulkSet worker will need to handle the
+	// likely trailing truncated entry. Once all this is done, the overall
+	// cluster should work even if the caps are set differently from node to
+	// node (definitely not recommended though), as the bulk-set messages would
 	// eventually start falling under the minimum cap as the front-end data is
 	// tranferred and acknowledged. Anyway, I think this is needed in case
 	// someone accidentally screws up the cap on one node, making it way too

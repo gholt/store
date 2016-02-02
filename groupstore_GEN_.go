@@ -301,6 +301,7 @@ func (store *defaultGroupStore) Startup() error {
 	wg := &sync.WaitGroup{}
 	for i, f := range []func(){
 		store.auditStartup,
+		store.bulkSetStartup,
 	} {
 		wg.Add(1)
 		go func(ii int, ff func()) {
@@ -324,6 +325,7 @@ func (store *defaultGroupStore) Shutdown() {
 	wg := &sync.WaitGroup{}
 	for i, f := range []func(){
 		store.auditShutdown,
+		store.bulkSetShutdown,
 	} {
 		wg.Add(1)
 		go func(ii int, ff func()) {
@@ -366,7 +368,6 @@ func (store *defaultGroupStore) disableAllBackground() {
 		store.DisableInPullReplication,
 		store.DisableOutPullReplication,
 		store.DisableOutPushReplication,
-		store.DisableInBulkSet,
 		store.DisableInBulkSetAck,
 		store.DisableTombstoneDiscard,
 	} {
@@ -385,7 +386,6 @@ func (store *defaultGroupStore) enableAll() {
 		store.EnableWrites,
 		store.EnableTombstoneDiscard,
 		store.EnableInBulkSetAck,
-		store.EnableInBulkSet,
 		store.EnableOutPushReplication,
 		store.EnableOutPullReplication,
 		store.EnableInPullReplication,

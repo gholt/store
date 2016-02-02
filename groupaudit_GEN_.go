@@ -15,8 +15,8 @@ type groupAuditState struct {
 	interval     int
 	ageThreshold int64
 
-	notifyChanLock sync.Mutex
-	notifyChan     chan *bgNotification
+	startupShutdownLock sync.Mutex
+	notifyChan          chan *bgNotification
 }
 
 func (store *defaultGroupStore) auditConfig(cfg *GroupStoreConfig) {
@@ -25,16 +25,16 @@ func (store *defaultGroupStore) auditConfig(cfg *GroupStoreConfig) {
 }
 
 func (store *defaultGroupStore) auditStartup() {
-	store.auditState.notifyChanLock.Lock()
+	store.auditState.startupShutdownLock.Lock()
 	if store.auditState.notifyChan == nil {
 		store.auditState.notifyChan = make(chan *bgNotification, 1)
 		go store.auditLauncher(store.auditState.notifyChan)
 	}
-	store.auditState.notifyChanLock.Unlock()
+	store.auditState.startupShutdownLock.Unlock()
 }
 
 func (store *defaultGroupStore) auditShutdown() {
-	store.auditState.notifyChanLock.Lock()
+	store.auditState.startupShutdownLock.Lock()
 	if store.auditState.notifyChan != nil {
 		c := make(chan struct{}, 1)
 		store.auditState.notifyChan <- &bgNotification{
@@ -44,16 +44,11 @@ func (store *defaultGroupStore) auditShutdown() {
 		<-c
 		store.auditState.notifyChan = nil
 	}
-	store.auditState.notifyChanLock.Unlock()
+	store.auditState.startupShutdownLock.Unlock()
 }
 
-// AuditPass will immediately execute a pass at full speed to check the on-disk
-// data for errors rather than waiting for the next interval to run the
-// standard slow-audit pass. If a pass is currently executing, it will be
-// stopped and restarted so that a call to this function ensures one complete
-// pass occurs.
 func (store *defaultGroupStore) AuditPass() {
-	store.auditState.notifyChanLock.Lock()
+	store.auditState.startupShutdownLock.Lock()
 	if store.auditState.notifyChan == nil {
 		store.auditPass(true, make(chan *bgNotification))
 	} else {
@@ -64,7 +59,7 @@ func (store *defaultGroupStore) AuditPass() {
 		}
 		<-c
 	}
-	store.auditState.notifyChanLock.Unlock()
+	store.auditState.startupShutdownLock.Unlock()
 }
 
 func (store *defaultGroupStore) auditLauncher(notifyChan chan *bgNotification) {
