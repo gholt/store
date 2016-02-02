@@ -10,12 +10,13 @@ import (
 )
 
 type valueTombstoneDiscardState struct {
-	interval       int
-	age            uint64
-	batchSize      int
-	notifyChanLock sync.Mutex
-	notifyChan     chan *bgNotification
-	localRemovals  [][]valueLocalRemovalEntry
+	interval  int
+	age       uint64
+	batchSize int
+
+	startupShutdownLock sync.Mutex
+	notifyChan          chan *bgNotification
+	localRemovals       [][]valueLocalRemovalEntry
 }
 
 type valueLocalRemovalEntry struct {
@@ -31,41 +32,17 @@ func (store *defaultValueStore) tombstoneDiscardConfig(cfg *ValueStoreConfig) {
 	store.tombstoneDiscardState.batchSize = cfg.TombstoneDiscardBatchSize
 }
 
-// TombstoneDiscardPass will immediately execute a pass to discard expired
-// tombstones (deletion markers) rather than waiting for the next interval. If
-// a pass is currently executing, it will be stopped and restarted so that a
-// call to this function ensures one complete pass occurs.
-func (store *defaultValueStore) TombstoneDiscardPass() {
-	store.tombstoneDiscardState.notifyChanLock.Lock()
-	if store.tombstoneDiscardState.notifyChan == nil {
-		store.tombstoneDiscardPass(make(chan *bgNotification))
-	} else {
-		c := make(chan struct{}, 1)
-		store.tombstoneDiscardState.notifyChan <- &bgNotification{
-			action:   _BG_PASS,
-			doneChan: c,
-		}
-		<-c
-	}
-	store.tombstoneDiscardState.notifyChanLock.Unlock()
-}
-
-// EnableTombstoneDiscard will resume discard passes. A discard pass removes
-// expired tombstones (deletion markers).
-func (store *defaultValueStore) EnableTombstoneDiscard() {
-	store.tombstoneDiscardState.notifyChanLock.Lock()
+func (store *defaultValueStore) tombstoneDiscardStartup() {
+	store.tombstoneDiscardState.startupShutdownLock.Lock()
 	if store.tombstoneDiscardState.notifyChan == nil {
 		store.tombstoneDiscardState.notifyChan = make(chan *bgNotification, 1)
 		go store.tombstoneDiscardLauncher(store.tombstoneDiscardState.notifyChan)
 	}
-	store.tombstoneDiscardState.notifyChanLock.Unlock()
+	store.tombstoneDiscardState.startupShutdownLock.Unlock()
 }
 
-// DisableTombstoneDiscard will stop any discard passes until
-// EnableTombstoneDiscard is called. A discard pass removes expired tombstones
-// (deletion markers).
-func (store *defaultValueStore) DisableTombstoneDiscard() {
-	store.tombstoneDiscardState.notifyChanLock.Lock()
+func (store *defaultValueStore) tombstoneDiscardShutdown() {
+	store.tombstoneDiscardState.startupShutdownLock.Lock()
 	if store.tombstoneDiscardState.notifyChan != nil {
 		c := make(chan struct{}, 1)
 		store.tombstoneDiscardState.notifyChan <- &bgNotification{
@@ -75,7 +52,7 @@ func (store *defaultValueStore) DisableTombstoneDiscard() {
 		<-c
 		store.tombstoneDiscardState.notifyChan = nil
 	}
-	store.tombstoneDiscardState.notifyChanLock.Unlock()
+	store.tombstoneDiscardState.startupShutdownLock.Unlock()
 }
 
 func (store *defaultValueStore) tombstoneDiscardLauncher(notifyChan chan *bgNotification) {

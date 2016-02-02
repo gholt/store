@@ -202,15 +202,15 @@ type Store interface {
 	// Shutdown will ensure buffered data is written to disk and will shutdown
 	// the Store; the Store will be unusable until Startup is called again.
 	Shutdown()
-	// Flush will ensure buffered data, at the time of the call, is written to
-	// disk.
-	Flush()
-	// DisableWrites will switch the Store to a read-only mode until
-	// EnableWrites is called.
-	DisableWrites()
 	// EnableWrites will switch the Store back to read-write mode, assuming the
 	// Store supports writes.
 	EnableWrites()
+	// DisableWrites will switch the Store to a read-only mode until
+	// EnableWrites is called.
+	DisableWrites()
+	// Flush will ensure buffered data, at the time of the call, is written to
+	// disk.
+	Flush()
 	// AuditPass will immediately execute a pass at full speed to check the
 	// on-disk data for errors rather than waiting for the next interval to run
 	// the standard slow-audit pass. If a pass is currently executing, it will

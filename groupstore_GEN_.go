@@ -308,6 +308,7 @@ func (store *defaultGroupStore) Startup() error {
 		store.flusherStartup,
 		store.pullReplicationStartup,
 		store.pushReplicationStartup,
+		store.tombstoneDiscardStartup,
 	} {
 		wg.Add(1)
 		go func(ii int, ff func()) {
@@ -316,7 +317,7 @@ func (store *defaultGroupStore) Startup() error {
 		}(i, f)
 	}
 	wg.Wait()
-	store.enableAll()
+	store.EnableWrites()
 	store.running = 1 // running
 	store.runningLock.Unlock()
 	return nil
@@ -338,6 +339,7 @@ func (store *defaultGroupStore) Shutdown() {
 		store.flusherShutdown,
 		store.pullReplicationShutdown,
 		store.pushReplicationShutdown,
+		store.tombstoneDiscardShutdown,
 	} {
 		wg.Add(1)
 		go func(ii int, ff func()) {
@@ -346,7 +348,7 @@ func (store *defaultGroupStore) Shutdown() {
 		}(i, f)
 	}
 	wg.Wait()
-	store.disableAll()
+	store.DisableWrites()
 	for _, c := range store.pendingWriteReqChans {
 		c <- shutdownGroupWriteReq
 	}
@@ -366,38 +368,19 @@ func (store *defaultGroupStore) Shutdown() {
 	store.runningLock.Unlock()
 }
 
-func (store *defaultGroupStore) disableAll() {
-	store.disableAllBackground()
-	store.DisableWrites()
+func (store *defaultGroupStore) EnableWrites() {
+	store.enableWrites(true)
 }
 
-func (store *defaultGroupStore) disableAllBackground() {
-	wg := &sync.WaitGroup{}
-	for i, f := range []func(){
-		store.DisableTombstoneDiscard,
-	} {
-		wg.Add(1)
-		go func(ii int, ff func()) {
-			ff()
-			wg.Done()
-		}(i, f)
+func (store *defaultGroupStore) enableWrites(userCall bool) {
+	store.disableEnableWritesLock.Lock()
+	if userCall || !store.userDisabled {
+		store.userDisabled = false
+		for _, c := range store.pendingWriteReqChans {
+			c <- enableGroupWriteReq
+		}
 	}
-	wg.Wait()
-}
-
-func (store *defaultGroupStore) enableAll() {
-	wg := &sync.WaitGroup{}
-	for _, f := range []func(){
-		store.EnableWrites,
-		store.EnableTombstoneDiscard,
-	} {
-		wg.Add(1)
-		go func(ff func()) {
-			ff()
-			wg.Done()
-		}(f)
-	}
-	wg.Wait()
+	store.disableEnableWritesLock.Unlock()
 }
 
 func (store *defaultGroupStore) DisableWrites() {
@@ -414,22 +397,6 @@ func (store *defaultGroupStore) disableWrites(userCall bool) {
 	}
 	store.disableEnableWritesLock.Unlock()
 }
-
-func (store *defaultGroupStore) EnableWrites() {
-	store.enableWrites(true)
-}
-
-func (store *defaultGroupStore) enableWrites(userCall bool) {
-	store.disableEnableWritesLock.Lock()
-	if userCall || !store.userDisabled {
-		store.userDisabled = false
-		for _, c := range store.pendingWriteReqChans {
-			c <- enableGroupWriteReq
-		}
-	}
-	store.disableEnableWritesLock.Unlock()
-}
-
 func (store *defaultGroupStore) Flush() {
 	for _, c := range store.pendingWriteReqChans {
 		c <- flushGroupWriteReq
