@@ -11,7 +11,9 @@ func newTestGroupStore(c *GroupStoreConfig) (*DefaultGroupStore, chan error) {
 	if c == nil {
 		c = newTestGroupStoreConfig()
 	}
-	return NewGroupStore(c)
+	s, err := NewGroupStore(c)
+	ds := s.(*DefaultGroupStore)
+	return ds, err
 }
 
 func newTestGroupStoreConfig() *GroupStoreConfig {

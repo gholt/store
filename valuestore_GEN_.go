@@ -155,7 +155,7 @@ type valueLocBlock interface {
 	close() error
 }
 
-// NewValueStore creates a DefaultValueStore for use in storing []byte values
+// NewValueStore creates a ValueStore for use in storing []byte values
 // referenced by 128 bit keys; the store, restart channel (chan error), or any
 // error during construction is returned.
 //
@@ -171,7 +171,7 @@ type valueLocBlock interface {
 // Note that a lot of buffering, multiple cores, and background processes can
 // be in use and therefore Shutdown() should be called prior to the process
 // exiting to ensure all processing is done and the buffers are flushed.
-func NewValueStore(c *ValueStoreConfig) (*DefaultValueStore, chan error) {
+func NewValueStore(c *ValueStoreConfig) (ValueStore, chan error) {
 	cfg := resolveValueStoreConfig(c)
 	lcmap := cfg.ValueLocMap
 	if lcmap == nil {
@@ -223,34 +223,6 @@ func NewValueStore(c *ValueStoreConfig) (*DefaultValueStore, chan error) {
 
 func (store *DefaultValueStore) ValueCap() uint32 {
 	return store.valueCap
-}
-
-func (store *DefaultValueStore) disableAll() {
-	store.disableAllBackground()
-	store.DisableWrites()
-}
-
-func (store *DefaultValueStore) disableAllBackground() {
-	wg := &sync.WaitGroup{}
-	for i, f := range []func(){
-		store.DisableDiskWatcher,
-		store.DisableFlusher,
-		store.DisableAudit,
-		store.DisableCompaction,
-		store.DisableInPullReplication,
-		store.DisableOutPullReplication,
-		store.DisableOutPushReplication,
-		store.DisableInBulkSet,
-		store.DisableInBulkSetAck,
-		store.DisableTombstoneDiscard,
-	} {
-		wg.Add(1)
-		go func(ii int, ff func()) {
-			ff()
-			wg.Done()
-		}(i, f)
-	}
-	wg.Wait()
 }
 
 func (store *DefaultValueStore) Startup() error {
@@ -323,6 +295,17 @@ func (store *DefaultValueStore) Startup() error {
 		store.runningLock.Unlock()
 		return err
 	}
+	wg := &sync.WaitGroup{}
+	for i, f := range []func(){
+		store.auditStartup,
+	} {
+		wg.Add(1)
+		go func(ii int, ff func()) {
+			ff()
+			wg.Done()
+		}(i, f)
+	}
+	wg.Wait()
 	store.enableAll()
 	store.running = 1 // running
 	store.runningLock.Unlock()
@@ -335,6 +318,17 @@ func (store *DefaultValueStore) Shutdown() {
 		store.runningLock.Unlock()
 		return
 	}
+	wg := &sync.WaitGroup{}
+	for i, f := range []func(){
+		store.auditShutdown,
+	} {
+		wg.Add(1)
+		go func(ii int, ff func()) {
+			ff()
+			wg.Done()
+		}(i, f)
+	}
+	wg.Wait()
 	store.disableAll()
 	for _, c := range store.pendingWriteReqChans {
 		c <- shutdownValueWriteReq
@@ -355,6 +349,33 @@ func (store *DefaultValueStore) Shutdown() {
 	store.runningLock.Unlock()
 }
 
+func (store *DefaultValueStore) disableAll() {
+	store.disableAllBackground()
+	store.DisableWrites()
+}
+
+func (store *DefaultValueStore) disableAllBackground() {
+	wg := &sync.WaitGroup{}
+	for i, f := range []func(){
+		store.DisableDiskWatcher,
+		store.DisableFlusher,
+		store.DisableCompaction,
+		store.DisableInPullReplication,
+		store.DisableOutPullReplication,
+		store.DisableOutPushReplication,
+		store.DisableInBulkSet,
+		store.DisableInBulkSetAck,
+		store.DisableTombstoneDiscard,
+	} {
+		wg.Add(1)
+		go func(ii int, ff func()) {
+			ff()
+			wg.Done()
+		}(i, f)
+	}
+	wg.Wait()
+}
+
 func (store *DefaultValueStore) enableAll() {
 	wg := &sync.WaitGroup{}
 	for _, f := range []func(){
@@ -366,7 +387,6 @@ func (store *DefaultValueStore) enableAll() {
 		store.EnableOutPullReplication,
 		store.EnableInPullReplication,
 		store.EnableCompaction,
-		store.EnableAudit,
 		store.EnableFlusher,
 		store.EnableDiskWatcher,
 	} {

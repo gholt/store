@@ -24,6 +24,29 @@ func (store *DefaultValueStore) auditConfig(cfg *ValueStoreConfig) {
 	store.auditState.ageThreshold = int64(cfg.AuditAgeThreshold) * int64(time.Second)
 }
 
+func (store *DefaultValueStore) auditStartup() {
+	store.auditState.notifyChanLock.Lock()
+	if store.auditState.notifyChan == nil {
+		store.auditState.notifyChan = make(chan *bgNotification, 1)
+		go store.auditLauncher(store.auditState.notifyChan)
+	}
+	store.auditState.notifyChanLock.Unlock()
+}
+
+func (store *DefaultValueStore) auditShutdown() {
+	store.auditState.notifyChanLock.Lock()
+	if store.auditState.notifyChan != nil {
+		c := make(chan struct{}, 1)
+		store.auditState.notifyChan <- &bgNotification{
+			action:   _BG_DISABLE,
+			doneChan: c,
+		}
+		<-c
+		store.auditState.notifyChan = nil
+	}
+	store.auditState.notifyChanLock.Unlock()
+}
+
 // AuditPass will immediately execute a pass at full speed to check the on-disk
 // data for errors rather than waiting for the next interval to run the
 // standard slow-audit pass. If a pass is currently executing, it will be
@@ -40,33 +63,6 @@ func (store *DefaultValueStore) AuditPass() {
 			doneChan: c,
 		}
 		<-c
-	}
-	store.auditState.notifyChanLock.Unlock()
-}
-
-// EnableAudit will resume audit passes. An audit pass checks on-disk data for
-// errors.
-func (store *DefaultValueStore) EnableAudit() {
-	store.auditState.notifyChanLock.Lock()
-	if store.auditState.notifyChan == nil {
-		store.auditState.notifyChan = make(chan *bgNotification, 1)
-		go store.auditLauncher(store.auditState.notifyChan)
-	}
-	store.auditState.notifyChanLock.Unlock()
-}
-
-// DisableAudit will stop any audit passes until EnableAudit is called. An
-// audit pass checks on-disk data for errors.
-func (store *DefaultValueStore) DisableAudit() {
-	store.auditState.notifyChanLock.Lock()
-	if store.auditState.notifyChan != nil {
-		c := make(chan struct{}, 1)
-		store.auditState.notifyChan <- &bgNotification{
-			action:   _BG_DISABLE,
-			doneChan: c,
-		}
-		<-c
-		store.auditState.notifyChan = nil
 	}
 	store.auditState.notifyChanLock.Unlock()
 }

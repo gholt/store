@@ -11,7 +11,9 @@ func newTestValueStore(c *ValueStoreConfig) (*DefaultValueStore, chan error) {
 	if c == nil {
 		c = newTestValueStoreConfig()
 	}
-	return NewValueStore(c)
+	s, err := NewValueStore(c)
+	ds := s.(*DefaultValueStore)
+	return ds, err
 }
 
 func newTestValueStoreConfig() *ValueStoreConfig {

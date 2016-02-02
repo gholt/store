@@ -211,6 +211,12 @@ type Store interface {
 	// EnableWrites will switch the Store back to read-write mode, assuming the
 	// Store supports writes.
 	EnableWrites()
+	// AuditPass will immediately execute a pass at full speed to check the
+	// on-disk data for errors rather than waiting for the next interval to run
+	// the standard slow-audit pass. If a pass is currently executing, it will
+	// be stopped and restarted so that a call to this function ensures one
+	// complete pass occurs.
+	AuditPass()
 	// Stats returns overall information about the state of the Store. Note
 	// that this can be an expensive call; debug = true will make it even more
 	// expensive.

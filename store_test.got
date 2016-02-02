@@ -11,7 +11,9 @@ func newTest{{.T}}Store(c *{{.T}}StoreConfig) (*Default{{.T}}Store, chan error) 
     if c == nil {
         c = newTest{{.T}}StoreConfig()
     }
-    return New{{.T}}Store(c)
+    s, err := New{{.T}}Store(c)
+    ds := s.(*Default{{.T}}Store)
+    return ds, err
 }
 
 func newTest{{.T}}StoreConfig() *{{.T}}StoreConfig {
