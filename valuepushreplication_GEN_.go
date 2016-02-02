@@ -10,76 +10,51 @@ import (
 )
 
 type valuePushReplicationState struct {
-	outWorkers    int
-	outInterval   int
-	outMsgChan    chan *valuePullReplicationMsg
-	outMsgTimeout time.Duration
-	outLists      [][]uint64
-	outValBufs    [][]byte
+	interval   int
+	workers    int
+	msgTimeout time.Duration
 
-	outNotifyChanLock sync.Mutex
-	outNotifyChan     chan *bgNotification
+	startupShutdownLock sync.Mutex
+	notifyChan          chan *bgNotification
+	lists               [][]uint64
+	valBufs             [][]byte
 }
 
 func (store *defaultValueStore) pushReplicationConfig(cfg *ValueStoreConfig) {
-	store.pushReplicationState.outWorkers = cfg.OutPushReplicationWorkers
-	store.pushReplicationState.outInterval = cfg.OutPushReplicationInterval
-	if store.msgRing != nil {
-		store.pushReplicationState.outMsgChan = make(chan *valuePullReplicationMsg, cfg.OutPushReplicationMsgs)
-	}
-	store.pushReplicationState.outMsgTimeout = time.Duration(cfg.OutPushReplicationMsgTimeout) * time.Millisecond
+	store.pushReplicationState.interval = cfg.PushReplicationInterval
+	store.pushReplicationState.workers = cfg.PushReplicationWorkers
+	store.pushReplicationState.msgTimeout = time.Duration(cfg.PushReplicationMsgTimeout) * time.Millisecond
 }
 
-// OutPushReplicationPass will immediately execute an outgoing push replication
-// pass rather than waiting for the next interval. If a pass is currently
-// executing, it will be stopped and restarted so that a call to this function
-// ensures one complete pass occurs. Note that this pass will send the outgoing
-// push replication requests, but all the responses will almost certainly not
-// have been received when this function returns. These requests are stateless,
-// and so synchronization at that level is not possible.
-func (store *defaultValueStore) OutPushReplicationPass() {
-	store.pushReplicationState.outNotifyChanLock.Lock()
-	if store.pushReplicationState.outNotifyChan == nil {
-		store.outPushReplicationPass(make(chan *bgNotification))
-	} else {
+func (store *defaultValueStore) pushReplicationStartup() {
+	store.pushReplicationState.startupShutdownLock.Lock()
+	if store.pushReplicationState.notifyChan == nil {
+		store.pushReplicationState.notifyChan = make(chan *bgNotification, 1)
+		store.pushReplicationState.lists = nil
+		store.pushReplicationState.valBufs = nil
+		go store.pushReplicationLauncher(store.pushReplicationState.notifyChan)
+	}
+	store.pushReplicationState.startupShutdownLock.Unlock()
+}
+
+func (store *defaultValueStore) pushReplicationShutdown() {
+	store.pushReplicationState.startupShutdownLock.Lock()
+	if store.pushReplicationState.notifyChan != nil {
 		c := make(chan struct{}, 1)
-		store.pushReplicationState.outNotifyChan <- &bgNotification{
-			action:   _BG_PASS,
-			doneChan: c,
-		}
-		<-c
-	}
-	store.pushReplicationState.outNotifyChanLock.Unlock()
-}
-
-// EnableOutPushReplication will resume outgoing push replication requests.
-func (store *defaultValueStore) EnableOutPushReplication() {
-	store.pushReplicationState.outNotifyChanLock.Lock()
-	if store.pushReplicationState.outNotifyChan == nil {
-		store.pushReplicationState.outNotifyChan = make(chan *bgNotification, 1)
-		go store.outPushReplicationLauncher(store.pushReplicationState.outNotifyChan)
-	}
-	store.pushReplicationState.outNotifyChanLock.Unlock()
-}
-
-// DisableOutPushReplication will stop any outgoing push replication requests
-// until EnableOutPushReplication is called.
-func (store *defaultValueStore) DisableOutPushReplication() {
-	store.pushReplicationState.outNotifyChanLock.Lock()
-	if store.pushReplicationState.outNotifyChan != nil {
-		c := make(chan struct{}, 1)
-		store.pushReplicationState.outNotifyChan <- &bgNotification{
+		store.pushReplicationState.notifyChan <- &bgNotification{
 			action:   _BG_DISABLE,
 			doneChan: c,
 		}
 		<-c
-		store.pushReplicationState.outNotifyChan = nil
+		store.pushReplicationState.notifyChan = nil
+		store.pushReplicationState.lists = nil
+		store.pushReplicationState.valBufs = nil
 	}
-	store.pushReplicationState.outNotifyChanLock.Unlock()
+	store.pushReplicationState.startupShutdownLock.Unlock()
 }
 
-func (store *defaultValueStore) outPushReplicationLauncher(notifyChan chan *bgNotification) {
-	interval := float64(store.pushReplicationState.outInterval) * float64(time.Second)
+func (store *defaultValueStore) pushReplicationLauncher(notifyChan chan *bgNotification) {
+	interval := float64(store.pushReplicationState.interval) * float64(time.Second)
 	store.randMutex.Lock()
 	nextRun := time.Now().Add(time.Duration(interval + interval*store.rand.NormFloat64()*0.1))
 	store.randMutex.Unlock()
@@ -107,28 +82,28 @@ func (store *defaultValueStore) outPushReplicationLauncher(notifyChan chan *bgNo
 			var nextNotification *bgNotification
 			switch notification.action {
 			case _BG_PASS:
-				nextNotification = store.outPushReplicationPass(notifyChan)
+				nextNotification = store.pushReplicationPass(notifyChan)
 			case _BG_DISABLE:
 				running = false
 			default:
-				store.logCritical("outPushReplication: invalid action requested: %d", notification.action)
+				store.logCritical("pushReplication: invalid action requested: %d", notification.action)
 			}
 			notification.doneChan <- struct{}{}
 			notification = nextNotification
 		} else {
-			notification = store.outPushReplicationPass(notifyChan)
+			notification = store.pushReplicationPass(notifyChan)
 		}
 	}
 }
 
-func (store *defaultValueStore) outPushReplicationPass(notifyChan chan *bgNotification) *bgNotification {
+func (store *defaultValueStore) pushReplicationPass(notifyChan chan *bgNotification) *bgNotification {
 	if store.msgRing == nil {
 		return nil
 	}
 	if store.logDebug != nil {
 		begin := time.Now()
 		defer func() {
-			store.logDebug("outPushReplication: pass took %s", time.Now().Sub(begin))
+			store.logDebug("pushReplication: pass took %s", time.Now().Sub(begin))
 		}()
 	}
 	ring := store.msgRing.Ring()
@@ -139,15 +114,15 @@ func (store *defaultValueStore) outPushReplicationPass(notifyChan chan *bgNotifi
 	pbc := ring.PartitionBitCount()
 	partitionShift := uint64(64 - pbc)
 	partitionMax := (uint64(1) << pbc) - 1
-	workerMax := uint64(store.pushReplicationState.outWorkers - 1)
+	workerMax := uint64(store.pushReplicationState.workers - 1)
 	workerPartitionPiece := (uint64(1) << partitionShift) / (workerMax + 1)
 	// To avoid memory churn, the scratchpad areas are allocated just once and
 	// passed in to the workers.
-	for len(store.pushReplicationState.outLists) < int(workerMax+1) {
-		store.pushReplicationState.outLists = append(store.pushReplicationState.outLists, make([]uint64, store.bulkSetState.msgCap/_VALUE_BULK_SET_MSG_MIN_ENTRY_LENGTH*2))
+	for len(store.pushReplicationState.lists) < int(workerMax+1) {
+		store.pushReplicationState.lists = append(store.pushReplicationState.lists, make([]uint64, store.bulkSetState.msgCap/_VALUE_BULK_SET_MSG_MIN_ENTRY_LENGTH*2))
 	}
-	for len(store.pushReplicationState.outValBufs) < int(workerMax+1) {
-		store.pushReplicationState.outValBufs = append(store.pushReplicationState.outValBufs, make([]byte, store.valueCap))
+	for len(store.pushReplicationState.valBufs) < int(workerMax+1) {
+		store.pushReplicationState.valBufs = append(store.pushReplicationState.valBufs, make([]byte, store.valueCap))
 	}
 	var abort uint32
 	work := func(partition uint64, worker uint64, list []uint64, valbuf []byte) {
@@ -217,14 +192,14 @@ func (store *defaultValueStore) outPushReplicationPass(notifyChan chan *bgNotifi
 			}
 		}
 		atomic.AddInt32(&store.outBulkSetPushes, 1)
-		store.msgRing.MsgToOtherReplicas(bsm, uint32(partition), store.pushReplicationState.outMsgTimeout)
+		store.msgRing.MsgToOtherReplicas(bsm, uint32(partition), store.pushReplicationState.msgTimeout)
 	}
 	wg := &sync.WaitGroup{}
 	wg.Add(int(workerMax + 1))
 	for worker := uint64(0); worker <= workerMax; worker++ {
 		go func(worker uint64) {
-			list := store.pushReplicationState.outLists[worker]
-			valbuf := store.pushReplicationState.outValBufs[worker]
+			list := store.pushReplicationState.lists[worker]
+			valbuf := store.pushReplicationState.valBufs[worker]
 			partitionBegin := (partitionMax + 1) / (workerMax + 1) * worker
 			for partition := partitionBegin; ; {
 				if atomic.LoadUint32(&abort) != 0 {

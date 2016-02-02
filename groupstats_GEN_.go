@@ -153,8 +153,8 @@ type GroupStoreStats struct {
 	tombstoneDiscardInterval   int
 	outPullReplicationWorkers  uint64
 	outPullReplicationInterval int
-	outPushReplicationWorkers  int
-	outPushReplicationInterval int
+	pushReplicationWorkers     int
+	pushReplicationInterval    int
 	valueCap                   uint32
 	pageSize                   uint32
 	minValueAlloc              int
@@ -286,8 +286,8 @@ func (store *defaultGroupStore) Stats(debug bool) fmt.Stringer {
 		stats.tombstoneDiscardInterval = store.tombstoneDiscardState.interval
 		stats.outPullReplicationWorkers = store.pullReplicationState.outWorkers
 		stats.outPullReplicationInterval = store.pullReplicationState.outInterval
-		stats.outPushReplicationWorkers = store.pushReplicationState.outWorkers
-		stats.outPushReplicationInterval = store.pushReplicationState.outInterval
+		stats.pushReplicationWorkers = store.pushReplicationState.workers
+		stats.pushReplicationInterval = store.pushReplicationState.interval
 		stats.valueCap = store.valueCap
 		stats.pageSize = store.pageSize
 		stats.minValueAlloc = store.minValueAlloc
@@ -378,8 +378,8 @@ func (stats *GroupStoreStats) String() string {
 			{"tombstoneDiscardInterval", fmt.Sprintf("%d", stats.tombstoneDiscardInterval)},
 			{"outPullReplicationWorkers", fmt.Sprintf("%d", stats.outPullReplicationWorkers)},
 			{"outPullReplicationInterval", fmt.Sprintf("%d", stats.outPullReplicationInterval)},
-			{"outPushReplicationWorkers", fmt.Sprintf("%d", stats.outPushReplicationWorkers)},
-			{"outPushReplicationInterval", fmt.Sprintf("%d", stats.outPushReplicationInterval)},
+			{"pushReplicationWorkers", fmt.Sprintf("%d", stats.pushReplicationWorkers)},
+			{"pushReplicationInterval", fmt.Sprintf("%d", stats.pushReplicationInterval)},
 			{"valueCap", fmt.Sprintf("%d", stats.valueCap)},
 			{"pageSize", fmt.Sprintf("%d", stats.pageSize)},
 			{"minValueAlloc", fmt.Sprintf("%d", stats.minValueAlloc)},

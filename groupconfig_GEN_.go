@@ -147,26 +147,22 @@ type GroupStoreConfig struct {
 	// an outgoing response message to an incoming pull replication message can
 	// be pending before just discarding it. defaults to MsgTimeout.
 	InPullReplicationResponseMsgTimeout int
-	// OutPushReplicationInterval overrides the BackgroundInterval value just
-	// for outgoing push replication passes.
-	OutPushReplicationInterval int
-	// OutPushReplicationWorkers indicates how many goroutines may be used for
+	// PushReplicationInterval overrides the BackgroundInterval value just for
+	// outgoing push replication passes.
+	PushReplicationInterval int
+	// PushReplicationWorkers indicates how many goroutines may be used for
 	// an outgoing push replication pass. defaults to Workers.
-	OutPushReplicationWorkers int
-	// OutPushReplicationMsgs indicates how many outgoing push-replication
-	// messages can be buffered before blocking on creating more. defaults to
-	// OutPushReplicationWorkers * 4.
-	OutPushReplicationMsgs int
-	// OutPushReplicationMsgTimeout indicates the maximum milliseconds an
+	PushReplicationWorkers int
+	// PushReplicationMsgTimeout indicates the maximum milliseconds an
 	// outgoing push replication message can be pending before just discarding
 	// it. defaults to MsgTimeout.
-	OutPushReplicationMsgTimeout int
+	PushReplicationMsgTimeout int
 	// BulkSetMsgCap indicates the maximum bytes for bulk-set messages.
 	// defaults to MsgCap.
 	BulkSetMsgCap int
 	// OutBulkSetMsgs indicates how many outgoing bulk-set messages can be
 	// buffered before blocking on creating more. defaults to
-	// OutPushReplicationWorkers * 4.
+	// PushReplicationWorkers * 4.
 	OutBulkSetMsgs int
 	// InBulkSetWorkers indicates how many incoming bulk-set messages can be
 	// processed at the same time. defaults to Workers.
@@ -583,49 +579,38 @@ func resolveGroupStoreConfig(c *GroupStoreConfig) *GroupStoreConfig {
 	if cfg.InPullReplicationResponseMsgTimeout < 1 {
 		cfg.InPullReplicationResponseMsgTimeout = 100
 	}
-	if env := os.Getenv("GROUPSTORE_OUT_PUSH_REPLICATION_INTERVAL"); env != "" {
+	if env := os.Getenv("GROUPSTORE_PUSH_REPLICATION_INTERVAL"); env != "" {
 		if val, err := strconv.Atoi(env); err == nil {
-			cfg.OutPushReplicationInterval = val
+			cfg.PushReplicationInterval = val
 		}
 	}
-	if cfg.OutPushReplicationInterval == 0 {
-		cfg.OutPushReplicationInterval = cfg.BackgroundInterval
+	if cfg.PushReplicationInterval == 0 {
+		cfg.PushReplicationInterval = cfg.BackgroundInterval
 	}
-	if cfg.OutPushReplicationInterval < 1 {
-		cfg.OutPushReplicationInterval = 1
+	if cfg.PushReplicationInterval < 1 {
+		cfg.PushReplicationInterval = 1
 	}
-	if env := os.Getenv("GROUPSTORE_OUT_PUSH_REPLICATION_WORKERS"); env != "" {
+	if env := os.Getenv("GROUPSTORE_PUSH_REPLICATION_WORKERS"); env != "" {
 		if val, err := strconv.Atoi(env); err == nil {
-			cfg.OutPushReplicationWorkers = val
+			cfg.PushReplicationWorkers = val
 		}
 	}
-	if cfg.OutPushReplicationWorkers == 0 {
-		cfg.OutPushReplicationWorkers = cfg.Workers
+	if cfg.PushReplicationWorkers == 0 {
+		cfg.PushReplicationWorkers = cfg.Workers
 	}
-	if cfg.OutPushReplicationWorkers < 1 {
-		cfg.OutPushReplicationWorkers = 1
+	if cfg.PushReplicationWorkers < 1 {
+		cfg.PushReplicationWorkers = 1
 	}
-	if env := os.Getenv("GROUPSTORE_OUT_PUSH_REPLICATION_MSGS"); env != "" {
+	if env := os.Getenv("GROUPSTORE_PUSH_REPLICATION_MSG_TIMEOUT"); env != "" {
 		if val, err := strconv.Atoi(env); err == nil {
-			cfg.OutPushReplicationMsgs = val
+			cfg.PushReplicationMsgTimeout = val
 		}
 	}
-	if cfg.OutPushReplicationMsgs == 0 {
-		cfg.OutPushReplicationMsgs = cfg.OutPushReplicationWorkers * 4
+	if cfg.PushReplicationMsgTimeout == 0 {
+		cfg.PushReplicationMsgTimeout = cfg.MsgTimeout
 	}
-	if cfg.OutPushReplicationMsgs < 1 {
-		cfg.OutPushReplicationMsgs = 1
-	}
-	if env := os.Getenv("GROUPSTORE_OUT_PUSH_REPLICATION_MSG_TIMEOUT"); env != "" {
-		if val, err := strconv.Atoi(env); err == nil {
-			cfg.OutPushReplicationMsgTimeout = val
-		}
-	}
-	if cfg.OutPushReplicationMsgTimeout == 0 {
-		cfg.OutPushReplicationMsgTimeout = cfg.MsgTimeout
-	}
-	if cfg.OutPushReplicationMsgTimeout < 1 {
-		cfg.OutPushReplicationMsgTimeout = 100
+	if cfg.PushReplicationMsgTimeout < 1 {
+		cfg.PushReplicationMsgTimeout = 100
 	}
 	if env := os.Getenv("GROUPSTORE_BULK_SET_MSG_CAP"); env != "" {
 		if val, err := strconv.Atoi(env); err == nil {
@@ -644,7 +629,7 @@ func resolveGroupStoreConfig(c *GroupStoreConfig) *GroupStoreConfig {
 		}
 	}
 	if cfg.OutBulkSetMsgs == 0 {
-		cfg.OutBulkSetMsgs = cfg.OutPushReplicationWorkers * 4
+		cfg.OutBulkSetMsgs = cfg.PushReplicationWorkers * 4
 	}
 	if cfg.OutBulkSetMsgs < 1 {
 		cfg.OutBulkSetMsgs = 1
