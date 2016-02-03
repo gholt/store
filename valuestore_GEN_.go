@@ -159,14 +159,14 @@ type valueLocBlock interface {
 // referenced by 128 bit keys; the store, restart channel (chan error), or any
 // error during construction is returned.
 //
-// The restart channel should be read from continually during the life of the
-// store and, upon any error from the channel, the store should be discarded
-// and a new one created in its place. This restart procedure is needed when
-// data on disk is detected as corrupted and cannot be easily recovered from; a
-// restart will cause only good entries to be loaded therefore discarding any
-// bad entries due to the corruption. A restart may also be requested if the
-// store reaches an unrecoverable state, such as no longer being able to open
-// new files.
+// The restart channel (chan error) should be read from continually during the
+// life of the store and, upon any error from the channel, the store should be
+// restarted with Shutdown() and Startup(). This restart procedure is needed
+// when data on disk is detected as corrupted and cannot be easily recovered
+// from; a restart will cause only good entries to be loaded therefore
+// discarding any bad entries due to the corruption. A restart may also be
+// requested if the store reaches an unrecoverable state, such as no longer
+// being able to open new files.
 //
 // Note that a lot of buffering, multiple cores, and background processes can
 // be in use and therefore Shutdown() should be called prior to the process

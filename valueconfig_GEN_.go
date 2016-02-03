@@ -70,8 +70,7 @@ type ValueStoreConfig struct {
 	ChecksumInterval int
 	// PageSize controls the size of each chunk of memory allocated. defaults
 	// to 4,194,304 bytes.
-	PageSize      int
-	minValueAlloc int
+	PageSize int
 	// WritePagesPerWorker controls how many pages are created per worker for
 	// caching recently written values. defaults to 3.
 	WritePagesPerWorker int
@@ -257,6 +256,8 @@ type ValueStoreConfig struct {
 	Remove            func(fullPath string) error
 	Rename            func(oldFullPath string, newFullPath string) error
 	IsNotExist        func(err error) bool
+
+	minValueAlloc int
 }
 
 func resolveValueStoreConfig(c *ValueStoreConfig) *ValueStoreConfig {
