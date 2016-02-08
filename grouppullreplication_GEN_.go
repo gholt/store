@@ -386,12 +386,10 @@ func (store *defaultGroupStore) outPullReplicationPass(notifyChan chan *bgNotifi
 	if store.msgRing == nil {
 		return nil
 	}
-	if store.logDebug != nil {
-		begin := time.Now()
-		defer func() {
-			store.logDebug("outPullReplication: pass took %s", time.Now().Sub(begin))
-		}()
-	}
+	begin := time.Now()
+	defer func() {
+		store.logDebug("outPullReplication: pass took %s", time.Now().Sub(begin))
+	}()
 	ring := store.msgRing.Ring()
 	if ring == nil {
 		return nil

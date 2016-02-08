@@ -111,12 +111,10 @@ func (store *defaultGroupStore) auditLauncher(notifyChan chan *bgNotification) {
 // eventually the background audits will try to slow themselves down to finish
 // in approximately the store.auditState.interval.
 func (store *defaultGroupStore) auditPass(speed bool, notifyChan chan *bgNotification) *bgNotification {
-	if store.logDebug != nil {
-		begin := time.Now()
-		defer func() {
-			store.logDebug("audit: took %s", time.Now().Sub(begin))
-		}()
-	}
+	begin := time.Now()
+	defer func() {
+		store.logDebug("audit: took %s", time.Now().Sub(begin))
+	}()
 	names, err := store.readdirnames(store.pathtoc)
 	if err != nil {
 		store.logError("audit: %s", err)
@@ -148,20 +146,14 @@ func (store *defaultGroupStore) auditPass(speed bool, notifyChan chan *bgNotific
 			continue
 		}
 		if namets == int64(atomic.LoadUint64(&store.activeTOCA)) || namets == int64(atomic.LoadUint64(&store.activeTOCB)) {
-			if store.logDebug != nil {
-				store.logDebug("audit: skipping current %s", names[i])
-			}
+			store.logDebug("audit: skipping current %s", names[i])
 			continue
 		}
 		if namets >= time.Now().UnixNano()-store.auditState.ageThreshold {
-			if store.logDebug != nil {
-				store.logDebug("audit: skipping young %s", names[i])
-			}
+			store.logDebug("audit: skipping young %s", names[i])
 			continue
 		}
-		if store.logDebug != nil {
-			store.logDebug("audit: checking %s", names[i])
-		}
+		store.logDebug("audit: checking %s", names[i])
 		failedAudit := uint32(0)
 		canceledAudit := uint32(0)
 		dataName := names[i][:len(names[i])-3]
@@ -169,9 +161,7 @@ func (store *defaultGroupStore) auditPass(speed bool, notifyChan chan *bgNotific
 		if err != nil {
 			atomic.AddUint32(&failedAudit, 1)
 			if store.isNotExist(err) {
-				if store.logDebug != nil {
-					store.logDebug("audit: error opening %s: %s", dataName, err)
-				}
+				store.logDebug("audit: error opening %s: %s", dataName, err)
 			} else {
 				store.logError("audit: error opening %s: %s", dataName, err)
 			}
@@ -262,13 +252,9 @@ func (store *defaultGroupStore) auditPass(speed bool, notifyChan chan *bgNotific
 			}
 		}
 		if atomic.LoadUint32(&canceledAudit) != 0 {
-			if store.logDebug != nil {
-				store.logDebug("audit: canceled during %s", names[i])
-			}
+			store.logDebug("audit: canceled during %s", names[i])
 		} else if atomic.LoadUint32(&failedAudit) == 0 {
-			if store.logDebug != nil {
-				store.logDebug("audit: passed %s", names[i])
-			}
+			store.logDebug("audit: passed %s", names[i])
 		} else {
 			store.logError("audit: failed %s", names[i])
 			nextNotificationChan := make(chan *bgNotification, 1)

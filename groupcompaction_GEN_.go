@@ -101,12 +101,10 @@ type groupCompactionJob struct {
 }
 
 func (store *defaultGroupStore) compactionPass(notifyChan chan *bgNotification) *bgNotification {
-	if store.logDebug != nil {
-		begin := time.Now()
-		defer func() {
-			store.logDebug("compaction: pass took %s", time.Now().Sub(begin))
-		}()
-	}
+	begin := time.Now()
+	defer func() {
+		store.logDebug("compaction: pass took %s", time.Now().Sub(begin))
+	}()
 	names, err := store.readdirnames(store.pathtoc)
 	if err != nil {
 		store.logError("compaction: %s", err)
@@ -278,9 +276,7 @@ func (store *defaultGroupStore) needsCompaction(nametoc string, candidateBlockID
 		store.logError("compaction: since there were errors while reading %s, compaction is needed", nametoc)
 		return true
 	}
-	if store.logDebug != nil {
-		store.logDebug("compaction: sample result: %s had %d entries; checked %d entries, %d were stale", nametoc, total, checked, stale)
-	}
+	store.logDebug("compaction: sample result: %s had %d entries; checked %d entries, %d were stale", nametoc, total, checked, stale)
 	return stale > uint32(float64(checked)*store.compactionState.threshold)
 }
 
@@ -372,9 +368,7 @@ func (store *defaultGroupStore) compactFile(nametoc string, blockID uint32, cont
 				}
 			}
 		}
-		if store.logDebug != nil {
-			store.logDebug("compactFile: %s (total %d, rewrote %d, stale %d)", nametoc, atomic.LoadUint32(&count), atomic.LoadUint32(&rewrote), atomic.LoadUint32(&stale))
-		}
+		store.logDebug("compactFile: %s (total %d, rewrote %d, stale %d)", nametoc, atomic.LoadUint32(&count), atomic.LoadUint32(&rewrote), atomic.LoadUint32(&stale))
 	}
 	fpr, err := store.openReadSeeker(fullpathtoc)
 	if err != nil {
@@ -389,9 +383,7 @@ func (store *defaultGroupStore) compactFile(nametoc string, blockID uint32, cont
 	}
 	select {
 	case <-controlChan:
-		if store.logDebug != nil {
-			store.logDebug("compactFile: canceled compaction of %s.", nametoc)
-		}
+		store.logDebug("compactFile: canceled compaction of %s.", nametoc)
 		spindown(false)
 		return
 	default:

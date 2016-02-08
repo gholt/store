@@ -30,9 +30,8 @@ type defaultValueStore struct {
 
 	logCritical             LogFunc
 	logError                LogFunc
-	logWarning              LogFunc
-	logInfo                 LogFunc
 	logDebug                LogFunc
+	logDebugOn              bool
 	randMutex               sync.Mutex
 	rand                    *rand.Rand
 	freeableMemBlockChans   []chan *valueMemBlock
@@ -181,9 +180,8 @@ func NewValueStore(c *ValueStoreConfig) (ValueStore, chan error) {
 	store := &defaultValueStore{
 		logCritical:             cfg.LogCritical,
 		logError:                cfg.LogError,
-		logWarning:              cfg.LogWarning,
-		logInfo:                 cfg.LogInfo,
 		logDebug:                cfg.LogDebug,
+		logDebugOn:              cfg.LogDebug != nil,
 		rand:                    cfg.Rand,
 		path:                    cfg.Path,
 		pathtoc:                 cfg.PathTOC,
@@ -208,6 +206,15 @@ func NewValueStore(c *ValueStoreConfig) (ValueStore, chan error) {
 		remove:                  cfg.Remove,
 		rename:                  cfg.Rename,
 		isNotExist:              cfg.IsNotExist,
+	}
+	if store.logCritical == nil {
+		store.logCritical = nilLogFunc
+	}
+	if store.logError == nil {
+		store.logError = nilLogFunc
+	}
+	if store.logDebug == nil {
+		store.logDebug = nilLogFunc
 	}
 	store.tombstoneDiscardConfig(cfg)
 	store.compactionConfig(cfg)
@@ -939,7 +946,7 @@ func (store *defaultValueStore) recovery() error {
 					if wr.TimestampBits&_TSB_LOCAL_REMOVAL != 0 {
 						wr.BlockID = 0
 					}
-					if store.logDebug != nil {
+					if store.logDebugOn {
 						if store.locmap.Set(wr.KeyA, wr.KeyB, wr.TimestampBits, wr.BlockID, wr.Offset, wr.Length, true) < wr.TimestampBits {
 							atomic.AddInt64(&causedChangeCount, 1)
 						}
@@ -1005,21 +1012,17 @@ func (store *defaultValueStore) recovery() error {
 		closeIfCloser(fpr)
 	}
 	spindown()
-	if store.logDebug != nil {
+	if store.logDebugOn {
 		dur := time.Now().Sub(start)
 		stats := store.Stats(false).(*ValueStoreStats)
 		store.logDebug("recovery: %d key locations loaded in %s, %.0f/s; %d caused change; %d resulting locations referencing %d bytes.", fromDiskCount, dur, float64(fromDiskCount)/(float64(dur)/float64(time.Second)), causedChangeCount, stats.Values, stats.ValueBytes)
 	}
 	if len(compactNames) > 0 {
-		if store.logDebug != nil {
-			store.logDebug("recovery: secondary recovery started for %d files.", len(compactNames))
-		}
+		store.logDebug("recovery: secondary recovery started for %d files.", len(compactNames))
 		for i, name := range compactNames {
 			store.compactFile(name, compactBlockIDs[i], make(chan struct{}))
 		}
-		if store.logDebug != nil {
-			store.logDebug("recovery: secondary recovery completed.")
-		}
+		store.logDebug("recovery: secondary recovery completed.")
 	}
 	return nil
 }

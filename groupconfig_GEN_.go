@@ -22,33 +22,29 @@ const _GROUP_PAGE_SIZE_MIN = 8 + _GROUP_FILE_ENTRY_SIZE
 // structure will have no effect on existing GroupStores; but deep changes
 // (such as reconfiguring an existing Logger) will.
 type GroupStoreConfig struct {
-	// LogCritical sets the func to use for critical messages. defaults logging
-	// to os.Stderr.
+	// LogCritical sets the func to use for critical messages; these are
+	// messages about issues that render the store inoperative. Defaults
+	// logging to os.Stderr.
 	LogCritical LogFunc
-	// LogError sets the func to use for error messages. defaults logging to
-	// os.Stderr.
+	// LogError sets the func to use for error messages; these are messages
+	// about errors the store cannot correct or workaround on its own. Defaults
+	// logging to os.Stderr.
 	LogError LogFunc
-	// LogWarning sets the func to use for warning messages. defaults logging
-	// to os.Stderr.
-	LogWarning LogFunc
-	// LogInfo sets the func to use for info messages. defaults logging to
-	// os.Stdout.
-	LogInfo LogFunc
-	// LogDebug sets the func to use for debug messages. defaults not logging
+	// LogDebug sets the func to use for debug messages. Defaults not logging
 	// debug messages.
 	LogDebug LogFunc
-	// Rand sets the rand.Rand to use as a random data source. defaults to a
+	// Rand sets the rand.Rand to use as a random data source. Defaults to a
 	// new randomizer based on the current time.
 	Rand *rand.Rand
 	// Path sets the path where group files will be written; grouptoc files
-	// will also be written here unless overridden with PathTOC. defaults to
+	// will also be written here unless overridden with PathTOC. Defaults to
 	// the current working directory.
 	Path string
-	// PathTOC sets the path where grouptoc files will be written. defaults to
+	// PathTOC sets the path where grouptoc files will be written. Defaults to
 	// the Path value.
 	PathTOC string
 	// ValueCap indicates the maximum number of bytes any given value may be.
-	// defaults to 1,048,576 bytes.
+	// Defaults to 1,048,576 bytes.
 	ValueCap int
 	// BackgroundInterval indicates the minimum number of seconds between the
 	// starts of background passes (such as discarding expired tombstones
@@ -62,143 +58,143 @@ type GroupStoreConfig struct {
 	BackgroundInterval int
 	// Workers indicates how many goroutines may be used for various tasks
 	// (processing incoming writes and batching them to disk, background tasks,
-	// etc.). This will also have an impact on memory usage. defaults to
+	// etc.). This will also have an impact on memory usage. Defaults to
 	// GOMAXPROCS.
 	Workers int
 	// ChecksumInterval indicates how many bytes are output to a file before a
-	// 4-byte checksum is also output. defaults to 65,532 bytes.
+	// 4-byte checksum is also output. Defaults to 65,532 bytes.
 	ChecksumInterval int
-	// PageSize controls the size of each chunk of memory allocated. defaults
+	// PageSize controls the size of each chunk of memory allocated. Defaults
 	// to 4,194,304 bytes.
 	PageSize int
 	// WritePagesPerWorker controls how many pages are created per worker for
-	// caching recently written values. defaults to 3.
+	// caching recently written values. Defaults to 3.
 	WritePagesPerWorker int
 	// GroupLocMap allows overriding the default GroupLocMap, an interface
 	// used by GroupStore for tracking the mappings from keys to the locations
-	// of their values. defaults to
+	// of their values. Defaults to
 	// github.com/gholt/locmap.NewGroupLocMap().
 	GroupLocMap locmap.GroupLocMap
 	// MsgRing sets the ring.MsgRing to use for determining the key ranges the
 	// GroupStore is responsible for as well as providing methods to send
 	// messages to other nodes.
 	MsgRing ring.MsgRing
-	// MsgCap indicates the maximum bytes for outgoing messages. defaults to
+	// MsgCap indicates the maximum bytes for outgoing messages. Defaults to
 	// 16,777,216 bytes.
 	MsgCap int
 	// MsgTimeout indicates the maximum milliseconds a message can be pending
-	// before just discarding it. defaults to 100 milliseconds.
+	// before just discarding it. Defaults to 100 milliseconds.
 	MsgTimeout int
 	// FileCap indicates how large a file can be before closing it and opening
-	// a new one. defaults to 4,294,967,295 bytes.
+	// a new one. Defaults to 4,294,967,295 bytes.
 	FileCap int
 	// FileReaders indicates how many open file descriptors are allowed per
-	// file for reading. defaults to Workers.
+	// file for reading. Defaults to Workers.
 	FileReaders int
 	// RecoveryBatchSize indicates how many keys to set in a batch while
-	// performing recovery (initial start up). defaults to 1,048,576 keys.
+	// performing recovery (initial start up). Defaults to 1,048,576 keys.
 	RecoveryBatchSize int
 	// TombstoneDiscardInterval overrides the BackgroundInterval value just for
 	// discard passes (discarding expired tombstones [deletion markers]).
 	TombstoneDiscardInterval int
 	// TombstoneDiscardBatchSize indicates how many items to queue up before
 	// pausing a scan, issuing the actual discards, and resuming the scan
-	// again. defaults to 1,048,576 items.
+	// again. Defaults to 1,048,576 items.
 	TombstoneDiscardBatchSize int
 	// TombstoneAge indicates how many seconds old a deletion marker may be
-	// before it is permanently removed. defaults to 14,400 seconds (4 hours).
+	// before it is permanently removed. Defaults to 14,400 seconds (4 hours).
 	TombstoneAge int
 	// ReplicationIgnoreRecent indicates how many seconds old a value should be
-	// before it is included in replication processing. defaults to 60 seconds.
+	// before it is included in replication processing. Defaults to 60 seconds.
 	ReplicationIgnoreRecent int
 	// OutPullReplicationInterval overrides the BackgroundInterval value just
 	// for outgoing pull replication passes.
 	OutPullReplicationInterval int
 	// OutPullReplicationWorkers indicates how many goroutines may be used for
-	// an outgoing pull replication pass. defaults to Workers.
+	// an outgoing pull replication pass. Defaults to Workers.
 	OutPullReplicationWorkers int
 	// OutPullReplicationMsgs indicates how many outgoing pull-replication
-	// messages can be buffered before blocking on creating more. defaults to
+	// messages can be buffered before blocking on creating more. Defaults to
 	// OutPullReplicationWorkers * 4.
 	OutPullReplicationMsgs int
 	// OutPullReplicationBloomN indicates the N-factor for the outgoing
 	// pull-replication bloom filters. This indicates how many keys the bloom
 	// filter can reasonably hold and, in combination with the P-factor,
-	// affects memory usage. defaults to 1,000,000.
+	// affects memory usage. Defaults to 1,000,000.
 	OutPullReplicationBloomN int
 	// OutPullReplicationBloomP indicates the P-factor for the outgoing
 	// pull-replication bloom filters. This indicates the desired percentage
 	// chance of a collision within the bloom filter and, in combination with
-	// the N-factor, affects memory usage. defaults to 0.001.
+	// the N-factor, affects memory usage. Defaults to 0.001.
 	OutPullReplicationBloomP float64
 	// OutPullReplicationMsgTimeout indicates the maximum milliseconds an
 	// outgoing pull replication message can be pending before just discarding
-	// it. defaults to MsgTimeout.
+	// it. Defaults to MsgTimeout.
 	OutPullReplicationMsgTimeout int
 	// InPullReplicationWorkers indicates how many incoming pull-replication
-	// messages can be processed at the same time. defaults to Workers.
+	// messages can be processed at the same time. Defaults to Workers.
 	InPullReplicationWorkers int
 	// InPullReplicationMsgs indicates how many incoming pull-replication
-	// messages can be buffered before dropping additional ones. defaults to
+	// messages can be buffered before dropping additional ones. Defaults to
 	// InPullReplicationWorkers * 4.
 	InPullReplicationMsgs int
 	// InPullReplicationResponseMsgTimeout indicates the maximum milliseconds
 	// an outgoing response message to an incoming pull replication message can
-	// be pending before just discarding it. defaults to MsgTimeout.
+	// be pending before just discarding it. Defaults to MsgTimeout.
 	InPullReplicationResponseMsgTimeout int
 	// PushReplicationInterval overrides the BackgroundInterval value just for
 	// outgoing push replication passes.
 	PushReplicationInterval int
 	// PushReplicationWorkers indicates how many goroutines may be used for
-	// an outgoing push replication pass. defaults to Workers.
+	// an outgoing push replication pass. Defaults to Workers.
 	PushReplicationWorkers int
 	// PushReplicationMsgTimeout indicates the maximum milliseconds an
 	// outgoing push replication message can be pending before just discarding
-	// it. defaults to MsgTimeout.
+	// it. Defaults to MsgTimeout.
 	PushReplicationMsgTimeout int
 	// BulkSetMsgCap indicates the maximum bytes for bulk-set messages.
-	// defaults to MsgCap.
+	// Defaults to MsgCap.
 	BulkSetMsgCap int
 	// OutBulkSetMsgs indicates how many outgoing bulk-set messages can be
-	// buffered before blocking on creating more. defaults to
+	// buffered before blocking on creating more. Defaults to
 	// PushReplicationWorkers * 4.
 	OutBulkSetMsgs int
 	// InBulkSetWorkers indicates how many incoming bulk-set messages can be
-	// processed at the same time. defaults to Workers.
+	// processed at the same time. Defaults to Workers.
 	InBulkSetWorkers int
 	// InBulkSetMsgs indicates how many incoming bulk-set messages can be
-	// buffered before dropping additional ones. defaults to InBulkSetWorkers *
+	// buffered before dropping additional ones. Defaults to InBulkSetWorkers *
 	// 4.
 	InBulkSetMsgs int
 	// InBulkSetResponseMsgTimeout indicates the maximum milliseconds a
 	// response message to an incoming bulk-set message can be pending before
-	// just discarding it. defaults to MsgTimeout.
+	// just discarding it. Defaults to MsgTimeout.
 	InBulkSetResponseMsgTimeout int
 	// BulkSetAckMsgCap indicates the maximum bytes for bulk-set-ack messages.
-	// defaults to MsgCap.
+	// Defaults to MsgCap.
 	BulkSetAckMsgCap int
 	// InBulkSetAckWorkers indicates how many incoming bulk-set-ack messages
-	// can be processed at the same time. defaults to Workers.
+	// can be processed at the same time. Defaults to Workers.
 	InBulkSetAckWorkers int
 	// InBulkSetAckMsgs indicates how many incoming bulk-set-ack messages can
-	// be buffered before dropping additional ones. defaults to
+	// be buffered before dropping additional ones. Defaults to
 	// InBulkSetAckWorkers * 4.
 	InBulkSetAckMsgs int
 	// OutBulkSetAckMsgs indicates how many outgoing bulk-set-ack messages can
-	// be buffered before blocking on creating more. defaults to
+	// be buffered before blocking on creating more. Defaults to
 	// InBulkSetWorkers * 4.
 	OutBulkSetAckMsgs int
 	// CompactionInterval overrides the BackgroundInterval value just for
 	// compaction passes.
 	CompactionInterval int
 	// CompactionWorkers indicates how much concurrency is allowed for
-	// compaction. defaults to Workers.
+	// compaction. Defaults to Workers.
 	CompactionWorkers int
 	// CompactionThreshold indicates how much waste a given file may have
-	// before it is compacted. defaults to 0.10 (10%).
+	// before it is compacted. Defaults to 0.10 (10%).
 	CompactionThreshold float64
 	// CompactionAgeThreshold indicates how old a given file must be before it
-	// is considered for compaction. defaults to 300 seconds.
+	// is considered for compaction. Defaults to 300 seconds.
 	CompactionAgeThreshold int
 	// FreeDisableThreshold controls when to automatically disable writes; the
 	// number is in bytes. If the number of free bytes on either the Path or
@@ -245,7 +241,7 @@ type GroupStoreConfig struct {
 	// default audit interval is 604,800 seconds (1 week).
 	AuditInterval int
 	// AuditAgeThreshold indicates how old a given file must be before it
-	// is considered for an audit. defaults to 604,800 seconds (1 week).
+	// is considered for an audit. Defaults to 604,800 seconds (1 week).
 	AuditAgeThreshold int
 
 	OpenReadSeeker    func(fullPath string) (io.ReadSeeker, error)
@@ -270,12 +266,6 @@ func resolveGroupStoreConfig(c *GroupStoreConfig) *GroupStoreConfig {
 	}
 	if cfg.LogError == nil {
 		cfg.LogError = log.New(os.Stderr, "GroupStore ", log.LstdFlags).Printf
-	}
-	if cfg.LogWarning == nil {
-		cfg.LogWarning = log.New(os.Stderr, "GroupStore ", log.LstdFlags).Printf
-	}
-	if cfg.LogInfo == nil {
-		cfg.LogInfo = log.New(os.Stdout, "GroupStore ", log.LstdFlags).Printf
 	}
 	// LogDebug set as nil is fine and shortcircuits any debug code.
 	if cfg.Rand == nil {

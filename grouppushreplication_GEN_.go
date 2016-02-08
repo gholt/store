@@ -100,12 +100,10 @@ func (store *defaultGroupStore) pushReplicationPass(notifyChan chan *bgNotificat
 	if store.msgRing == nil {
 		return nil
 	}
-	if store.logDebug != nil {
-		begin := time.Now()
-		defer func() {
-			store.logDebug("pushReplication: pass took %s", time.Now().Sub(begin))
-		}()
-	}
+	begin := time.Now()
+	defer func() {
+		store.logDebug("pushReplication: pass took %s", time.Now().Sub(begin))
+	}()
 	ring := store.msgRing.Ring()
 	if ring == nil {
 		return nil
