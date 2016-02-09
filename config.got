@@ -2,7 +2,6 @@ package store
 
 import (
     "io"
-    "log"
     "math"
     "math/rand"
     "os"
@@ -261,13 +260,6 @@ func resolve{{.T}}StoreConfig(c *{{.T}}StoreConfig) *{{.T}}StoreConfig {
     if c != nil {
         *cfg = *c
     }
-    if cfg.LogCritical == nil {
-        cfg.LogCritical = log.New(os.Stderr, "CRITICAL: {{.T}}Store: ", log.LstdFlags).Printf
-    }
-    if cfg.LogError == nil {
-        cfg.LogError = log.New(os.Stderr, "ERROR: {{.T}}Store: ", log.LstdFlags).Printf
-    }
-    // LogDebug set as nil is fine and shortcircuits any debug code.
     if cfg.Rand == nil {
         cfg.Rand = rand.New(rand.NewSource(time.Now().UnixNano()))
     }

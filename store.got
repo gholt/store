@@ -16,8 +16,9 @@ import (
     "sync/atomic"
     "time"
 
-    "github.com/gholt/ring"
     "github.com/gholt/locmap"
+    "github.com/gholt/ring"
+    "github.com/gholt/simplelogger"
     "github.com/spaolacci/murmur3"
     "gopkg.in/gholt/brimutil.v1"
 )
@@ -210,11 +211,12 @@ func New{{.T}}Store(c *{{.T}}StoreConfig) ({{.T}}Store, chan error) {
         rename:                     cfg.Rename,
         isNotExist:                 cfg.IsNotExist,
     }
+    logger := simplelogger.New("{{.t}}-store", os.Stdout, os.Stderr)
     if store.logCritical == nil {
-        store.logCritical = nilLogFunc
+        store.logCritical = logger.CriticalPrintf
     }
     if store.logError == nil {
-        store.logError = nilLogFunc
+        store.logError = logger.ErrorPrintf
     }
     if store.logDebug == nil {
         store.logDebug = nilLogFunc

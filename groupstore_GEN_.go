@@ -18,6 +18,7 @@ import (
 
 	"github.com/gholt/locmap"
 	"github.com/gholt/ring"
+	"github.com/gholt/simplelogger"
 	"github.com/spaolacci/murmur3"
 	"gopkg.in/gholt/brimutil.v1"
 )
@@ -210,11 +211,12 @@ func NewGroupStore(c *GroupStoreConfig) (GroupStore, chan error) {
 		rename:                  cfg.Rename,
 		isNotExist:              cfg.IsNotExist,
 	}
+	logger := simplelogger.New("group-store", os.Stdout, os.Stderr)
 	if store.logCritical == nil {
-		store.logCritical = nilLogFunc
+		store.logCritical = logger.CriticalPrintf
 	}
 	if store.logError == nil {
-		store.logError = nilLogFunc
+		store.logError = logger.ErrorPrintf
 	}
 	if store.logDebug == nil {
 		store.logDebug = nilLogFunc
