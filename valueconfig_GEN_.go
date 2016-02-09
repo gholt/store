@@ -24,14 +24,14 @@ type ValueStoreConfig struct {
 	// LogCritical sets the func to use for critical messages; these are
 	// messages about issues that render the store inoperative. Defaults
 	// logging to os.Stderr.
-	LogCritical LogFunc
+	LogCritical func(fmt string, args ...interface{})
 	// LogError sets the func to use for error messages; these are messages
 	// about errors the store cannot correct or workaround on its own. Defaults
 	// logging to os.Stderr.
-	LogError LogFunc
+	LogError func(fmt string, args ...interface{})
 	// LogDebug sets the func to use for debug messages. Defaults not logging
 	// debug messages.
-	LogDebug LogFunc
+	LogDebug func(fmt string, args ...interface{})
 	// Rand sets the rand.Rand to use as a random data source. Defaults to a
 	// new randomizer based on the current time.
 	Rand *rand.Rand

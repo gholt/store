@@ -29,9 +29,9 @@ type defaultValueStore struct {
 	// 0 = not running, 1 = running, 2 = can't run due to previous error
 	running int
 
-	logCritical             LogFunc
-	logError                LogFunc
-	logDebug                LogFunc
+	logCritical             func(string, ...interface{})
+	logError                func(string, ...interface{})
+	logDebug                func(string, ...interface{})
 	logDebugOn              bool
 	randMutex               sync.Mutex
 	rand                    *rand.Rand
@@ -216,7 +216,7 @@ func NewValueStore(c *ValueStoreConfig) (ValueStore, chan error) {
 		store.logError = logger.ErrorPrintf
 	}
 	if store.logDebug == nil {
-		store.logDebug = nilLogFunc
+		store.logDebug = func(string, ...interface{}) {}
 	}
 	store.tombstoneDiscardConfig(cfg)
 	store.compactionConfig(cfg)

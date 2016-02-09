@@ -176,10 +176,6 @@ func osCreateWriteCloser(fullPath string) (io.WriteCloser, error) {
 	return os.Create(fullPath)
 }
 
-type LogFunc func(format string, v ...interface{})
-
-func nilLogFunc(format string, v ...interface{}) {}
-
 type bgNotificationAction int
 
 const (
