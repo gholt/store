@@ -437,13 +437,17 @@ func (store *defaultGroupStore) LookupGroup(keyA uint64, keyB uint64) []LookupGr
 	}
 	atomic.AddInt32(&store.lookupGroupItems, int32(len(items)))
 	rv := make([]LookupGroupItem, len(items))
-	for i, item := range items {
-		rv[i].NameKeyA = item.NameKeyA
-		rv[i].NameKeyB = item.NameKeyB
-		rv[i].TimestampMicro = item.Timestamp >> _TSB_UTIL_BITS
-		rv[i].Length = item.Length
+	i := 0
+	for _, item := range items {
+		if item.Timestamp&_TSB_DELETION == 0 {
+			rv[i].NameKeyA = item.NameKeyA
+			rv[i].NameKeyB = item.NameKeyB
+			rv[i].TimestampMicro = item.Timestamp >> _TSB_UTIL_BITS
+			rv[i].Length = item.Length
+			i++
+		}
 	}
-	return rv
+	return rv[:i]
 }
 
 func (store *defaultGroupStore) Read(keyA uint64, keyB uint64, nameKeyA uint64, nameKeyB uint64, value []byte) (int64, []byte, error) {
