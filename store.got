@@ -437,7 +437,6 @@ func (store *default{{.T}}Store) LookupGroup(keyA uint64, keyB uint64) []LookupG
     if len(items) == 0 {
         return nil
     }
-    atomic.AddInt32(&store.lookupGroupItems, int32(len(items)))
     rv := make([]LookupGroupItem, len(items))
     i := 0
     for _, item := range items {
@@ -449,6 +448,7 @@ func (store *default{{.T}}Store) LookupGroup(keyA uint64, keyB uint64) []LookupG
             i++
         }
     }
+    atomic.AddInt32(&store.lookupGroupItems, int32(i))
     return rv[:i]
 }
 {{end}}
