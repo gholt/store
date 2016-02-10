@@ -16,9 +16,9 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/gholt/flog"
 	"github.com/gholt/locmap"
 	"github.com/gholt/ring"
-	"github.com/gholt/simplelogger"
 	"github.com/spaolacci/murmur3"
 	"gopkg.in/gholt/brimutil.v1"
 )
@@ -211,12 +211,11 @@ func NewGroupStore(c *GroupStoreConfig) (GroupStore, chan error) {
 		rename:                  cfg.Rename,
 		isNotExist:              cfg.IsNotExist,
 	}
-	logger := simplelogger.New("group-store", os.Stdout, os.Stderr)
 	if store.logCritical == nil {
-		store.logCritical = logger.CriticalPrintf
+		store.logCritical = flog.Std.CriticalPrintf
 	}
 	if store.logError == nil {
-		store.logError = logger.ErrorPrintf
+		store.logError = flog.Std.ErrorPrintf
 	}
 	if store.logDebug == nil {
 		store.logDebug = func(string, ...interface{}) {}
