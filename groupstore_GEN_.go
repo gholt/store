@@ -212,10 +212,10 @@ func NewGroupStore(c *GroupStoreConfig) (GroupStore, chan error) {
 		isNotExist:              cfg.IsNotExist,
 	}
 	if store.logCritical == nil {
-		store.logCritical = flog.Std.CriticalPrintf
+		store.logCritical = flog.Default.CriticalPrintf
 	}
 	if store.logError == nil {
-		store.logError = flog.Std.ErrorPrintf
+		store.logError = flog.Default.ErrorPrintf
 	}
 	if store.logDebug == nil {
 		store.logDebug = func(string, ...interface{}) {}
