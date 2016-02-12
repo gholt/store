@@ -16,11 +16,11 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/gholt/brimio"
 	"github.com/gholt/flog"
 	"github.com/gholt/locmap"
 	"github.com/gholt/ring"
 	"github.com/spaolacci/murmur3"
-	"gopkg.in/gholt/brimutil.v1"
 )
 
 // defaultGroupStore instances are created with NewGroupStore.
@@ -931,7 +931,7 @@ OuterLoop:
 					fatal(9, err)
 					continue OuterLoop
 				}
-				writerA = brimutil.NewMultiCoreChecksummedWriter(fp, int(store.checksumInterval), murmur3.New32, store.workers)
+				writerA = brimio.NewMultiCoreChecksummedWriter(fp, int(store.checksumInterval), murmur3.New32, store.workers)
 				if _, err = writerA.Write(head); err != nil {
 					fatal(10, err)
 					continue OuterLoop

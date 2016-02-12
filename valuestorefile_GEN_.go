@@ -13,8 +13,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/gholt/brimio"
 	"github.com/spaolacci/murmur3"
-	"gopkg.in/gholt/brimutil.v1"
 )
 
 //    "VALUESTORETOC v0            ":28, checksumInterval:4
@@ -32,7 +32,7 @@ type valueStoreFile struct {
 	fullPath                  string
 	id                        uint32
 	nameTimestamp             int64
-	readerFPs                 []brimutil.ChecksummedReader
+	readerFPs                 []brimio.ChecksummedReader
 	readerLocks               []sync.Mutex
 	readerLens                [][]byte
 	writerFP                  io.WriteCloser
@@ -55,7 +55,7 @@ type valueStoreFileWriteBuf struct {
 func (store *defaultValueStore) newValueReadFile(nameTimestamp int64) (*valueStoreFile, error) {
 	fl := &valueStoreFile{store: store, nameTimestamp: nameTimestamp}
 	fl.fullPath = path.Join(store.path, fmt.Sprintf("%019d.value", fl.nameTimestamp))
-	fl.readerFPs = make([]brimutil.ChecksummedReader, store.fileReaders)
+	fl.readerFPs = make([]brimio.ChecksummedReader, store.fileReaders)
 	fl.readerLocks = make([]sync.Mutex, len(fl.readerFPs))
 	fl.readerLens = make([][]byte, len(fl.readerFPs))
 	var checksumInterval uint32
@@ -69,7 +69,7 @@ func (store *defaultValueStore) newValueReadFile(nameTimestamp int64) (*valueSto
 				return nil, err
 			}
 		}
-		fl.readerFPs[i] = brimutil.NewChecksummedReader(fp, int(checksumInterval), murmur3.New32)
+		fl.readerFPs[i] = brimio.NewChecksummedReader(fp, int(checksumInterval), murmur3.New32)
 		fl.readerLens[i] = make([]byte, 4)
 	}
 	var err error
@@ -105,7 +105,7 @@ func (store *defaultValueStore) createValueReadWriteFile() (*valueStoreFile, err
 	for i := 0; i < store.workers; i++ {
 		go fl.writingChecksummer()
 	}
-	fl.readerFPs = make([]brimutil.ChecksummedReader, store.fileReaders)
+	fl.readerFPs = make([]brimio.ChecksummedReader, store.fileReaders)
 	fl.readerLocks = make([]sync.Mutex, len(fl.readerFPs))
 	fl.readerLens = make([][]byte, len(fl.readerFPs))
 	for i := 0; i < len(fl.readerFPs); i++ {
@@ -117,7 +117,7 @@ func (store *defaultValueStore) createValueReadWriteFile() (*valueStoreFile, err
 			}
 			return nil, err
 		}
-		fl.readerFPs[i] = brimutil.NewChecksummedReader(fp, int(store.checksumInterval), murmur3.New32)
+		fl.readerFPs[i] = brimio.NewChecksummedReader(fp, int(store.checksumInterval), murmur3.New32)
 		fl.readerLens[i] = make([]byte, 4)
 	}
 	fl.id, err = store.addLocBlock(fl)
