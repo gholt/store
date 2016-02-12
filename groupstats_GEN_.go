@@ -5,7 +5,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"gopkg.in/gholt/brimtext.v1"
+	"github.com/gholt/brimtext"
 )
 
 type GroupStoreStats struct {

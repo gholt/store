@@ -8,7 +8,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"gopkg.in/gholt/brimtime.v1"
+	"github.com/gholt/brimtime"
 )
 
 const _GROUP_PULL_REPLICATION_MSG_TYPE = 0x34bf87953e59e8d1

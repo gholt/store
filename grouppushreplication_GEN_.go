@@ -6,7 +6,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"gopkg.in/gholt/brimtime.v1"
+	"github.com/gholt/brimtime"
 )
 
 type groupPushReplicationState struct {
