@@ -273,7 +273,7 @@ type ValueStore interface {
 type LookupGroupItem struct {
 	NameKeyA       uint64
 	NameKeyB       uint64
-	TimestampMicro uint64
+	TimestampMicro int64
 	Length         uint32
 }
 

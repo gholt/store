@@ -441,7 +441,7 @@ func (store *defaultGroupStore) LookupGroup(keyA uint64, keyB uint64) []LookupGr
 		if item.Timestamp&_TSB_DELETION == 0 {
 			rv[i].NameKeyA = item.NameKeyA
 			rv[i].NameKeyB = item.NameKeyB
-			rv[i].TimestampMicro = item.Timestamp >> _TSB_UTIL_BITS
+			rv[i].TimestampMicro = int64(item.Timestamp >> _TSB_UTIL_BITS)
 			rv[i].Length = item.Length
 			i++
 		}
