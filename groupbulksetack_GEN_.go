@@ -220,7 +220,7 @@ func (bsam *groupBulkSetAckMsg) Free() {
 	bsam.store.bulkSetAckState.outFreeMsgChan <- bsam
 }
 
-func (bsam *groupBulkSetAckMsg) add(keyA uint64, keyB uint64, nameKeyA uint64, nameKeyB uint64, timestampbits uint64) bool {
+func (bsam *groupBulkSetAckMsg) add(keyA uint64, keyB uint64, childKeyA uint64, childKeyB uint64, timestampbits uint64) bool {
 	o := len(bsam.body)
 	if o+_GROUP_BULK_SET_ACK_MSG_ENTRY_LENGTH >= cap(bsam.body) {
 		return false
@@ -229,8 +229,8 @@ func (bsam *groupBulkSetAckMsg) add(keyA uint64, keyB uint64, nameKeyA uint64, n
 
 	binary.BigEndian.PutUint64(bsam.body[o:], keyA)
 	binary.BigEndian.PutUint64(bsam.body[o+8:], keyB)
-	binary.BigEndian.PutUint64(bsam.body[o+16:], nameKeyA)
-	binary.BigEndian.PutUint64(bsam.body[o+24:], nameKeyB)
+	binary.BigEndian.PutUint64(bsam.body[o+16:], childKeyA)
+	binary.BigEndian.PutUint64(bsam.body[o+24:], childKeyB)
 	binary.BigEndian.PutUint64(bsam.body[o+32:], timestampbits)
 
 	return true

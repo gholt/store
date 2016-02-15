@@ -21,7 +21,7 @@ import (
 // or "GROUPSTORE v0               ":28, checksumInterval:4
 const _GROUP_FILE_HEADER_SIZE = 32
 
-// keyA:8, keyB:8, nameKeyA:8, nameKeyB:8, timestampbits:8, offset:4, length:4
+// keyA:8, keyB:8, childKeyA:8, childKeyB:8, timestampbits:8, offset:4, length:4
 const _GROUP_FILE_ENTRY_SIZE = 48
 
 // "TERM v0 ":8
@@ -131,7 +131,7 @@ func (fl *groupStoreFile) timestampnano() int64 {
 	return fl.nameTimestamp
 }
 
-func (fl *groupStoreFile) read(keyA uint64, keyB uint64, nameKeyA uint64, nameKeyB uint64, timestampbits uint64, offset uint32, length uint32, value []byte) (uint64, []byte, error) {
+func (fl *groupStoreFile) read(keyA uint64, keyB uint64, childKeyA uint64, childKeyB uint64, timestampbits uint64, offset uint32, length uint32, value []byte) (uint64, []byte, error) {
 	if timestampbits&_TSB_DELETION != 0 {
 		return timestampbits, value, ErrNotFound
 	}
@@ -355,8 +355,8 @@ type groupTOCEntry struct {
 	KeyA uint64
 	KeyB uint64
 
-	NameKeyA uint64
-	NameKeyB uint64
+	ChildKeyA uint64
+	ChildKeyB uint64
 
 	TimestampBits uint64
 	BlockID       uint32
@@ -443,8 +443,8 @@ L1:
 
 				wr.KeyA = binary.BigEndian.Uint64(rbuf)
 				wr.KeyB = keyB
-				wr.NameKeyA = binary.BigEndian.Uint64(rbuf[16:])
-				wr.NameKeyB = binary.BigEndian.Uint64(rbuf[24:])
+				wr.ChildKeyA = binary.BigEndian.Uint64(rbuf[16:])
+				wr.ChildKeyB = binary.BigEndian.Uint64(rbuf[24:])
 				wr.TimestampBits = binary.BigEndian.Uint64(rbuf[32:])
 				wr.BlockID = blockID
 				wr.Offset = offset

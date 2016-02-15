@@ -276,10 +276,10 @@ func (store *defaultGroupStore) inPullReplication(wg *sync.WaitGroup) {
 		tombstoneCutoff := (uint64(brimtime.TimeToUnixMicro(time.Now())) << _TSB_UTIL_BITS) - store.tombstoneDiscardState.age
 		ktbf := prm.ktBloomFilter()
 		l := int64(store.bulkSetState.msgCap)
-		callback := func(keyA uint64, keyB uint64, nameKeyA uint64, nameKeyB uint64, timestampbits uint64, length uint32) bool {
+		callback := func(keyA uint64, keyB uint64, childKeyA uint64, childKeyB uint64, timestampbits uint64, length uint32) bool {
 			if timestampbits&_TSB_DELETION == 0 || timestampbits >= tombstoneCutoff {
-				if !ktbf.mayHave(keyA, keyB, nameKeyA, nameKeyB, timestampbits) {
-					k = append(k, keyA, keyB, nameKeyA, nameKeyB)
+				if !ktbf.mayHave(keyA, keyB, childKeyA, childKeyB, timestampbits) {
+					k = append(k, keyA, keyB, childKeyA, childKeyB)
 					l -= _GROUP_BULK_SET_MSG_ENTRY_HEADER_LENGTH + int64(length)
 					if l <= 0 {
 						return false
@@ -426,8 +426,8 @@ func (store *defaultGroupStore) outPullReplicationPass(notifyChan chan *bgNotifi
 		for atomic.LoadUint32(&abort) == 0 {
 			rbThis := rb
 			ktbf.reset(store.pullReplicationState.outIteration)
-			rb, more = store.locmap.ScanCallback(rb, re, 0, _TSB_LOCAL_REMOVAL, cutoff, store.pullReplicationState.outBloomN, func(keyA uint64, keyB uint64, nameKeyA uint64, nameKeyB uint64, timestampbits uint64, length uint32) bool {
-				ktbf.add(keyA, keyB, nameKeyA, nameKeyB, timestampbits)
+			rb, more = store.locmap.ScanCallback(rb, re, 0, _TSB_LOCAL_REMOVAL, cutoff, store.pullReplicationState.outBloomN, func(keyA uint64, keyB uint64, childKeyA uint64, childKeyB uint64, timestampbits uint64, length uint32) bool {
+				ktbf.add(keyA, keyB, childKeyA, childKeyB, timestampbits)
 				return true
 			})
 			ring2 := store.msgRing.Ring()

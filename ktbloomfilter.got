@@ -34,7 +34,7 @@ func new{{.T}}KTBloomFilter(n uint64, p float64, salt uint16) *{{.t}}KTBloomFilt
         // salt:4, keyA:8, keyB:8, timestamp:8
         scratch: make([]byte, 28),
         {{else}}
-        // salt:4, keyA:8, keyB:8, nameKeyA:8, nameKeyB:8, timestamp:8
+        // salt:4, keyA:8, keyB:8, childKeyA:8, childKeyB:8, timestamp:8
         scratch: make([]byte, 44),
         {{end}}
     }
@@ -56,7 +56,7 @@ func new{{.T}}KTBloomFilterFromMsg(prm *{{.t}}PullReplicationMsg, headerOffset i
         // salt:4, keyA:8, keyB:8, timestamp:8
         scratch: make([]byte, 28),
         {{else}}
-        // salt:4, keyA:8, keyB:8, nameKeyA:8, nameKeyB:8, timestamp:8
+        // salt:4, keyA:8, keyB:8, childKeyA:8, childKeyB:8, timestamp:8
         scratch: make([]byte, 44),
         {{end}}
     }
@@ -73,7 +73,7 @@ func (ktbf *{{.t}}KTBloomFilter) String() string {
     return fmt.Sprintf("{{.t}}KTBloomFilter %p n=%d p=%f salt=%d m=%d k=%d bytes=%d", ktbf, ktbf.n, ktbf.p, ktbf.salt>>16, ktbf.m, ktbf.kDiv4*4, len(ktbf.bits))
 }
 
-func (ktbf *{{.t}}KTBloomFilter) add(keyA uint64, keyB uint64{{if eq .t "group"}}, nameKeyA uint64, nameKeyB uint64{{end}}, timestamp uint64) {
+func (ktbf *{{.t}}KTBloomFilter) add(keyA uint64, keyB uint64{{if eq .t "group"}}, childKeyA uint64, childKeyB uint64{{end}}, timestamp uint64) {
     // CONSIDER: There are optimization opportunities here as the keys can be
     // considered to already have good bit distribution and using a hashing
     // function to mix-in timestamp, salt, and i instead of redoing the whole
@@ -86,8 +86,8 @@ func (ktbf *{{.t}}KTBloomFilter) add(keyA uint64, keyB uint64{{if eq .t "group"}
     {{else}}
     binary.BigEndian.PutUint64(scratch[4:], keyA)
     binary.BigEndian.PutUint64(scratch[12:], keyB)
-    binary.BigEndian.PutUint64(scratch[20:], nameKeyA)
-    binary.BigEndian.PutUint64(scratch[28:], nameKeyB)
+    binary.BigEndian.PutUint64(scratch[20:], childKeyA)
+    binary.BigEndian.PutUint64(scratch[28:], childKeyB)
     binary.BigEndian.PutUint64(scratch[36:], timestamp)
     {{end}}
     for i := ktbf.kDiv4; i > 0; i-- {
@@ -104,7 +104,7 @@ func (ktbf *{{.t}}KTBloomFilter) add(keyA uint64, keyB uint64{{if eq .t "group"}
     }
 }
 
-func (ktbf *{{.t}}KTBloomFilter) mayHave(keyA uint64, keyB uint64{{if eq .t "group"}}, nameKeyA uint64, nameKeyB uint64{{end}}, timestamp uint64) bool {
+func (ktbf *{{.t}}KTBloomFilter) mayHave(keyA uint64, keyB uint64{{if eq .t "group"}}, childKeyA uint64, childKeyB uint64{{end}}, timestamp uint64) bool {
     scratch := ktbf.scratch
     {{if eq .t "value"}}
     binary.BigEndian.PutUint64(scratch[4:], keyA)
@@ -113,8 +113,8 @@ func (ktbf *{{.t}}KTBloomFilter) mayHave(keyA uint64, keyB uint64{{if eq .t "gro
     {{else}}
     binary.BigEndian.PutUint64(scratch[4:], keyA)
     binary.BigEndian.PutUint64(scratch[12:], keyB)
-    binary.BigEndian.PutUint64(scratch[20:], nameKeyA)
-    binary.BigEndian.PutUint64(scratch[28:], nameKeyB)
+    binary.BigEndian.PutUint64(scratch[20:], childKeyA)
+    binary.BigEndian.PutUint64(scratch[28:], childKeyB)
     binary.BigEndian.PutUint64(scratch[36:], timestamp)
     {{end}}
     for i := ktbf.kDiv4; i > 0; i-- {

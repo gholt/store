@@ -23,8 +23,8 @@ type groupLocalRemovalEntry struct {
 	keyA uint64
 	keyB uint64
 
-	nameKeyA uint64
-	nameKeyB uint64
+	childKeyA uint64
+	childKeyB uint64
 
 	timestampbits uint64
 }
@@ -220,13 +220,13 @@ func (store *defaultGroupStore) tombstoneDiscardPassExpiredDeletions(notifyChan 
 			// Since we shouldn't try to modify what we're scanning while we're
 			// scanning (lock contention) we instead record in localRemovals
 			// what to modify after the scan.
-			rangeBegin, more = store.locmap.ScanCallback(rangeBegin, rangeEnd, _TSB_DELETION, _TSB_LOCAL_REMOVAL, cutoff, uint64(store.tombstoneDiscardState.batchSize), func(keyA uint64, keyB uint64, nameKeyA uint64, nameKeyB uint64, timestampbits uint64, length uint32) bool {
+			rangeBegin, more = store.locmap.ScanCallback(rangeBegin, rangeEnd, _TSB_DELETION, _TSB_LOCAL_REMOVAL, cutoff, uint64(store.tombstoneDiscardState.batchSize), func(keyA uint64, keyB uint64, childKeyA uint64, childKeyB uint64, timestampbits uint64, length uint32) bool {
 				e := &localRemovals[localRemovalsIndex]
 				e.keyA = keyA
 				e.keyB = keyB
 
-				e.nameKeyA = nameKeyA
-				e.nameKeyB = nameKeyB
+				e.childKeyA = childKeyA
+				e.childKeyB = childKeyB
 
 				e.timestampbits = timestampbits
 				localRemovalsIndex++
@@ -237,7 +237,7 @@ func (store *defaultGroupStore) tombstoneDiscardPassExpiredDeletions(notifyChan 
 				e := &localRemovals[i]
 				// These writes go through the entire system, so they're
 				// persisted and therefore restored on restarts.
-				store.write(e.keyA, e.keyB, e.nameKeyA, e.nameKeyB, e.timestampbits|_TSB_LOCAL_REMOVAL, nil, true)
+				store.write(e.keyA, e.keyB, e.childKeyA, e.childKeyB, e.timestampbits|_TSB_LOCAL_REMOVAL, nil, true)
 			}
 		}
 	}

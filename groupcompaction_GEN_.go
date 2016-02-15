@@ -237,7 +237,7 @@ func (store *defaultGroupStore) needsCompaction(nametoc string, candidateBlockID
 				}
 				for j := 0; j < len(batch); j++ {
 					wr := &batch[j]
-					timestampBits, blockID, _, _ := store.lookup(wr.KeyA, wr.KeyB, wr.NameKeyA, wr.NameKeyB)
+					timestampBits, blockID, _, _ := store.lookup(wr.KeyA, wr.KeyB, wr.ChildKeyA, wr.ChildKeyB)
 					if timestampBits != wr.TimestampBits || blockID != wr.BlockID {
 						atomic.AddUint32(&stale, 1)
 					}
@@ -316,17 +316,17 @@ func (store *defaultGroupStore) compactFile(nametoc string, blockID uint32, cont
 				for j := 0; j < len(batch); j++ {
 					atomic.AddUint32(&count, 1)
 					wr := &batch[j]
-					timestampBits, _, _, _ := store.lookup(wr.KeyA, wr.KeyB, wr.NameKeyA, wr.NameKeyB)
+					timestampBits, _, _, _ := store.lookup(wr.KeyA, wr.KeyB, wr.ChildKeyA, wr.ChildKeyB)
 					if timestampBits > wr.TimestampBits {
 						atomic.AddUint32(&stale, 1)
 						continue
 					}
-					timestampBits, value, err := store.read(wr.KeyA, wr.KeyB, wr.NameKeyA, wr.NameKeyB, value[:0])
+					timestampBits, value, err := store.read(wr.KeyA, wr.KeyB, wr.ChildKeyA, wr.ChildKeyB, value[:0])
 					if timestampBits > wr.TimestampBits {
 						atomic.AddUint32(&stale, 1)
 						continue
 					}
-					_, err = store.write(wr.KeyA, wr.KeyB, wr.NameKeyA, wr.NameKeyB, wr.TimestampBits|_TSB_COMPACTION_REWRITE, value, true)
+					_, err = store.write(wr.KeyA, wr.KeyB, wr.ChildKeyA, wr.ChildKeyB, wr.TimestampBits|_TSB_COMPACTION_REWRITE, value, true)
 					if err != nil {
 						store.logError("compactFile: error with %s: %s", nametoc, err)
 						atomic.AddUint32(&errorCount, 1)

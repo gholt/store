@@ -279,10 +279,10 @@ func (store *default{{.T}}Store) inPullReplication(wg *sync.WaitGroup) {
         tombstoneCutoff := (uint64(brimtime.TimeToUnixMicro(time.Now())) << _TSB_UTIL_BITS) - store.tombstoneDiscardState.age
         ktbf := prm.ktBloomFilter()
         l := int64(store.bulkSetState.msgCap)
-        callback := func(keyA uint64, keyB uint64{{if eq .t "group"}}, nameKeyA uint64, nameKeyB uint64{{end}}, timestampbits uint64, length uint32) bool {
+        callback := func(keyA uint64, keyB uint64{{if eq .t "group"}}, childKeyA uint64, childKeyB uint64{{end}}, timestampbits uint64, length uint32) bool {
             if timestampbits&_TSB_DELETION == 0 || timestampbits >= tombstoneCutoff {
-                if !ktbf.mayHave(keyA, keyB{{if eq .t "group"}}, nameKeyA, nameKeyB{{end}}, timestampbits) {
-                    k = append(k, keyA, keyB{{if eq .t "group"}}, nameKeyA, nameKeyB{{end}})
+                if !ktbf.mayHave(keyA, keyB{{if eq .t "group"}}, childKeyA, childKeyB{{end}}, timestampbits) {
+                    k = append(k, keyA, keyB{{if eq .t "group"}}, childKeyA, childKeyB{{end}})
                     l -= _{{.TT}}_BULK_SET_MSG_ENTRY_HEADER_LENGTH + int64(length)
                     if l <= 0 {
                         return false
@@ -429,8 +429,8 @@ func (store *default{{.T}}Store) outPullReplicationPass(notifyChan chan *bgNotif
         for atomic.LoadUint32(&abort) == 0 {
             rbThis := rb
             ktbf.reset(store.pullReplicationState.outIteration)
-            rb, more = store.locmap.ScanCallback(rb, re, 0, _TSB_LOCAL_REMOVAL, cutoff, store.pullReplicationState.outBloomN, func(keyA uint64, keyB uint64{{if eq .t "group"}}, nameKeyA uint64, nameKeyB uint64{{end}}, timestampbits uint64, length uint32) bool {
-                ktbf.add(keyA, keyB{{if eq .t "group"}}, nameKeyA, nameKeyB{{end}}, timestampbits)
+            rb, more = store.locmap.ScanCallback(rb, re, 0, _TSB_LOCAL_REMOVAL, cutoff, store.pullReplicationState.outBloomN, func(keyA uint64, keyB uint64{{if eq .t "group"}}, childKeyA uint64, childKeyB uint64{{end}}, timestampbits uint64, length uint32) bool {
+                ktbf.add(keyA, keyB{{if eq .t "group"}}, childKeyA, childKeyB{{end}}, timestampbits)
                 return true
             })
             ring2 := store.msgRing.Ring()

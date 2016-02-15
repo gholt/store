@@ -271,55 +271,54 @@ type ValueStore interface {
 
 // LookupGroupItem is returned by the GroupStore.LookupGroup call.
 type LookupGroupItem struct {
-	NameKeyA       uint64
-	NameKeyB       uint64
+	ChildKeyA      uint64
+	ChildKeyB      uint64
 	TimestampMicro int64
 	Length         uint32
 }
 
 // GroupStore is an interface for a disk-backed data structure that stores
 // []byte values referenced by 128 bit key pairs with options for replication.
-// Because this package uses templatized code, the nomenclature is a bit odd.
-// (keyA, keyB) represents parent key pairs and (nameKeyA, nameKeyB) represents
-// child key pairs. Values are stored by the combination of both pairs (keyA,
-// keyB, nameKeyA, nameKeyB) and can be retrieved individually by the same. A
-// full set of children (nameKeyA, nameKeyB) pairs can be retrieved for a
-// parent (keyA, keyB) pair.
+// Values are stored by the combination of both pairs (parentKeyA, parentKeyB,
+// childKeyA, childKeyB) and can be retrieved individually by the same. A full
+// set of child pairs can be retrieved for a parent pair.
 type GroupStore interface {
 	Store
-	// Lookup will return (timestampmicro, length, err) for (keyA, keyB,
-	// nameKeyA, nameKeyB).
+	// Lookup will return (timestampmicro, length, err) for (parentKeyA,
+	// parentKeyB, childKeyA, childKeyB).
 	//
-	// Note that err == ErrNotFound with timestampmicro == 0 indicates (keyA,
-	// keyB, nameKeyA, nameKeyB) was not known at all whereas err ==
-	// ErrNotFound with timestampmicro != 0 indicates (keyA, keyB, nameKeyA,
-	// nameKeyB) was known and had a deletion marker (aka tombstone).
-	Lookup(keyA uint64, keyB uint64, nameKeyA uint64, nameKeyB uint64) (int64, uint32, error)
-	// LookupGroup returns all the (nameKeyA, nameKeyB, timestampMicro, length)
-	// items matching under (keyA, keyB).
-	LookupGroup(keyA uint64, keyB uint64) []LookupGroupItem
-	// Read will return (timestampmicro, value, err) for (keyA, keyB, nameKeyA,
-	// nameKeyB); if an incoming value is provided, any value read from the
-	// store will be appended to it and the whole returned (useful to reuse an
-	// existing []byte).
+	// Note that err == ErrNotFound with timestampmicro == 0 indicates
+	// (parentKeyA, parentKeyB, childKeyA, childKeyB) was not known at all
+	// whereas err == ErrNotFound with timestampmicro != 0 indicates
+	// (parentKeyA, parentKeyB, childKeyA, childKeyB) was known and had a
+	// deletion marker (aka tombstone).
+	Lookup(parentKeyA, parentKeyB, childKeyA, childKeyB uint64) (timestampmicro int64, length uint32, err error)
+	// LookupGroup returns all the (childKeyA, childKeyB, timestampMicro,
+	// length) items matching under (parentKeyA, parentKeyB).
+	LookupGroup(parentKeyA, parentKeyB uint64) []LookupGroupItem
+	// Read will return (timestampmicro, value, err) for (parentKeyA,
+	// parentKeyB, childKeyA, childKeyB); if an incoming value is provided, any
+	// value read from the store will be appended to it and the whole returned
+	// (useful to reuse an existing []byte).
 	//
-	// Note that err == ErrNotFound with timestampmicro == 0 indicates (keyA,
-	// keyB, nameKeyA, nameKeyB) was not known at all whereas err ==
-	// ErrNotFound with timestampmicro != 0 indicates (keyA, keyB, nameKeyA,
-	// nameKeyB) was known and had a deletion marker (aka tombstone).
-	Read(keyA uint64, keyB uint64, nameKeyA uint64, nameKeyB uint64, value []byte) (int64, []byte, error)
-	// Write stores (timestampmicro, value) for (keyA, keyB, nameKeyA,
-	// nameKeyB) and returns the previously stored timestampmicro or returns
+	// Note that err == ErrNotFound with timestampmicro == 0 indicates
+	// (parentKeyA, parentKeyB, childKeyA, childKeyB) was not known at all
+	// whereas err == ErrNotFound with timestampmicro != 0 indicates
+	// (parentKeyA, parentKeyB, childKeyA, childKeyB) was known and had a
+	// deletion marker (aka tombstone).
+	Read(parentKeyA, parentKeyB, childKeyA, childKeyB uint64, value []byte) (timestampmicro int64, rvalue []byte, err error)
+	// Write stores (timestampmicro, value) for (parentKeyA, parentKeyB,
+	// childKeyA, childKeyB) and returns the previously stored timestampmicro
+	// or returns any error; a newer timestampmicro already in place is not
+	// reported as an error. Note that with a Write and a Delete for the exact
+	// same timestampmicro, the Delete wins.
+	Write(parentKeyA, parentKeyB, childKeyA, childKeyB uint64, timestampmicro int64, value []byte) (oldtimestampmicro int64, err error)
+	// Delete stores timestampmicro for (parentKeyA, parentKeyB, childKeyA,
+	// childKeyB) and returns the previously stored timestampmicro or returns
 	// any error; a newer timestampmicro already in place is not reported as an
 	// error. Note that with a Write and a Delete for the exact same
 	// timestampmicro, the Delete wins.
-	Write(keyA uint64, keyB uint64, nameKeyA uint64, nameKeyB uint64, timestamp int64, value []byte) (int64, error)
-	// Delete stores timestampmicro for (keyA, keyB, nameKeyA, nameKeyB) and
-	// returns the previously stored timestampmicro or returns any error; a
-	// newer timestampmicro already in place is not reported as an error. Note
-	// that with a Write and a Delete for the exact same timestampmicro, the
-	// Delete wins.
-	Delete(keyA uint64, keyB uint64, nameKeyA uint64, nameKeyB uint64, timestamp int64) (int64, error)
+	Delete(parentKeyA, parentKeyB, childKeyA, childKeyB uint64, timestampmicro int64) (oldtimestampmicro int64, err error)
 }
 
 func closeIfCloser(thing interface{}) error {

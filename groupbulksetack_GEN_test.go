@@ -226,15 +226,15 @@ func TestGroupBulkSetAckMsgOut(t *testing.T) {
 		0, 0, 0, 0, 0, 0, 0, 1, // keyA
 		0, 0, 0, 0, 0, 0, 0, 2, // keyB
 
-		0, 0, 0, 0, 0, 0, 0, 3, // nameKeyA
-		0, 0, 0, 0, 0, 0, 0, 4, // nameKeyB
+		0, 0, 0, 0, 0, 0, 0, 3, // childKeyA
+		0, 0, 0, 0, 0, 0, 0, 4, // childKeyB
 
 		0, 0, 0, 0, 0, 0, 5, 0, // timestamp
 		0, 0, 0, 0, 0, 0, 0, 6, // keyA
 		0, 0, 0, 0, 0, 0, 0, 7, // keyB
 
-		0, 0, 0, 0, 0, 0, 0, 8, // nameKeyA
-		0, 0, 0, 0, 0, 0, 0, 9, // nameKeyB
+		0, 0, 0, 0, 0, 0, 0, 8, // childKeyA
+		0, 0, 0, 0, 0, 0, 0, 9, // childKeyB
 
 		0, 0, 0, 0, 0, 0, 10, 0, // timestamp
 	}) {

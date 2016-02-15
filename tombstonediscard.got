@@ -23,8 +23,8 @@ type {{.t}}LocalRemovalEntry struct {
     keyA          uint64
     keyB          uint64
     {{if eq .t "group"}}
-    nameKeyA      uint64
-    nameKeyB      uint64
+    childKeyA      uint64
+    childKeyB      uint64
     {{end}}
     timestampbits uint64
 }
@@ -220,13 +220,13 @@ func (store *default{{.T}}Store) tombstoneDiscardPassExpiredDeletions(notifyChan
             // Since we shouldn't try to modify what we're scanning while we're
             // scanning (lock contention) we instead record in localRemovals
             // what to modify after the scan.
-            rangeBegin, more = store.locmap.ScanCallback(rangeBegin, rangeEnd, _TSB_DELETION, _TSB_LOCAL_REMOVAL, cutoff, uint64(store.tombstoneDiscardState.batchSize), func(keyA uint64, keyB uint64{{if eq .t "group"}}, nameKeyA uint64, nameKeyB uint64{{end}}, timestampbits uint64, length uint32) bool {
+            rangeBegin, more = store.locmap.ScanCallback(rangeBegin, rangeEnd, _TSB_DELETION, _TSB_LOCAL_REMOVAL, cutoff, uint64(store.tombstoneDiscardState.batchSize), func(keyA uint64, keyB uint64{{if eq .t "group"}}, childKeyA uint64, childKeyB uint64{{end}}, timestampbits uint64, length uint32) bool {
                 e := &localRemovals[localRemovalsIndex]
                 e.keyA = keyA
                 e.keyB = keyB
                 {{if eq .t "group"}}
-                e.nameKeyA = nameKeyA
-                e.nameKeyB = nameKeyB
+                e.childKeyA = childKeyA
+                e.childKeyB = childKeyB
                 {{end}}
                 e.timestampbits = timestampbits
                 localRemovalsIndex++
@@ -237,7 +237,7 @@ func (store *default{{.T}}Store) tombstoneDiscardPassExpiredDeletions(notifyChan
                 e := &localRemovals[i]
                 // These writes go through the entire system, so they're
                 // persisted and therefore restored on restarts.
-                store.write(e.keyA, e.keyB{{if eq .t "group"}}, e.nameKeyA, e.nameKeyB{{end}}, e.timestampbits|_TSB_LOCAL_REMOVAL, nil, true)
+                store.write(e.keyA, e.keyB{{if eq .t "group"}}, e.childKeyA, e.childKeyB{{end}}, e.timestampbits|_TSB_LOCAL_REMOVAL, nil, true)
             }
         }
     }
