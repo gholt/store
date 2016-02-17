@@ -47,7 +47,7 @@ func (store *defaultValueStore) auditShutdown() {
 	store.auditState.startupShutdownLock.Unlock()
 }
 
-func (store *defaultValueStore) AuditPass() {
+func (store *defaultValueStore) AuditPass() error {
 	store.auditState.startupShutdownLock.Lock()
 	if store.auditState.notifyChan == nil {
 		store.auditPass(true, make(chan *bgNotification))
@@ -60,6 +60,7 @@ func (store *defaultValueStore) AuditPass() {
 		<-c
 	}
 	store.auditState.startupShutdownLock.Unlock()
+	return nil
 }
 
 func (store *defaultValueStore) auditLauncher(notifyChan chan *bgNotification) {

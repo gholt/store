@@ -167,7 +167,7 @@ type {{.T}}StoreStats struct {
     locmapDebugInfo             fmt.Stringer
 }
 
-func (store *default{{.T}}Store) Stats(debug bool) fmt.Stringer {
+func (store *default{{.T}}Store) Stats(debug bool) (fmt.Stringer, error) {
     store.statsLock.Lock()
     stats := &{{.T}}StoreStats{
         Lookups:                      atomic.LoadInt32(&store.lookups),
@@ -302,7 +302,7 @@ func (store *default{{.T}}Store) Stats(debug bool) fmt.Stringer {
         stats.ValueBytes = locmapStats.ActiveBytes
         stats.locmapDebugInfo = locmapStats
     }
-    return stats
+    return stats, nil
 }
 
 func (stats *{{.T}}StoreStats) String() string {

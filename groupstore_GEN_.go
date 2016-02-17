@@ -232,8 +232,8 @@ func NewGroupStore(c *GroupStoreConfig) (GroupStore, chan error) {
 	return store, store.restartChan
 }
 
-func (store *defaultGroupStore) ValueCap() uint32 {
-	return store.valueCap
+func (store *defaultGroupStore) ValueCap() (uint32, error) {
+	return store.valueCap, nil
 }
 
 func (store *defaultGroupStore) Startup() error {
@@ -331,11 +331,11 @@ func (store *defaultGroupStore) Startup() error {
 	return nil
 }
 
-func (store *defaultGroupStore) Shutdown() {
+func (store *defaultGroupStore) Shutdown() error {
 	store.runningLock.Lock()
 	if store.running != 1 { // running
 		store.runningLock.Unlock()
-		return
+		return nil
 	}
 	wg := &sync.WaitGroup{}
 	for i, f := range []func(){
@@ -374,10 +374,12 @@ func (store *defaultGroupStore) Shutdown() {
 	store.shutdownChan = nil
 	store.running = 0 // not running
 	store.runningLock.Unlock()
+	return nil
 }
 
-func (store *defaultGroupStore) EnableWrites() {
+func (store *defaultGroupStore) EnableWrites() error {
 	store.enableWrites(true)
+	return nil
 }
 
 func (store *defaultGroupStore) enableWrites(userCall bool) {
@@ -391,8 +393,9 @@ func (store *defaultGroupStore) enableWrites(userCall bool) {
 	store.disableEnableWritesLock.Unlock()
 }
 
-func (store *defaultGroupStore) DisableWrites() {
+func (store *defaultGroupStore) DisableWrites() error {
 	store.disableWrites(true)
+	return nil
 }
 
 func (store *defaultGroupStore) disableWrites(userCall bool) {
@@ -405,11 +408,12 @@ func (store *defaultGroupStore) disableWrites(userCall bool) {
 	}
 	store.disableEnableWritesLock.Unlock()
 }
-func (store *defaultGroupStore) Flush() {
+func (store *defaultGroupStore) Flush() error {
 	for _, c := range store.pendingWriteReqChans {
 		c <- flushGroupWriteReq
 	}
 	<-store.flushedChan
+	return nil
 }
 
 func (store *defaultGroupStore) Lookup(keyA uint64, keyB uint64, childKeyA uint64, childKeyB uint64) (int64, uint32, error) {
@@ -429,11 +433,11 @@ func (store *defaultGroupStore) lookup(keyA uint64, keyB uint64, childKeyA uint6
 	return timestampbits, id, length, nil
 }
 
-func (store *defaultGroupStore) LookupGroup(keyA uint64, keyB uint64) []*LookupGroupItem {
+func (store *defaultGroupStore) LookupGroup(keyA uint64, keyB uint64) ([]*LookupGroupItem, error) {
 	atomic.AddInt32(&store.lookupGroups, 1)
 	items := store.locmap.GetGroup(keyA, keyB)
 	if len(items) == 0 {
-		return nil
+		return nil, nil
 	}
 	rv := make([]*LookupGroupItem, len(items))
 	i := 0
@@ -447,7 +451,7 @@ func (store *defaultGroupStore) LookupGroup(keyA uint64, keyB uint64) []*LookupG
 		}
 	}
 	atomic.AddInt32(&store.lookupGroupItems, int32(i))
-	return rv[:i]
+	return rv[:i], nil
 }
 
 func (store *defaultGroupStore) Read(keyA uint64, keyB uint64, childKeyA uint64, childKeyB uint64, value []byte) (int64, []byte, error) {
@@ -1048,8 +1052,13 @@ func (store *defaultGroupStore) recovery() error {
 	spindown()
 	if store.logDebugOn {
 		dur := time.Now().Sub(start)
-		stats := store.Stats(false).(*GroupStoreStats)
-		store.logDebug("recovery: %d key locations loaded in %s, %.0f/s; %d caused change; %d resulting locations referencing %d bytes.", fromDiskCount, dur, float64(fromDiskCount)/(float64(dur)/float64(time.Second)), causedChangeCount, stats.Values, stats.ValueBytes)
+		stringerStats, err := store.Stats(false)
+		if err != nil {
+			store.logDebug("recovery: stats error: %s", err)
+		} else {
+			stats := stringerStats.(*GroupStoreStats)
+			store.logDebug("recovery: %d key locations loaded in %s, %.0f/s; %d caused change; %d resulting locations referencing %d bytes.", fromDiskCount, dur, float64(fromDiskCount)/(float64(dur)/float64(time.Second)), causedChangeCount, stats.Values, stats.ValueBytes)
+		}
 	}
 	if len(compactNames) > 0 {
 		store.logDebug("recovery: secondary recovery started for %d files.", len(compactNames))

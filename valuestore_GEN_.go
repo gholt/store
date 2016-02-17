@@ -229,8 +229,8 @@ func NewValueStore(c *ValueStoreConfig) (ValueStore, chan error) {
 	return store, store.restartChan
 }
 
-func (store *defaultValueStore) ValueCap() uint32 {
-	return store.valueCap
+func (store *defaultValueStore) ValueCap() (uint32, error) {
+	return store.valueCap, nil
 }
 
 func (store *defaultValueStore) Startup() error {
@@ -328,11 +328,11 @@ func (store *defaultValueStore) Startup() error {
 	return nil
 }
 
-func (store *defaultValueStore) Shutdown() {
+func (store *defaultValueStore) Shutdown() error {
 	store.runningLock.Lock()
 	if store.running != 1 { // running
 		store.runningLock.Unlock()
-		return
+		return nil
 	}
 	wg := &sync.WaitGroup{}
 	for i, f := range []func(){
@@ -371,10 +371,12 @@ func (store *defaultValueStore) Shutdown() {
 	store.shutdownChan = nil
 	store.running = 0 // not running
 	store.runningLock.Unlock()
+	return nil
 }
 
-func (store *defaultValueStore) EnableWrites() {
+func (store *defaultValueStore) EnableWrites() error {
 	store.enableWrites(true)
+	return nil
 }
 
 func (store *defaultValueStore) enableWrites(userCall bool) {
@@ -388,8 +390,9 @@ func (store *defaultValueStore) enableWrites(userCall bool) {
 	store.disableEnableWritesLock.Unlock()
 }
 
-func (store *defaultValueStore) DisableWrites() {
+func (store *defaultValueStore) DisableWrites() error {
 	store.disableWrites(true)
+	return nil
 }
 
 func (store *defaultValueStore) disableWrites(userCall bool) {
@@ -402,11 +405,12 @@ func (store *defaultValueStore) disableWrites(userCall bool) {
 	}
 	store.disableEnableWritesLock.Unlock()
 }
-func (store *defaultValueStore) Flush() {
+func (store *defaultValueStore) Flush() error {
 	for _, c := range store.pendingWriteReqChans {
 		c <- flushValueWriteReq
 	}
 	<-store.flushedChan
+	return nil
 }
 
 func (store *defaultValueStore) Lookup(keyA uint64, keyB uint64) (int64, uint32, error) {
@@ -1015,8 +1019,13 @@ func (store *defaultValueStore) recovery() error {
 	spindown()
 	if store.logDebugOn {
 		dur := time.Now().Sub(start)
-		stats := store.Stats(false).(*ValueStoreStats)
-		store.logDebug("recovery: %d key locations loaded in %s, %.0f/s; %d caused change; %d resulting locations referencing %d bytes.", fromDiskCount, dur, float64(fromDiskCount)/(float64(dur)/float64(time.Second)), causedChangeCount, stats.Values, stats.ValueBytes)
+		stringerStats, err := store.Stats(false)
+		if err != nil {
+			store.logDebug("recovery: stats error: %s", err)
+		} else {
+			stats := stringerStats.(*ValueStoreStats)
+			store.logDebug("recovery: %d key locations loaded in %s, %.0f/s; %d caused change; %d resulting locations referencing %d bytes.", fromDiskCount, dur, float64(fromDiskCount)/(float64(dur)/float64(time.Second)), causedChangeCount, stats.Values, stats.ValueBytes)
+		}
 	}
 	if len(compactNames) > 0 {
 		store.logDebug("recovery: secondary recovery started for %d files.", len(compactNames))
