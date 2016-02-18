@@ -298,7 +298,7 @@ type GroupStore interface {
 	Lookup(parentKeyA, parentKeyB, childKeyA, childKeyB uint64) (timestampmicro int64, length uint32, err error)
 	// LookupGroup returns all the (childKeyA, childKeyB, timestampMicro,
 	// length) items matching under (parentKeyA, parentKeyB).
-	LookupGroup(parentKeyA, parentKeyB uint64) ([]*LookupGroupItem, error)
+	LookupGroup(parentKeyA, parentKeyB uint64) ([]LookupGroupItem, error)
 	// Read will return (timestampmicro, value, err) for (parentKeyA,
 	// parentKeyB, childKeyA, childKeyB); if an incoming value is provided, any
 	// value read from the store will be appended to it and the whole returned

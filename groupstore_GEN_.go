@@ -433,13 +433,15 @@ func (store *defaultGroupStore) lookup(keyA uint64, keyB uint64, childKeyA uint6
 	return timestampbits, id, length, nil
 }
 
-func (store *defaultGroupStore) LookupGroup(keyA uint64, keyB uint64) ([]*LookupGroupItem, error) {
+func (store *defaultGroupStore) LookupGroup(keyA uint64, keyB uint64) ([]LookupGroupItem, error) {
+	// Returned []LookupGroupItem is not a []* for less garbage collection and
+	// is likely fine most use cases.
 	atomic.AddInt32(&store.lookupGroups, 1)
 	items := store.locmap.GetGroup(keyA, keyB)
 	if len(items) == 0 {
 		return nil, nil
 	}
-	rv := make([]*LookupGroupItem, len(items))
+	rv := make([]LookupGroupItem, len(items))
 	i := 0
 	for _, item := range items {
 		if item.Timestamp&_TSB_DELETION == 0 {
