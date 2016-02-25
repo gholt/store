@@ -386,14 +386,14 @@ func (store *defaultValueStore) outPullReplicationPass(notifyChan chan *bgNotifi
 	if store.msgRing == nil {
 		return nil
 	}
+	ring := store.msgRing.Ring()
+	if ring == nil || ring.ReplicaCount() < 2 || ring.NodeCount() < 2 {
+		return nil
+	}
 	begin := time.Now()
 	defer func() {
 		store.logDebug("outPullReplication: pass took %s", time.Now().Sub(begin))
 	}()
-	ring := store.msgRing.Ring()
-	if ring == nil {
-		return nil
-	}
 	rightwardPartitionShift := 64 - ring.PartitionBitCount()
 	partitionCount := uint64(1) << ring.PartitionBitCount()
 	if store.pullReplicationState.outIteration == math.MaxUint16 {

@@ -21,6 +21,11 @@ const _VALUE_PAGE_SIZE_MIN = 8 + _VALUE_FILE_ENTRY_SIZE
 // structure will have no effect on existing ValueStores; but deep changes
 // (such as reconfiguring an existing Logger) will.
 type ValueStoreConfig struct {
+	// Scale sets how much to scale the default values by; this can reduce
+	// memory usage for systems where the store isn't the only thing running on
+	// the hardware. Note that this will *not* scale explictly set values, just
+	// the values if they fallback to the defaults.
+	Scale float64
 	// LogCritical sets the func to use for critical messages; these are
 	// messages about issues that render the store inoperative. Defaults
 	// logging to os.Stderr.
@@ -288,6 +293,9 @@ func resolveValueStoreConfig(c *ValueStoreConfig) *ValueStoreConfig {
 	if c != nil {
 		*cfg = *c
 	}
+	if cfg.Scale <= 0 {
+		cfg.Scale = 1
+	}
 	if cfg.Rand == nil {
 		cfg.Rand = rand.New(rand.NewSource(time.Now().UnixNano()))
 	}
@@ -334,7 +342,7 @@ func resolveValueStoreConfig(c *ValueStoreConfig) *ValueStoreConfig {
 		}
 	}
 	if cfg.Workers == 0 {
-		cfg.Workers = runtime.GOMAXPROCS(0)
+		cfg.Workers = int(float64(runtime.GOMAXPROCS(0)) * cfg.Scale)
 	}
 	if cfg.Workers < 1 {
 		cfg.Workers = 1
@@ -356,7 +364,7 @@ func resolveValueStoreConfig(c *ValueStoreConfig) *ValueStoreConfig {
 		}
 	}
 	if cfg.PageSize == 0 {
-		cfg.PageSize = 4 * 1024 * 1024
+		cfg.PageSize = int(4 * 1024 * 1024 * cfg.Scale)
 	}
 	// Ensure each page will have at least ChecksumInterval worth of data in it
 	// so that each page written will at least flush the previous page's data.
@@ -382,7 +390,7 @@ func resolveValueStoreConfig(c *ValueStoreConfig) *ValueStoreConfig {
 		}
 	}
 	if cfg.WritePagesPerWorker == 0 {
-		cfg.WritePagesPerWorker = 3
+		cfg.WritePagesPerWorker = int(3 * cfg.Scale)
 	}
 	if cfg.WritePagesPerWorker < 2 {
 		cfg.WritePagesPerWorker = 2
@@ -393,7 +401,7 @@ func resolveValueStoreConfig(c *ValueStoreConfig) *ValueStoreConfig {
 		}
 	}
 	if cfg.MsgCap == 0 {
-		cfg.MsgCap = 16 * 1024 * 1024
+		cfg.MsgCap = int(16 * 1024 * 1024 * cfg.Scale)
 	}
 	// NOTE: This minimum needs to be the largest minimum size of all the
 	// message types; 1024 "should" be enough.
@@ -442,7 +450,7 @@ func resolveValueStoreConfig(c *ValueStoreConfig) *ValueStoreConfig {
 		}
 	}
 	if cfg.RecoveryBatchSize == 0 {
-		cfg.RecoveryBatchSize = 1024 * 1024
+		cfg.RecoveryBatchSize = int(1024 * 1024 * cfg.Scale)
 	}
 	if cfg.RecoveryBatchSize < 1 {
 		cfg.RecoveryBatchSize = 1
@@ -464,7 +472,7 @@ func resolveValueStoreConfig(c *ValueStoreConfig) *ValueStoreConfig {
 		}
 	}
 	if cfg.TombstoneDiscardBatchSize == 0 {
-		cfg.TombstoneDiscardBatchSize = 1024 * 1024
+		cfg.TombstoneDiscardBatchSize = int(1024 * 1024 * cfg.Scale)
 	}
 	if cfg.TombstoneDiscardBatchSize < 1 {
 		cfg.TombstoneDiscardBatchSize = 1
@@ -519,7 +527,7 @@ func resolveValueStoreConfig(c *ValueStoreConfig) *ValueStoreConfig {
 		}
 	}
 	if cfg.OutPullReplicationMsgs == 0 {
-		cfg.OutPullReplicationMsgs = cfg.OutPullReplicationWorkers * 4
+		cfg.OutPullReplicationMsgs = int(float64(cfg.OutPullReplicationWorkers) * 4 * cfg.Scale)
 	}
 	if cfg.OutPullReplicationMsgs < 1 {
 		cfg.OutPullReplicationMsgs = 1
@@ -530,7 +538,7 @@ func resolveValueStoreConfig(c *ValueStoreConfig) *ValueStoreConfig {
 		}
 	}
 	if cfg.OutPullReplicationBloomN == 0 {
-		cfg.OutPullReplicationBloomN = 1000000
+		cfg.OutPullReplicationBloomN = int(1000000 * cfg.Scale)
 	}
 	if cfg.OutPullReplicationBloomN < 1 {
 		cfg.OutPullReplicationBloomN = 1
@@ -574,7 +582,7 @@ func resolveValueStoreConfig(c *ValueStoreConfig) *ValueStoreConfig {
 		}
 	}
 	if cfg.InPullReplicationMsgs == 0 {
-		cfg.InPullReplicationMsgs = cfg.InPullReplicationWorkers * 4
+		cfg.InPullReplicationMsgs = int(float64(cfg.InPullReplicationWorkers) * 4 * cfg.Scale)
 	}
 	if cfg.InPullReplicationMsgs < 1 {
 		cfg.InPullReplicationMsgs = 1
@@ -640,7 +648,7 @@ func resolveValueStoreConfig(c *ValueStoreConfig) *ValueStoreConfig {
 		}
 	}
 	if cfg.OutBulkSetMsgs == 0 {
-		cfg.OutBulkSetMsgs = cfg.PushReplicationWorkers * 4
+		cfg.OutBulkSetMsgs = int(float64(cfg.PushReplicationWorkers) * 4 * cfg.Scale)
 	}
 	if cfg.OutBulkSetMsgs < 1 {
 		cfg.OutBulkSetMsgs = 1
@@ -662,7 +670,7 @@ func resolveValueStoreConfig(c *ValueStoreConfig) *ValueStoreConfig {
 		}
 	}
 	if cfg.InBulkSetMsgs == 0 {
-		cfg.InBulkSetMsgs = cfg.InBulkSetWorkers * 4
+		cfg.InBulkSetMsgs = int(float64(cfg.InBulkSetWorkers) * 4 * cfg.Scale)
 	}
 	if cfg.InBulkSetMsgs < 1 {
 		cfg.InBulkSetMsgs = 1
@@ -706,7 +714,7 @@ func resolveValueStoreConfig(c *ValueStoreConfig) *ValueStoreConfig {
 		}
 	}
 	if cfg.InBulkSetAckMsgs == 0 {
-		cfg.InBulkSetAckMsgs = cfg.InBulkSetAckWorkers * 4
+		cfg.InBulkSetAckMsgs = int(float64(cfg.InBulkSetAckWorkers) * 4 * cfg.Scale)
 	}
 	if cfg.InBulkSetAckMsgs < 1 {
 		cfg.InBulkSetAckMsgs = 1
@@ -717,7 +725,7 @@ func resolveValueStoreConfig(c *ValueStoreConfig) *ValueStoreConfig {
 		}
 	}
 	if cfg.OutBulkSetAckMsgs == 0 {
-		cfg.OutBulkSetAckMsgs = cfg.InBulkSetAckWorkers * 4
+		cfg.OutBulkSetAckMsgs = int(float64(cfg.InBulkSetAckWorkers) * 4 * cfg.Scale)
 	}
 	if cfg.OutBulkSetAckMsgs < 1 {
 		cfg.OutBulkSetAckMsgs = 1
