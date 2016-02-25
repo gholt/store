@@ -110,24 +110,30 @@ type GroupStoreStats struct {
 	// the entire file size being too small. For example, this may happen when
 	// the store is shutdown and restarted.
 	SmallFileCompactions int32
-	// Free is the number of bytes free on the device containing the
+	// DiskFree is the number of bytes free on the device containing the
 	// Config.Path for the defaultGroupStore.
-	Free uint64
-	// Used is the number of bytes used on the device containing the
+	DiskFree uint64
+	// DiskUsed is the number of bytes used on the device containing the
 	// Config.Path for the defaultGroupStore.
-	Used uint64
-	// Size is the size in bytes of the device containing the Config.Path for
-	// the defaultGroupStore.
-	Size uint64
-	// FreeTOC is the number of bytes free on the device containing the
-	// Config.PathTOC for the defaultGroupStore.
-	FreeTOC uint64
-	// UsedTOC is the number of bytes used on the device containing the
-	// Config.PathTOC for the defaultGroupStore.
-	UsedTOC uint64
-	// SizeTOC is the size in bytes of the device containing the Config.PathTOC
+	DiskUsed uint64
+	// DiskSize is the size in bytes of the device containing the Config.Path
 	// for the defaultGroupStore.
-	SizeTOC uint64
+	DiskSize uint64
+	// DiskFreeTOC is the number of bytes free on the device containing the
+	// Config.PathTOC for the defaultGroupStore.
+	DiskFreeTOC uint64
+	// DiskUsedTOC is the number of bytes used on the device containing the
+	// Config.PathTOC for the defaultGroupStore.
+	DiskUsedTOC uint64
+	// DiskSizeTOC is the size in bytes of the device containing the
+	// Config.PathTOC for the defaultGroupStore.
+	DiskSizeTOC uint64
+	// MemFree is the number of bytes of free memory.
+	MemFree uint64
+	// MemUsed is the number of bytes of used memory.
+	MemUsed uint64
+	// MemSize is the size in bytes of total memory on the system.
+	MemSize uint64
 
 	debug                      bool
 	freeableMemBlockChansCap   int
@@ -206,12 +212,15 @@ func (store *defaultGroupStore) Stats(debug bool) (fmt.Stringer, error) {
 		ExpiredDeletions:             atomic.LoadInt32(&store.expiredDeletions),
 		Compactions:                  atomic.LoadInt32(&store.compactions),
 		SmallFileCompactions:         atomic.LoadInt32(&store.smallFileCompactions),
-		Free:                         atomic.LoadUint64(&store.diskWatcherState.free),
-		Used:                         atomic.LoadUint64(&store.diskWatcherState.used),
-		Size:                         atomic.LoadUint64(&store.diskWatcherState.size),
-		FreeTOC:                      atomic.LoadUint64(&store.diskWatcherState.freetoc),
-		UsedTOC:                      atomic.LoadUint64(&store.diskWatcherState.usedtoc),
-		SizeTOC:                      atomic.LoadUint64(&store.diskWatcherState.sizetoc),
+		DiskFree:                     atomic.LoadUint64(&store.watcherState.diskFree),
+		DiskUsed:                     atomic.LoadUint64(&store.watcherState.diskUsed),
+		DiskSize:                     atomic.LoadUint64(&store.watcherState.diskSize),
+		DiskFreeTOC:                  atomic.LoadUint64(&store.watcherState.diskFreeTOC),
+		DiskUsedTOC:                  atomic.LoadUint64(&store.watcherState.diskUsedTOC),
+		DiskSizeTOC:                  atomic.LoadUint64(&store.watcherState.diskSizeTOC),
+		MemFree:                      atomic.LoadUint64(&store.watcherState.memFree),
+		MemUsed:                      atomic.LoadUint64(&store.watcherState.memUsed),
+		MemSize:                      atomic.LoadUint64(&store.watcherState.memSize),
 	}
 	atomic.AddInt32(&store.lookups, -stats.Lookups)
 	atomic.AddInt32(&store.lookupErrors, -stats.LookupErrors)
@@ -345,12 +354,15 @@ func (stats *GroupStoreStats) String() string {
 		{"ExpiredDeletions", fmt.Sprintf("%d", stats.ExpiredDeletions)},
 		{"Compactions", fmt.Sprintf("%d", stats.Compactions)},
 		{"SmallFileCompactions", fmt.Sprintf("%d", stats.SmallFileCompactions)},
-		{"Free", fmt.Sprintf("%d", stats.Free)},
-		{"Used", fmt.Sprintf("%d", stats.Used)},
-		{"Size", fmt.Sprintf("%d", stats.Size)},
-		{"FreeTOC", fmt.Sprintf("%d", stats.FreeTOC)},
-		{"UsedTOC", fmt.Sprintf("%d", stats.UsedTOC)},
-		{"SizeTOC", fmt.Sprintf("%d", stats.SizeTOC)},
+		{"DiskFree", fmt.Sprintf("%d", stats.DiskFree)},
+		{"DiskUsed", fmt.Sprintf("%d", stats.DiskUsed)},
+		{"DiskSize", fmt.Sprintf("%d", stats.DiskSize)},
+		{"DiskFreeTOC", fmt.Sprintf("%d", stats.DiskFreeTOC)},
+		{"DiskUsedTOC", fmt.Sprintf("%d", stats.DiskUsedTOC)},
+		{"DiskSizeTOC", fmt.Sprintf("%d", stats.DiskSizeTOC)},
+		{"MemFree", fmt.Sprintf("%d", stats.MemFree)},
+		{"MemUsed", fmt.Sprintf("%d", stats.MemUsed)},
+		{"MemSize", fmt.Sprintf("%d", stats.MemSize)},
 	}
 	if stats.debug {
 		report = append(report, [][]string{

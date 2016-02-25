@@ -72,7 +72,7 @@ type defaultValueStore struct {
 	disableEnableWritesLock sync.Mutex
 	userDisabled            bool
 	flusherState            valueFlusherState
-	diskWatcherState        valueDiskWatcherState
+	watcherState            valueWatcherState
 	restartChan             chan error
 
 	statsLock                    sync.Mutex
@@ -225,7 +225,7 @@ func NewValueStore(c *ValueStoreConfig) (ValueStore, chan error) {
 	store.bulkSetConfig(cfg)
 	store.bulkSetAckConfig(cfg)
 	store.flusherConfig(cfg)
-	store.diskWatcherConfig(cfg)
+	store.watcherConfig(cfg)
 	return store, store.restartChan
 }
 
@@ -309,7 +309,7 @@ func (store *defaultValueStore) Startup() error {
 		store.bulkSetStartup,
 		store.bulkSetAckStartup,
 		store.compactionStartup,
-		store.diskWatcherStartup,
+		store.watcherStartup,
 		store.flusherStartup,
 		store.pullReplicationStartup,
 		store.pushReplicationStartup,
@@ -340,7 +340,7 @@ func (store *defaultValueStore) Shutdown() error {
 		store.bulkSetShutdown,
 		store.bulkSetAckShutdown,
 		store.compactionShutdown,
-		store.diskWatcherShutdown,
+		store.watcherShutdown,
 		store.flusherShutdown,
 		store.pullReplicationShutdown,
 		store.pushReplicationShutdown,

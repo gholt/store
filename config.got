@@ -195,35 +195,36 @@ type {{.T}}StoreConfig struct {
     // CompactionAgeThreshold indicates how old a given file must be before it
     // is considered for compaction. Defaults to 300 seconds.
     CompactionAgeThreshold int
-    // FreeDisableThreshold controls when to automatically disable writes; the
-    // number is in bytes. If the number of free bytes on either the Path or
-    // TOCPath device falls below this threshold, writes will be automatically
-    // disabled.
+    // DiskFreeDisableThreshold controls when to automatically disable writes;
+    // the number is in bytes. If the number of free bytes on either the Path
+    // or TOCPath device falls below this threshold, writes will be
+    // automatically disabled.
     // 0 will use the default; 1 will disable the check.
     // default: 8,589,934,592 (8G)
-    FreeDisableThreshold uint64
-    // FreeReenableThreshold controls when to automatically re-enable writes;
-    // the number is in bytes. If writes are automatically disabled and the
-    // number of free bytes on each of the Path or TOCPath devices rises above
-    // this threshold, writes will be automatically re-enabled. A negative
-    // value will turn off this check.
+    DiskFreeDisableThreshold uint64
+    // DiskFreeReenableThreshold controls when to automatically re-enable
+    // writes; the number is in bytes. If writes are automatically disabled and
+    // the number of free bytes on each of the Path or TOCPath devices rises
+    // above this threshold, writes will be automatically re-enabled. A
+    // negative value will turn off this check.
     // 0 will use the default; 1 will disable the check.
     // default: 17,179,869,184 (16G)
-    FreeReenableThreshold uint64
-    // UsageDisableThreshold controls when to automatically disable writes; the
-    // number is a percentage (1 == 100%). If the percentage used on either the
-    // Path or TOCPath device grows above this threshold, writes will be
+    DiskFreeReenableThreshold uint64
+    // DiskUsageDisableThreshold controls when to automatically disable writes;
+    // the number is a percentage (1 == 100%). If the percentage used on either
+    // the Path or TOCPath device grows above this threshold, writes will be
     // automatically disabled.
     // 0 will use the default; a negative value will disable the check.
-    // default: 95%
-    UsageDisableThreshold float32
-    // UsageReenableThreshold controls when to automatically re-enable writes;
-    // the number is a percentage (1 == 100%). If writes are automatically
-    // disabled and the percentage used on each of the Path or TOCPath devices
-    // falls below this threshold, writes will be automatically re-enabled.
+    // default: 0.95 (95%)
+    DiskUsageDisableThreshold float32
+    // DiskUsageReenableThreshold controls when to automatically re-enable
+    // writes; the number is a percentage (1 == 100%). If writes are
+    // automatically disabled and the percentage used on each of the Path or
+    // TOCPath devices falls below this threshold, writes will be automatically
+    // re-enabled.
     // 0 will use the default; a negative value will disable the check.
-    // default: 90%
-    UsageReenableThreshold float32
+    // default: 0.90 (90%)
+    DiskUsageReenableThreshold float32
     // FlusherThreshold sets the number of to-disk modifications controlling
     // the once-a-minute automatic flusher. If there are less than this
     // setting's number of modifications for a minute, the store's Flush method
@@ -242,6 +243,33 @@ type {{.T}}StoreConfig struct {
     // AuditAgeThreshold indicates how old a given file must be before it
     // is considered for an audit. Defaults to 604,800 seconds (1 week).
     AuditAgeThreshold int
+    // MemFreeDisableThreshold controls when to automatically disable writes;
+    // the number is in bytes. If the number of free bytes of memory falls
+    // below this threshold, writes will be automatically disabled.
+    // 0 will use the default; 1 will disable the check.
+    // default: 134,217,728 (128M)
+    MemFreeDisableThreshold uint64
+    // MemFreeReenableThreshold controls when to automatically re-enable
+    // writes; the number is in bytes. If writes are automatically disabled and
+    // the number of free bytes of memory rises above this threshold, writes
+    // will be automatically re-enabled. A negative value will turn off this
+    // check.
+    // 0 will use the default; 1 will disable the check.
+    // default: 268,435,456 (256M)
+    MemFreeReenableThreshold uint64
+    // MemUsageDisableThreshold controls when to automatically disable writes;
+    // the number is a percentage (1 == 100%). If the percentage of used memory
+    // grows above this threshold, writes will be automatically disabled.
+    // 0 will use the default; a negative value will disable the check.
+    // default: 0.95 (95%)
+    MemUsageDisableThreshold float32
+    // MemUsageReenableThreshold controls when to automatically re-enable
+    // writes; the number is a percentage (1 == 100%). If writes are
+    // automatically disabled and the percentage of used memory falls below
+    // this threshold, writes will be automatically re-enabled.
+    // 0 will use the default; a negative value will disable the check.
+    // default: 0.90 (90%)
+    MemUsageReenableThreshold float32
 
     OpenReadSeeker func(fullPath string) (io.ReadSeeker, error)
     OpenWriteSeeker func(fullPath string) (io.WriteSeeker, error)
@@ -738,45 +766,45 @@ func resolve{{.T}}StoreConfig(c *{{.T}}StoreConfig) *{{.T}}StoreConfig {
     if cfg.CompactionAgeThreshold < 1 {
         cfg.CompactionAgeThreshold = 1
     }
-    if env := os.Getenv("{{.TT}}STORE_FREE_DISABLE_THRESHOLD"); env != "" {
+    if env := os.Getenv("{{.TT}}STORE_DISK_FREE_DISABLE_THRESHOLD"); env != "" {
         if val, err := strconv.ParseUint(env, 10, 64); err == nil {
-            cfg.FreeDisableThreshold = val
+            cfg.DiskFreeDisableThreshold = val
         }
     }
     // NOTE: If the value is 1, that will disable the check
-    if cfg.FreeDisableThreshold == 0 {
-        cfg.FreeDisableThreshold = 8589934592
+    if cfg.DiskFreeDisableThreshold == 0 {
+        cfg.DiskFreeDisableThreshold = 8589934592
     }
-    if env := os.Getenv("{{.TT}}STORE_FREE_REENABLE_THRESHOLD"); env != "" {
+    if env := os.Getenv("{{.TT}}STORE_DISK_FREE_REENABLE_THRESHOLD"); env != "" {
         if val, err := strconv.ParseUint(env, 10, 64); err == nil {
-            cfg.FreeReenableThreshold = val
+            cfg.DiskFreeReenableThreshold = val
         }
     }
     // NOTE: If the value is 1, that will disable the check
-    if cfg.FreeReenableThreshold == 0 {
-        cfg.FreeReenableThreshold = 17179869184
+    if cfg.DiskFreeReenableThreshold == 0 {
+        cfg.DiskFreeReenableThreshold = 17179869184
     }
-    if env := os.Getenv("{{.TT}}STORE_USAGE_DISABLE_THRESHOLD"); env != "" {
+    if env := os.Getenv("{{.TT}}STORE_DISK_USAGE_DISABLE_THRESHOLD"); env != "" {
         if val, err := strconv.ParseFloat(env, 32); err == nil {
-            cfg.UsageDisableThreshold = float32(val)
+            cfg.DiskUsageDisableThreshold = float32(val)
         }
     }
-    if cfg.UsageDisableThreshold == 0 {
-        cfg.UsageDisableThreshold = 95
+    if cfg.DiskUsageDisableThreshold == 0 {
+        cfg.DiskUsageDisableThreshold = 0.95
     }
-    if cfg.UsageDisableThreshold < 0 {
-        cfg.UsageDisableThreshold = 0
+    if cfg.DiskUsageDisableThreshold < 0 {
+        cfg.DiskUsageDisableThreshold = 0
     }
-    if env := os.Getenv("{{.TT}}STORE_USAGE_REENABLE_THRESHOLD"); env != "" {
+    if env := os.Getenv("{{.TT}}STORE_DISK_USAGE_REENABLE_THRESHOLD"); env != "" {
         if val, err := strconv.ParseFloat(env, 32); err == nil {
-            cfg.UsageReenableThreshold = float32(val)
+            cfg.DiskUsageReenableThreshold = float32(val)
         }
     }
-    if cfg.UsageReenableThreshold == 0 {
-        cfg.UsageReenableThreshold = 90
+    if cfg.DiskUsageReenableThreshold == 0 {
+        cfg.DiskUsageReenableThreshold = 0.90
     }
-    if cfg.UsageReenableThreshold < 0 {
-        cfg.UsageReenableThreshold = 0
+    if cfg.DiskUsageReenableThreshold < 0 {
+        cfg.DiskUsageReenableThreshold = 0
     }
     if env := os.Getenv("{{.TT}}STORE_FLUSHER_THRESHOLD"); env != "" {
         if val, err := strconv.Atoi(env); err == nil {
@@ -810,6 +838,46 @@ func resolve{{.T}}StoreConfig(c *{{.T}}StoreConfig) *{{.T}}StoreConfig {
     }
     if cfg.AuditAgeThreshold < 1 {
         cfg.AuditAgeThreshold = 1
+    }
+    if env := os.Getenv("{{.TT}}STORE_MEM_FREE_DISABLE_THRESHOLD"); env != "" {
+        if val, err := strconv.ParseUint(env, 10, 64); err == nil {
+            cfg.MemFreeDisableThreshold = val
+        }
+    }
+    // NOTE: If the value is 1, that will disable the check
+    if cfg.MemFreeDisableThreshold == 0 {
+        cfg.MemFreeDisableThreshold = 134217728
+    }
+    if env := os.Getenv("{{.TT}}STORE_MEM_FREE_REENABLE_THRESHOLD"); env != "" {
+        if val, err := strconv.ParseUint(env, 10, 64); err == nil {
+            cfg.MemFreeReenableThreshold = val
+        }
+    }
+    // NOTE: If the value is 1, that will disable the check
+    if cfg.MemFreeReenableThreshold == 0 {
+        cfg.MemFreeReenableThreshold = 268435456
+    }
+    if env := os.Getenv("{{.TT}}STORE_MEM_USAGE_DISABLE_THRESHOLD"); env != "" {
+        if val, err := strconv.ParseFloat(env, 32); err == nil {
+            cfg.MemUsageDisableThreshold = float32(val)
+        }
+    }
+    if cfg.MemUsageDisableThreshold == 0 {
+        cfg.MemUsageDisableThreshold = 0.95
+    }
+    if cfg.MemUsageDisableThreshold < 0 {
+        cfg.MemUsageDisableThreshold = 0
+    }
+    if env := os.Getenv("{{.TT}}STORE_MEM_USAGE_REENABLE_THRESHOLD"); env != "" {
+        if val, err := strconv.ParseFloat(env, 32); err == nil {
+            cfg.MemUsageReenableThreshold = float32(val)
+        }
+    }
+    if cfg.MemUsageReenableThreshold == 0 {
+        cfg.MemUsageReenableThreshold = 0.90
+    }
+    if cfg.MemUsageReenableThreshold < 0 {
+        cfg.MemUsageReenableThreshold = 0
     }
 
     if cfg.OpenReadSeeker == nil {
