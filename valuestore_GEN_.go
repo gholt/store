@@ -735,6 +735,9 @@ func (store *defaultValueStore) fileWriter() {
 				memWritersFlushLeft = len(store.pendingWriteReqChans)
 				continue
 			}
+			// This loop is reversed so there isn't a race condition in the
+			// loop check; if you use the usual loop of 0 through len(x), the
+			// use of x in the len will race.
 			for i := len(store.freeableMemBlockChans) - 1; i >= 0; i-- {
 				store.freeableMemBlockChans[i] <- shutdownValueMemBlock
 			}

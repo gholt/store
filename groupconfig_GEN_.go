@@ -293,7 +293,12 @@ func resolveGroupStoreConfig(c *GroupStoreConfig) *GroupStoreConfig {
 	if c != nil {
 		*cfg = *c
 	}
-	if cfg.Scale <= 0 {
+	if env := os.Getenv("GROUPSTORE_SCALE"); env != "" {
+		if val, err := strconv.ParseFloat(env, 64); err == nil {
+			cfg.Scale = val
+		}
+	}
+	if cfg.Scale <= 0 || cfg.Scale > 1 {
 		cfg.Scale = 1
 	}
 	if cfg.Rand == nil {
