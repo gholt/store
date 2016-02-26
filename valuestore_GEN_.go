@@ -735,7 +735,7 @@ func (store *defaultValueStore) fileWriter() {
 				memWritersFlushLeft = len(store.pendingWriteReqChans)
 				continue
 			}
-			for i := 0; i < len(store.freeableMemBlockChans); i++ {
+			for i := len(store.freeableMemBlockChans) - 1; i >= 0; i-- {
 				store.freeableMemBlockChans[i] <- shutdownValueMemBlock
 			}
 			break
