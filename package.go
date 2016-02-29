@@ -280,6 +280,14 @@ type LookupGroupItem struct {
 	Length         uint32
 }
 
+// ReadGroupItem is returned by the GroupStore.ReadGroup call.
+type ReadGroupItem struct {
+	ChildKeyA      uint64
+	ChildKeyB      uint64
+	TimestampMicro int64
+	Value          []byte
+}
+
 // GroupStore is an interface for a disk-backed data structure that stores
 // []byte values referenced by 128 bit key pairs with options for replication.
 // Values are stored by the combination of both pairs (parentKeyA, parentKeyB,
@@ -315,6 +323,9 @@ type GroupStore interface {
 	// or returns any error; a newer timestampmicro already in place is not
 	// reported as an error. Note that with a Write and a Delete for the exact
 	// same timestampmicro, the Delete wins.
+	// ReadGroup returns all the (childKeyA, childKeyB, timestampMicro, value)
+	// items matching under (parentKeyA, parentKeyB).
+	ReadGroup(parentKeyA, parentKeyB uint64) ([]ReadGroupItem, error)
 	Write(parentKeyA, parentKeyB, childKeyA, childKeyB uint64, timestampmicro int64, value []byte) (oldtimestampmicro int64, err error)
 	// Delete stores timestampmicro for (parentKeyA, parentKeyB, childKeyA,
 	// childKeyB) and returns the previously stored timestampmicro or returns

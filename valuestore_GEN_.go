@@ -82,6 +82,8 @@ type defaultValueStore struct {
 	lookupGroupItems             int32
 	reads                        int32
 	readErrors                   int32
+	readGroups                   int32
+	readGroupItems               int32
 	writes                       int32
 	writeErrors                  int32
 	writesOverridden             int32

@@ -82,6 +82,8 @@ type default{{.T}}Store struct {
     lookupGroupItems             int32
     reads                        int32
     readErrors                   int32
+    readGroups                   int32
+    readGroupItems               int32
     writes                       int32
     writeErrors                  int32
     writesOverridden             int32
@@ -455,6 +457,30 @@ func (store *default{{.T}}Store) LookupGroup(keyA uint64, keyB uint64) ([]Lookup
         }
     }
     atomic.AddInt32(&store.lookupGroupItems, int32(i))
+    return rv[:i], nil
+}
+
+func (store *default{{.T}}Store) ReadGroup(keyA uint64, keyB uint64) ([]ReadGroupItem, error) {
+    // Returned []ReadGroupItem is not a []* for less garbage collection and
+    // is likely fine most use cases.
+    atomic.AddInt32(&store.readGroups, 1)
+    items := store.locmap.GetGroup(keyA, keyB)
+    if len(items) == 0 {
+        return nil, nil
+    }
+    rv := make([]ReadGroupItem, len(items))
+    i := 0
+    for _, item := range items {
+        timestampMicro, value, err := store.read(keyA, keyB, item.ChildKeyA, item.ChildKeyB, nil)
+        if err == nil && timestampMicro & _TSB_DELETION == 0 {
+            rv[i].ChildKeyA = item.ChildKeyA
+            rv[i].ChildKeyB = item.ChildKeyB
+            rv[i].TimestampMicro = int64(timestampMicro >> _TSB_UTIL_BITS)
+            rv[i].Value = value
+            i++
+        }
+    }
+    atomic.AddInt32(&store.readGroupItems, int32(i))
     return rv[:i], nil
 }
 {{end}}
