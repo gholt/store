@@ -133,7 +133,7 @@ func (fl *valueStoreFile) timestampnano() int64 {
 
 func (fl *valueStoreFile) read(keyA uint64, keyB uint64, timestampbits uint64, offset uint32, length uint32, value []byte) (uint64, []byte, error) {
 	if timestampbits&_TSB_DELETION != 0 {
-		return timestampbits, value, ErrNotFound
+		return timestampbits, value, errNotFound
 	}
 	i := int(keyA>>1) % len(fl.readerFPs)
 	fl.readerLocks[i].Lock()

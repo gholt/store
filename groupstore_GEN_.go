@@ -430,7 +430,7 @@ func (store *defaultGroupStore) Lookup(keyA uint64, keyB uint64, childKeyA uint6
 func (store *defaultGroupStore) lookup(keyA uint64, keyB uint64, childKeyA uint64, childKeyB uint64) (uint64, uint32, uint32, error) {
 	timestampbits, id, _, length := store.locmap.Get(keyA, keyB, childKeyA, childKeyB)
 	if id == 0 || timestampbits&_TSB_DELETION != 0 {
-		return timestampbits, id, 0, ErrNotFound
+		return timestampbits, id, 0, errNotFound
 	}
 	return timestampbits, id, length, nil
 }
@@ -494,7 +494,7 @@ func (store *defaultGroupStore) Read(keyA uint64, keyB uint64, childKeyA uint64,
 func (store *defaultGroupStore) read(keyA uint64, keyB uint64, childKeyA uint64, childKeyB uint64, value []byte) (uint64, []byte, error) {
 	timestampbits, id, offset, length := store.locmap.Get(keyA, keyB, childKeyA, childKeyB)
 	if id == 0 || timestampbits&_TSB_DELETION != 0 || timestampbits&_TSB_LOCAL_REMOVAL != 0 {
-		return timestampbits, value, ErrNotFound
+		return timestampbits, value, errNotFound
 	}
 	return store.locBlock(id).read(keyA, keyB, childKeyA, childKeyB, timestampbits, offset, length, value)
 }
@@ -703,7 +703,7 @@ func (store *defaultGroupStore) memWriter(pendingWriteReqChan chan *groupWriteRe
 			break
 		}
 		if !enabled && !writeReq.internal {
-			writeReq.errChan <- ErrDisabled
+			writeReq.errChan <- errDisabled
 			continue
 		}
 		length := len(writeReq.value)

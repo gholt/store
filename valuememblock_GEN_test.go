@@ -15,7 +15,7 @@ func TestValueValuesMemRead(t *testing.T) {
 		t.Fatal(tsn)
 	}
 	ts, v, err := memBlock1.read(1, 2, 0x100, 5, 6, nil)
-	if err != ErrNotFound {
+	if !IsNotFound(err) {
 		t.Fatal(err)
 	}
 	memBlock1.store.locmap.Set(1, 2, 0x100, memBlock1.id, 5, 6, false)
@@ -32,7 +32,7 @@ func TestValueValuesMemRead(t *testing.T) {
 	}
 	memBlock1.store.locmap.Set(1, 2, 0x100|_TSB_DELETION, memBlock1.id, 5, 6, false)
 	ts, v, err = memBlock1.read(1, 2, 0x100, 5, 6, nil)
-	if err != ErrNotFound {
+	if !IsNotFound(err) {
 		t.Fatal(err)
 	}
 	memBlock1.store.locmap.Set(1, 2, 0x200, memBlock2.id, 5, 6, false)

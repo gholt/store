@@ -175,7 +175,7 @@ func (store *defaultGroupStore) pushReplicationPass(notifyChan chan *bgNotificat
 			// This might mean we need to send a deletion or it might mean the
 			// key has been completely removed from our records
 			// (timestampbits==0).
-			if err == ErrNotFound {
+			if IsNotFound(err) {
 				if timestampbits == 0 {
 					continue
 				}

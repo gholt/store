@@ -24,7 +24,7 @@ func (memBlock *valueMemBlock) read(keyA uint64, keyB uint64, timestampbits uint
 	timestampbits, id, offset, length := memBlock.store.locmap.Get(keyA, keyB)
 	if id == 0 || timestampbits&_TSB_DELETION != 0 {
 		memBlock.discardLock.RUnlock()
-		return timestampbits, value, ErrNotFound
+		return timestampbits, value, errNotFound
 	}
 	if id != memBlock.id {
 		memBlock.discardLock.RUnlock()

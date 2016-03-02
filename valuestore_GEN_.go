@@ -427,7 +427,7 @@ func (store *defaultValueStore) Lookup(keyA uint64, keyB uint64) (int64, uint32,
 func (store *defaultValueStore) lookup(keyA uint64, keyB uint64) (uint64, uint32, uint32, error) {
 	timestampbits, id, _, length := store.locmap.Get(keyA, keyB)
 	if id == 0 || timestampbits&_TSB_DELETION != 0 {
-		return timestampbits, id, 0, ErrNotFound
+		return timestampbits, id, 0, errNotFound
 	}
 	return timestampbits, id, length, nil
 }
@@ -444,7 +444,7 @@ func (store *defaultValueStore) Read(keyA uint64, keyB uint64, value []byte) (in
 func (store *defaultValueStore) read(keyA uint64, keyB uint64, value []byte) (uint64, []byte, error) {
 	timestampbits, id, offset, length := store.locmap.Get(keyA, keyB)
 	if id == 0 || timestampbits&_TSB_DELETION != 0 || timestampbits&_TSB_LOCAL_REMOVAL != 0 {
-		return timestampbits, value, ErrNotFound
+		return timestampbits, value, errNotFound
 	}
 	return store.locBlock(id).read(keyA, keyB, timestampbits, offset, length, value)
 }
@@ -646,7 +646,7 @@ func (store *defaultValueStore) memWriter(pendingWriteReqChan chan *valueWriteRe
 			break
 		}
 		if !enabled && !writeReq.internal {
-			writeReq.errChan <- ErrDisabled
+			writeReq.errChan <- errDisabled
 			continue
 		}
 		length := len(writeReq.value)

@@ -316,7 +316,7 @@ func (store *defaultGroupStore) inPullReplication(wg *sync.WaitGroup) {
 			var err error
 			for i := 0; i < len(k); i += 4 {
 				t, v, err = store.read(k[i], k[i+1], k[i+2], k[i+3], v[:0])
-				if err == ErrNotFound {
+				if IsNotFound(err) {
 					if t == 0 {
 						continue
 					}

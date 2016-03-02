@@ -115,7 +115,7 @@ func TestValueBulkSetAckMsgIncoming(t *testing.T) {
 	<-store.bulkSetAckState.inFreeMsgChan
 	// Make sure the item is gone
 	ts2, v, err = store.read(1, 2, nil)
-	if err != ErrNotFound {
+	if !IsNotFound(err) {
 		t.Fatal(err)
 	}
 	if ts2 != 0x500|_TSB_LOCAL_REMOVAL {

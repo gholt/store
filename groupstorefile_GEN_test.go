@@ -41,7 +41,7 @@ func TestGroupValuesFileReading(t *testing.T) {
 		t.Fatal(string(v))
 	}
 	ts, v, err = fl.read(1, 2, 0, 0, 0x300|_TSB_DELETION, _GROUP_FILE_HEADER_SIZE+4, 5, nil)
-	if err != ErrNotFound {
+	if !IsNotFound(err) {
 		t.Fatal(err)
 	}
 	if ts != 0x300|_TSB_DELETION {

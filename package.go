@@ -120,7 +120,6 @@ package store
 //go:generate got stats.got groupstats_GEN_.go TT=GROUP T=Group t=group
 
 import (
-	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -149,8 +148,39 @@ const (
 	TIMESTAMPMICRO_MAX = int64(uint64(math.MaxUint64) >> _TSB_UTIL_BITS)
 )
 
-var ErrNotFound error = errors.New("not found")
-var ErrDisabled error = errors.New("disabled")
+func IsNotFound(err error) bool {
+	_, is := err.(ErrNotFound)
+	return is
+}
+
+type ErrNotFound interface {
+	ErrNotFound() string
+}
+
+var errNotFound error = _errNotFound{}
+
+type _errNotFound struct{}
+
+func (e _errNotFound) Error() string { return "not found" }
+
+func (e _errNotFound) ErrNotFound() string { return "not found" }
+
+func IsDisabled(err error) bool {
+	_, is := err.(ErrDisabled)
+	return is
+}
+
+type ErrDisabled interface {
+	ErrDisabled() string
+}
+
+var errDisabled error = _errDisabled{}
+
+type _errDisabled struct{}
+
+func (e _errDisabled) Error() string { return "disabled" }
+
+func (e _errDisabled) ErrDisabled() string { return "disabled" }
 
 var toss []byte = make([]byte, 65536)
 
