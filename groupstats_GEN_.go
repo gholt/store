@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/gholt/brimtext"
+	"golang.org/x/net/context"
 )
 
 type GroupStoreStats struct {
@@ -173,7 +174,7 @@ type GroupStoreStats struct {
 	locmapDebugInfo            fmt.Stringer
 }
 
-func (store *defaultGroupStore) Stats(debug bool) (fmt.Stringer, error) {
+func (store *defaultGroupStore) Stats(ctx context.Context, debug bool) (fmt.Stringer, error) {
 	store.statsLock.Lock()
 	stats := &GroupStoreStats{
 		Lookups:                      atomic.LoadInt32(&store.lookups),

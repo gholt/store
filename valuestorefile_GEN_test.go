@@ -5,6 +5,8 @@ import (
 	"encoding/binary"
 	"io"
 	"testing"
+
+	"golang.org/x/net/context"
 )
 
 func TestValueValuesFileReading(t *testing.T) {
@@ -15,10 +17,10 @@ func TestValueValuesFileReading(t *testing.T) {
 		return &memFile{buf: buf}, nil
 	}
 	store, _ := newTestValueStore(cfg)
-	if err := store.Startup(); err != nil {
+	if err := store.Startup(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	defer store.Shutdown()
+	defer store.Shutdown(context.Background())
 	fl, err := store.newValueReadFile(12345)
 	if err != nil {
 		t.Fatal("")
@@ -108,10 +110,10 @@ func TestValueValuesFileWritingEmpty(t *testing.T) {
 		return &memFile{buf: buf}, nil
 	}
 	store, _ := newTestValueStore(cfg)
-	if err := store.Startup(); err != nil {
+	if err := store.Startup(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	defer store.Shutdown()
+	defer store.Shutdown(context.Background())
 	fl, err := store.createValueReadWriteFile()
 	if err != nil {
 		t.Fatal("")
@@ -146,10 +148,10 @@ func TestValueValuesFileWritingEmpty2(t *testing.T) {
 		return &memFile{buf: buf}, nil
 	}
 	store, _ := newTestValueStore(cfg)
-	if err := store.Startup(); err != nil {
+	if err := store.Startup(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	defer store.Shutdown()
+	defer store.Shutdown(context.Background())
 	fl, err := store.createValueReadWriteFile()
 	if err != nil {
 		t.Fatal("")
@@ -190,10 +192,10 @@ func TestValueValuesFileWriting(t *testing.T) {
 		return &memFile{buf: buf}, nil
 	}
 	store, _ := newTestValueStore(cfg)
-	if err := store.Startup(); err != nil {
+	if err := store.Startup(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	defer store.Shutdown()
+	defer store.Shutdown(context.Background())
 	fl, err := store.createValueReadWriteFile()
 	if err != nil {
 		t.Fatal("")
@@ -237,10 +239,10 @@ func TestValueValuesFileWritingMore(t *testing.T) {
 		return &memFile{buf: buf}, nil
 	}
 	store, _ := newTestValueStore(cfg)
-	if err := store.Startup(); err != nil {
+	if err := store.Startup(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	defer store.Shutdown()
+	defer store.Shutdown(context.Background())
 	fl, err := store.createValueReadWriteFile()
 	if err != nil {
 		t.Fatal("")
@@ -283,10 +285,10 @@ func TestValueValuesFileWritingMultiple(t *testing.T) {
 		return &memFile{buf: buf}, nil
 	}
 	store, _ := newTestValueStore(cfg)
-	if err := store.Startup(); err != nil {
+	if err := store.Startup(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	defer store.Shutdown()
+	defer store.Shutdown(context.Background())
 	fl, err := store.createValueReadWriteFile()
 	if err != nil {
 		t.Fatal("")

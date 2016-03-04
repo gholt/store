@@ -21,6 +21,7 @@ import (
 	"github.com/gholt/locmap"
 	"github.com/gholt/ring"
 	"github.com/spaolacci/murmur3"
+	"golang.org/x/net/context"
 )
 
 // defaultValueStore instances are created with NewValueStore.
@@ -163,15 +164,15 @@ type valueLocBlock interface {
 //
 // The restart channel (chan error) should be read from continually during the
 // life of the store and, upon any error from the channel, the store should be
-// restarted with Shutdown() and Startup(). This restart procedure is needed
-// when data on disk is detected as corrupted and cannot be easily recovered
-// from; a restart will cause only good entries to be loaded therefore
-// discarding any bad entries due to the corruption. A restart may also be
-// requested if the store reaches an unrecoverable state, such as no longer
-// being able to open new files.
+// restarted with Shutdown and Startup. This restart procedure is needed when
+// data on disk is detected as corrupted and cannot be easily recovered from; a
+// restart will cause only good entries to be loaded therefore discarding any
+// bad entries due to the corruption. A restart may also be requested if the
+// store reaches an unrecoverable state, such as no longer being able to open
+// new files.
 //
 // Note that a lot of buffering, multiple cores, and background processes can
-// be in use and therefore Shutdown() should be called prior to the process
+// be in use and therefore Shutdown should be called prior to the process
 // exiting to ensure all processing is done and the buffers are flushed.
 func NewValueStore(c *ValueStoreConfig) (ValueStore, chan error) {
 	cfg := resolveValueStoreConfig(c)
@@ -231,11 +232,11 @@ func NewValueStore(c *ValueStoreConfig) (ValueStore, chan error) {
 	return store, store.restartChan
 }
 
-func (store *defaultValueStore) ValueCap() (uint32, error) {
+func (store *defaultValueStore) ValueCap(ctx context.Context) (uint32, error) {
 	return store.valueCap, nil
 }
 
-func (store *defaultValueStore) Startup() error {
+func (store *defaultValueStore) Startup(ctx context.Context) error {
 	store.runningLock.Lock()
 	switch store.running {
 	case 0: // not running
@@ -324,13 +325,13 @@ func (store *defaultValueStore) Startup() error {
 		}(i, f)
 	}
 	wg.Wait()
-	store.EnableWrites()
+	store.EnableWrites(ctx)
 	store.running = 1 // running
 	store.runningLock.Unlock()
 	return nil
 }
 
-func (store *defaultValueStore) Shutdown() error {
+func (store *defaultValueStore) Shutdown(ctx context.Context) error {
 	store.runningLock.Lock()
 	if store.running != 1 { // running
 		store.runningLock.Unlock()
@@ -355,7 +356,7 @@ func (store *defaultValueStore) Shutdown() error {
 		}(i, f)
 	}
 	wg.Wait()
-	store.DisableWrites()
+	store.DisableWrites(ctx)
 	for _, c := range store.pendingWriteReqChans {
 		c <- shutdownValueWriteReq
 	}
@@ -376,7 +377,7 @@ func (store *defaultValueStore) Shutdown() error {
 	return nil
 }
 
-func (store *defaultValueStore) EnableWrites() error {
+func (store *defaultValueStore) EnableWrites(ctx context.Context) error {
 	store.enableWrites(true)
 	return nil
 }
@@ -392,7 +393,7 @@ func (store *defaultValueStore) enableWrites(userCall bool) {
 	store.disableEnableWritesLock.Unlock()
 }
 
-func (store *defaultValueStore) DisableWrites() error {
+func (store *defaultValueStore) DisableWrites(ctx context.Context) error {
 	store.disableWrites(true)
 	return nil
 }
@@ -407,7 +408,8 @@ func (store *defaultValueStore) disableWrites(userCall bool) {
 	}
 	store.disableEnableWritesLock.Unlock()
 }
-func (store *defaultValueStore) Flush() error {
+
+func (store *defaultValueStore) Flush(ctx context.Context) error {
 	for _, c := range store.pendingWriteReqChans {
 		c <- flushValueWriteReq
 	}
@@ -415,7 +417,7 @@ func (store *defaultValueStore) Flush() error {
 	return nil
 }
 
-func (store *defaultValueStore) Lookup(keyA uint64, keyB uint64) (int64, uint32, error) {
+func (store *defaultValueStore) Lookup(ctx context.Context, keyA uint64, keyB uint64) (int64, uint32, error) {
 	atomic.AddInt32(&store.lookups, 1)
 	timestampbits, _, length, err := store.lookup(keyA, keyB)
 	if err != nil {
@@ -432,7 +434,7 @@ func (store *defaultValueStore) lookup(keyA uint64, keyB uint64) (uint64, uint32
 	return timestampbits, id, length, nil
 }
 
-func (store *defaultValueStore) Read(keyA uint64, keyB uint64, value []byte) (int64, []byte, error) {
+func (store *defaultValueStore) Read(ctx context.Context, keyA uint64, keyB uint64, value []byte) (int64, []byte, error) {
 	atomic.AddInt32(&store.reads, 1)
 	timestampbits, value, err := store.read(keyA, keyB, value)
 	if err != nil {
@@ -449,7 +451,7 @@ func (store *defaultValueStore) read(keyA uint64, keyB uint64, value []byte) (ui
 	return store.locBlock(id).read(keyA, keyB, timestampbits, offset, length, value)
 }
 
-func (store *defaultValueStore) Write(keyA uint64, keyB uint64, timestampmicro int64, value []byte) (int64, error) {
+func (store *defaultValueStore) Write(ctx context.Context, keyA uint64, keyB uint64, timestampmicro int64, value []byte) (int64, error) {
 	atomic.AddInt32(&store.writes, 1)
 	if timestampmicro < TIMESTAMPMICRO_MIN {
 		atomic.AddInt32(&store.writeErrors, 1)
@@ -489,7 +491,7 @@ func (store *defaultValueStore) write(keyA uint64, keyB uint64, timestampbits ui
 	return ptimestampbits, err
 }
 
-func (store *defaultValueStore) Delete(keyA uint64, keyB uint64, timestampmicro int64) (int64, error) {
+func (store *defaultValueStore) Delete(ctx context.Context, keyA uint64, keyB uint64, timestampmicro int64) (int64, error) {
 	atomic.AddInt32(&store.deletes, 1)
 	if timestampmicro < TIMESTAMPMICRO_MIN {
 		atomic.AddInt32(&store.deleteErrors, 1)
@@ -774,7 +776,7 @@ func (store *defaultValueStore) fileWriter() {
 				disabledDueToError = err
 				disabledDueToErrorLogTime = time.Now().Add(5 * time.Minute)
 				go func() {
-					store.Shutdown()
+					store.Shutdown(context.Background())
 					store.restartChan <- errors.New("no new files can be opened")
 				}()
 			}
@@ -810,7 +812,7 @@ func (store *defaultValueStore) tocWriter() {
 		store.logCritical("tocWriter: %d %s", point, err)
 		disabled = true
 		go func() {
-			store.Shutdown()
+			store.Shutdown(context.Background())
 			store.restartChan <- errors.New("tocWriter encountered a fatal error; restart required")
 		}()
 	}
@@ -1024,7 +1026,7 @@ func (store *defaultValueStore) recovery() error {
 	spindown()
 	if store.logDebugOn {
 		dur := time.Now().Sub(start)
-		stringerStats, err := store.Stats(false)
+		stringerStats, err := store.Stats(context.Background(), false)
 		if err != nil {
 			store.logDebug("recovery: stats error: %s", err)
 		} else {

@@ -7,16 +7,17 @@ import (
 	"testing"
 
 	"github.com/gholt/ring"
+	"golang.org/x/net/context"
 )
 
 func TestValueBulkSetReadObviouslyTooShort(t *testing.T) {
 	cfg := newTestValueStoreConfig()
 	cfg.MsgRing = &msgRingPlaceholder{}
 	store, _ := newTestValueStore(cfg)
-	if err := store.Startup(); err != nil {
+	if err := store.Startup(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	defer store.Shutdown()
+	defer store.Shutdown(context.Background())
 	store.bulkSetShutdown()
 	n, err := store.newInBulkSetMsg(bytes.NewBuffer(make([]byte, 1)), 1)
 	if err != nil {
@@ -46,10 +47,10 @@ func TestValueBulkSetRead(t *testing.T) {
 	cfg := newTestValueStoreConfig()
 	cfg.MsgRing = &msgRingPlaceholder{}
 	store, _ := newTestValueStore(cfg)
-	if err := store.Startup(); err != nil {
+	if err := store.Startup(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	defer store.Shutdown()
+	defer store.Shutdown(context.Background())
 	imc := store.bulkSetState.inMsgChan
 	ifmc := store.bulkSetState.inFreeMsgChan
 	store.bulkSetShutdown()
@@ -96,10 +97,10 @@ func TestValueBulkSetReadLowSendCap(t *testing.T) {
 	cfg.MsgRing = &msgRingPlaceholder{}
 	cfg.BulkSetMsgCap = _VALUE_BULK_SET_MSG_HEADER_LENGTH + 1
 	store, _ := newTestValueStore(cfg)
-	if err := store.Startup(); err != nil {
+	if err := store.Startup(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	defer store.Shutdown()
+	defer store.Shutdown(context.Background())
 	imc := store.bulkSetState.inMsgChan
 	ifmc := store.bulkSetState.inFreeMsgChan
 	store.bulkSetShutdown()
@@ -128,10 +129,10 @@ func TestValueBulkSetMsgWithoutAck(t *testing.T) {
 	cfg.InBulkSetWorkers = 1
 	cfg.InBulkSetMsgs = 1
 	store, _ := newTestValueStore(cfg)
-	if err := store.Startup(); err != nil {
+	if err := store.Startup(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	defer store.Shutdown()
+	defer store.Shutdown(context.Background())
 	bsm := <-store.bulkSetState.inFreeMsgChan
 	bsm.body = bsm.body[:0]
 	if !bsm.add(1, 2, 0x500, []byte("testing")) {
@@ -141,7 +142,7 @@ func TestValueBulkSetMsgWithoutAck(t *testing.T) {
 	// only one of these, so if we get it back we know the previous data was
 	// processed
 	<-store.bulkSetState.inFreeMsgChan
-	ts, v, err := store.Read(1, 2, nil)
+	ts, v, err := store.Read(context.Background(), 1, 2, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -174,10 +175,10 @@ func TestValueBulkSetMsgWithAck(t *testing.T) {
     cfg.InBulkSetWorkers = 1
     cfg.InBulkSetMsgs = 1
     store, _ := newTestValueStore(cfg)
-    if err := store.Startup(); err != nil {
+    if err := store.Startup(context.Background()); err != nil {
         t.Fatal(err)
     }
-    defer store.Shutdown()
+    defer store.Shutdown(context.Background())
     bsm := <-store.bulkSetState.inFreeMsgChan
     binary.BigEndian.PutUint64(bsm.header, 123)
     bsm.body = bsm.body[:0]
@@ -219,10 +220,10 @@ func TestValueBulkSetMsgWithoutRing(t *testing.T) {
     cfg.InBulkSetWorkers = 1
     cfg.InBulkSetMsgs = 1
     store, _ := newTestValueStore(cfg)
-    if err := store.Startup(); err != nil {
+    if err := store.Startup(context.Background()); err != nil {
         t.Fatal(err)
     }
-    defer store.Shutdown()
+    defer store.Shutdown(context.Background())
     bsm := <-store.bulkSetState.inFreeMsgChan
     binary.BigEndian.PutUint64(bsm.header, 123)
     bsm.body = bsm.body[:0]
@@ -255,10 +256,10 @@ func TestValueBulkSetMsgOut(t *testing.T) {
     cfg := newTestValueStoreConfig()
     cfg.MsgRing = &msgRingPlaceholder{}
     store, _ := newTestValueStore(cfg)
-    if err := store.Startup(); err != nil {
+    if err := store.Startup(context.Background()); err != nil {
         t.Fatal(err)
     }
-    defer store.Shutdown()
+    defer store.Shutdown(context.Background())
     bsm := store.newOutBulkSetMsg()
     if bsm.MsgType() != _VALUE_BULK_SET_MSG_TYPE {
         t.Fatal(bsm.MsgType())
@@ -326,10 +327,10 @@ func TestValueBulkSetMsgOutdefaultsToFromLocalNode(t *testing.T) {
     cfg := newTestValueStoreConfig()
     cfg.MsgRing = &msgRingPlaceholder{ring: r}
     store, _ := newTestValueStore(cfg)
-    if err := store.Startup(); err != nil {
+    if err := store.Startup(context.Background()); err != nil {
         t.Fatal(err)
     }
-    defer store.Shutdown()
+    defer store.Shutdown(context.Background())
     bsm := store.newOutBulkSetMsg()
     if binary.BigEndian.Uint64(bsm.header) != n.ID() {
         t.Fatal(bsm)
@@ -340,10 +341,10 @@ func TestValueBulkSetMsgOutWriteError(t *testing.T) {
     cfg := newTestValueStoreConfig()
     cfg.MsgRing = &msgRingPlaceholder{}
     store, _ := newTestValueStore(cfg)
-    if err := store.Startup(); err != nil {
+    if err := store.Startup(context.Background()); err != nil {
         t.Fatal(err)
     }
-    defer store.Shutdown()
+    defer store.Shutdown(context.Background())
     bsm := store.newOutBulkSetMsg()
     _, err := bsm.WriteContent(&testErrorWriter{})
     if err == nil {
@@ -357,10 +358,10 @@ func TestValueBulkSetMsgOutHitCap(t *testing.T) {
     cfg.MsgRing = &msgRingPlaceholder{}
     cfg.BulkSetMsgCap = _VALUE_BULK_SET_MSG_HEADER_LENGTH + _VALUE_BULK_SET_MSG_ENTRY_HEADER_LENGTH + 3
     store, _ := newTestValueStore(cfg)
-    if err := store.Startup(); err != nil {
+    if err := store.Startup(context.Background()); err != nil {
         t.Fatal(err)
     }
-    defer store.Shutdown()
+    defer store.Shutdown(context.Background())
     bsm := store.newOutBulkSetMsg()
     if !bsm.add(1, 2, 0x500, []byte("1")) {
         t.Fatal("")

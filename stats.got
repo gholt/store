@@ -6,6 +6,7 @@ import (
     "time"
 
     "github.com/gholt/brimtext"
+    "golang.org/x/net/context"
 )
 
 type {{.T}}StoreStats struct {
@@ -173,7 +174,7 @@ type {{.T}}StoreStats struct {
     locmapDebugInfo             fmt.Stringer
 }
 
-func (store *default{{.T}}Store) Stats(debug bool) (fmt.Stringer, error) {
+func (store *default{{.T}}Store) Stats(ctx context.Context, debug bool) (fmt.Stringer, error) {
     store.statsLock.Lock()
     stats := &{{.T}}StoreStats{
         Lookups:                      atomic.LoadInt32(&store.lookups),

@@ -4,6 +4,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"golang.org/x/net/context"
 )
 
 type valueFlusherState struct {
@@ -79,7 +81,7 @@ func (store *defaultValueStore) flusherLauncher(notifyChan chan *bgNotification)
 		atomic.AddInt32(&store.modifications, -m)
 		if (m == 0 && !justFlushed) || (m > 0 && m < store.flusherState.flusherThreshold) {
 			store.logDebug("flusher: %d modifications under %d threshold; flushing.", m, store.flusherState.flusherThreshold)
-			store.Flush()
+			store.Flush(context.Background())
 			justFlushed = true
 		} else {
 			justFlushed = false

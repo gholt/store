@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/gholt/ring"
+	"golang.org/x/net/context"
 )
 
 type msgRingGroupPullReplicationTester struct {
@@ -66,10 +67,10 @@ func TestGroupPullReplicationSimple(t *testing.T) {
 	cfg := newTestGroupStoreConfig()
 	cfg.MsgRing = m
 	store, _ := newTestGroupStore(cfg)
-	if err := store.Startup(); err != nil {
+	if err := store.Startup(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	defer store.Shutdown()
+	defer store.Shutdown(context.Background())
 	_, err = store.write(1, 2, 3, 4, 0x500, []byte("testing"), false)
 	if err != nil {
 		t.Fatal(err)

@@ -6,16 +6,17 @@ import (
 	"testing"
 
 	"github.com/gholt/ring"
+	"golang.org/x/net/context"
 )
 
 func TestValueBulkSetAckRead(t *testing.T) {
 	cfg := newTestValueStoreConfig()
 	cfg.MsgRing = &msgRingPlaceholder{}
 	store, _ := newTestValueStore(cfg)
-	if err := store.Startup(); err != nil {
+	if err := store.Startup(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	defer store.Shutdown()
+	defer store.Shutdown(context.Background())
 	imc := store.bulkSetAckState.inMsgChan
 	ifmc := store.bulkSetAckState.inFreeMsgChan
 	store.bulkSetAckShutdown()
@@ -49,10 +50,10 @@ func TestValueBulkSetAckReadLowSendCap(t *testing.T) {
 	cfg.MsgRing = &msgRingPlaceholder{}
 	cfg.BulkSetAckMsgCap = 1
 	store, _ := newTestValueStore(cfg)
-	if err := store.Startup(); err != nil {
+	if err := store.Startup(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	defer store.Shutdown()
+	defer store.Shutdown(context.Background())
 	imc := store.bulkSetAckState.inMsgChan
 	ifmc := store.bulkSetAckState.inFreeMsgChan
 	store.bulkSetAckShutdown()
@@ -82,10 +83,10 @@ func TestValueBulkSetAckMsgIncoming(t *testing.T) {
 	cfg.InBulkSetAckWorkers = 1
 	cfg.InBulkSetAckMsgs = 1
 	store, _ := newTestValueStore(cfg)
-	if err := store.Startup(); err != nil {
+	if err := store.Startup(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	defer store.Shutdown()
+	defer store.Shutdown(context.Background())
 	ts, err := store.write(1, 2, 0x500, []byte("testing"), true)
 	if err != nil {
 		t.Fatal(err)
@@ -133,10 +134,10 @@ func TestValueBulkSetAckMsgIncomingNoRing(t *testing.T) {
 	cfg.InBulkSetAckWorkers = 1
 	cfg.InBulkSetAckMsgs = 1
 	store, _ := newTestValueStore(cfg)
-	if err := store.Startup(); err != nil {
+	if err := store.Startup(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	defer store.Shutdown()
+	defer store.Shutdown(context.Background())
 	ts, err := store.write(1, 2, 0x500, []byte("testing"), true)
 	if err != nil {
 		t.Fatal(err)
@@ -182,10 +183,10 @@ func TestValueBulkSetAckMsgOut(t *testing.T) {
 	cfg := newTestValueStoreConfig()
 	cfg.MsgRing = &msgRingPlaceholder{}
 	store, _ := newTestValueStore(cfg)
-	if err := store.Startup(); err != nil {
+	if err := store.Startup(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	defer store.Shutdown()
+	defer store.Shutdown(context.Background())
 	bsam := store.newOutBulkSetAckMsg()
 	if bsam.MsgType() != _VALUE_BULK_SET_ACK_MSG_TYPE {
 		t.Fatal(bsam.MsgType())
@@ -241,10 +242,10 @@ func TestValueBulkSetAckMsgOutWriteError(t *testing.T) {
 	cfg := newTestValueStoreConfig()
 	cfg.MsgRing = &msgRingPlaceholder{}
 	store, _ := newTestValueStore(cfg)
-	if err := store.Startup(); err != nil {
+	if err := store.Startup(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	defer store.Shutdown()
+	defer store.Shutdown(context.Background())
 	bsam := store.newOutBulkSetAckMsg()
 	bsam.add(1, 2, 0x500)
 	_, err := bsam.WriteContent(&testErrorWriter{})
@@ -259,10 +260,10 @@ func TestValueBulkSetAckMsgOutHitCap(t *testing.T) {
 	cfg.MsgRing = &msgRingPlaceholder{}
 	cfg.BulkSetAckMsgCap = _VALUE_BULK_SET_ACK_MSG_ENTRY_LENGTH + 3
 	store, _ := newTestValueStore(cfg)
-	if err := store.Startup(); err != nil {
+	if err := store.Startup(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	defer store.Shutdown()
+	defer store.Shutdown(context.Background())
 	bsam := store.newOutBulkSetAckMsg()
 	if !bsam.add(1, 2, 0x500) {
 		t.Fatal("")

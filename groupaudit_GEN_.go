@@ -9,6 +9,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"golang.org/x/net/context"
 )
 
 type groupAuditState struct {
@@ -47,7 +49,7 @@ func (store *defaultGroupStore) auditShutdown() {
 	store.auditState.startupShutdownLock.Unlock()
 }
 
-func (store *defaultGroupStore) AuditPass() error {
+func (store *defaultGroupStore) AuditPass(ctx context.Context) error {
 	store.auditState.startupShutdownLock.Lock()
 	if store.auditState.notifyChan == nil {
 		store.auditPass(true, make(chan *bgNotification))
@@ -277,7 +279,7 @@ func (store *defaultGroupStore) auditPass(speed bool, notifyChan chan *bgNotific
 			}
 			go func() {
 				store.logError("audit: all audit actions require store restarts at this time.")
-				store.Shutdown()
+				store.Shutdown(context.Background())
 				store.restartChan <- errors.New("audit failure occurred requiring a restart")
 			}()
 			return &bgNotification{
