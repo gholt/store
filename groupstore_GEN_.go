@@ -179,6 +179,8 @@ type groupLocBlock interface {
 // exiting to ensure all processing is done and the buffers are flushed.
 func NewGroupStore(c *GroupStoreConfig) (GroupStore, chan error) {
 	cfg := resolveGroupStoreConfig(c)
+	_ = os.MkdirAll(cfg.Path, 0755)
+	_ = os.MkdirAll(cfg.PathTOC, 0755)
 	lcmap := cfg.GroupLocMap
 	if lcmap == nil {
 		lcmap = locmap.NewGroupLocMap(nil)

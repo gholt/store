@@ -176,6 +176,8 @@ type valueLocBlock interface {
 // exiting to ensure all processing is done and the buffers are flushed.
 func NewValueStore(c *ValueStoreConfig) (ValueStore, chan error) {
 	cfg := resolveValueStoreConfig(c)
+	_ = os.MkdirAll(cfg.Path, 0755)
+	_ = os.MkdirAll(cfg.PathTOC, 0755)
 	lcmap := cfg.ValueLocMap
 	if lcmap == nil {
 		lcmap = locmap.NewValueLocMap(nil)

@@ -179,6 +179,8 @@ type {{.t}}LocBlock interface {
 // exiting to ensure all processing is done and the buffers are flushed.
 func New{{.T}}Store(c *{{.T}}StoreConfig) ({{.T}}Store, chan error) {
     cfg := resolve{{.T}}StoreConfig(c)
+    _ = os.MkdirAll(cfg.Path, 0755)
+    _ = os.MkdirAll(cfg.PathTOC, 0755)
     lcmap := cfg.{{.T}}LocMap
     if lcmap == nil {
         lcmap = locmap.New{{.T}}LocMap(nil)
