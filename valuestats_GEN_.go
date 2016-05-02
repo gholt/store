@@ -18,14 +18,12 @@ type ValueStoreStats struct {
 	Lookups int32
 	// LookupErrors is the number of errors returned by Lookup.
 	LookupErrors int32
+
 	// Reads is the number of calls to Read.
-	// LookupGroups is the number of calls to LookupGroup.
-	LookupGroups int32
-	// LookupGroupItems is the number of items LookupGroup has encountered.
-	LookupGroupItems int32
-	Reads            int32
+	Reads int32
 	// ReadErrors is the number of errors returned by Read.
 	ReadErrors int32
+
 	// Writes is the number of calls to Write.
 	Writes int32
 	// WriteErrors is the number of errors returned by Write.
@@ -177,12 +175,12 @@ type ValueStoreStats struct {
 func (store *defaultValueStore) Stats(ctx context.Context, debug bool) (fmt.Stringer, error) {
 	store.statsLock.Lock()
 	stats := &ValueStoreStats{
-		Lookups:                      atomic.LoadInt32(&store.lookups),
-		LookupErrors:                 atomic.LoadInt32(&store.lookupErrors),
-		LookupGroups:                 atomic.LoadInt32(&store.lookupGroups),
-		LookupGroupItems:             atomic.LoadInt32(&store.lookupGroupItems),
-		Reads:                        atomic.LoadInt32(&store.reads),
-		ReadErrors:                   atomic.LoadInt32(&store.readErrors),
+		Lookups:      atomic.LoadInt32(&store.lookups),
+		LookupErrors: atomic.LoadInt32(&store.lookupErrors),
+
+		Reads:      atomic.LoadInt32(&store.reads),
+		ReadErrors: atomic.LoadInt32(&store.readErrors),
+
 		Writes:                       atomic.LoadInt32(&store.writes),
 		WriteErrors:                  atomic.LoadInt32(&store.writeErrors),
 		WritesOverridden:             atomic.LoadInt32(&store.writesOverridden),
@@ -225,10 +223,10 @@ func (store *defaultValueStore) Stats(ctx context.Context, debug bool) (fmt.Stri
 	}
 	atomic.AddInt32(&store.lookups, -stats.Lookups)
 	atomic.AddInt32(&store.lookupErrors, -stats.LookupErrors)
-	atomic.AddInt32(&store.lookupGroups, -stats.LookupGroups)
-	atomic.AddInt32(&store.lookupGroupItems, -stats.LookupGroupItems)
+
 	atomic.AddInt32(&store.reads, -stats.Reads)
 	atomic.AddInt32(&store.readErrors, -stats.ReadErrors)
+
 	atomic.AddInt32(&store.writes, -stats.Writes)
 	atomic.AddInt32(&store.writeErrors, -stats.WriteErrors)
 	atomic.AddInt32(&store.writesOverridden, -stats.WritesOverridden)
@@ -321,8 +319,7 @@ func (stats *ValueStoreStats) String() string {
 		{"ValueBytes", fmt.Sprintf("%d", stats.ValueBytes)},
 		{"Lookups", fmt.Sprintf("%d", stats.Lookups)},
 		{"LookupErrors", fmt.Sprintf("%d", stats.LookupErrors)},
-		{"LookupGroups", fmt.Sprintf("%d", stats.LookupGroups)},
-		{"LookupGroupItems", fmt.Sprintf("%d", stats.LookupGroupItems)},
+
 		{"Reads", fmt.Sprintf("%d", stats.Reads)},
 		{"ReadErrors", fmt.Sprintf("%d", stats.ReadErrors)},
 		{"Writes", fmt.Sprintf("%d", stats.Writes)},

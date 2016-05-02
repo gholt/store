@@ -76,15 +76,19 @@ type defaultGroupStore struct {
 	watcherState            groupWatcherState
 	restartChan             chan error
 
-	statsLock                    sync.Mutex
-	lookups                      int32
-	lookupErrors                 int32
-	lookupGroups                 int32
-	lookupGroupItems             int32
-	reads                        int32
-	readErrors                   int32
-	readGroups                   int32
-	readGroupItems               int32
+	statsLock    sync.Mutex
+	lookups      int32
+	lookupErrors int32
+
+	lookupGroups     int32
+	lookupGroupItems int32
+
+	reads      int32
+	readErrors int32
+
+	readGroups     int32
+	readGroupItems int32
+
 	writes                       int32
 	writeErrors                  int32
 	writesOverridden             int32
