@@ -392,7 +392,9 @@ func (store *defaultValueStore) outPullReplicationPass(notifyChan chan *bgNotifi
 	}
 	begin := time.Now()
 	defer func() {
-		store.logDebug("outPullReplication: pass took %s", time.Now().Sub(begin))
+		elapsed := time.Now().Sub(begin)
+		store.logDebug("outPullReplication: pass took %s", elapsed)
+		atomic.StoreInt64(&store.outPullReplicationNanoseconds, elapsed.Nanoseconds())
 	}()
 	rightwardPartitionShift := 64 - ring.PartitionBitCount()
 	partitionCount := uint64(1) << ring.PartitionBitCount()
