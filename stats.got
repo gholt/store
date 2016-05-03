@@ -24,6 +24,8 @@ type {{.T}}StoreStats struct {
     LookupGroups int32
     // LookupGroupItems is the number of items LookupGroup has encountered.
     LookupGroupItems int32
+    // LookupGroupErrors is the number of errors returned by LookupGroup.
+    LookupGroupErrors int32
     {{end}}
     // Reads is the number of calls to Read.
     Reads int32
@@ -35,6 +37,8 @@ type {{.T}}StoreStats struct {
     ReadGroups int32
     // ReadGroupItems is the number of items ReadGroup has encountered.
     ReadGroupItems int32
+    // ReadGroupErrors is the number of errors returned by ReadGroup.
+    ReadGroupErrors int32
     {{end}}
     // Writes is the number of calls to Write.
     Writes int32
@@ -195,12 +199,14 @@ func (store *default{{.T}}Store) Stats(ctx context.Context, debug bool) (fmt.Str
         {{if eq .t "group"}}
         LookupGroups:                   atomic.LoadInt32(&store.lookupGroups),
         LookupGroupItems:               atomic.LoadInt32(&store.lookupGroupItems),
+        LookupGroupErrors:              atomic.LoadInt32(&store.lookupGroupErrors),
         {{end}}
         Reads:                          atomic.LoadInt32(&store.reads),
         ReadErrors:                     atomic.LoadInt32(&store.readErrors),
         {{if eq .t "group"}}
         ReadGroups:                     atomic.LoadInt32(&store.readGroups),
         ReadGroupItems:                 atomic.LoadInt32(&store.readGroupItems),
+        ReadGroupErrors:                atomic.LoadInt32(&store.readGroupErrors),
         {{end}}
         Writes:                         atomic.LoadInt32(&store.writes),
         WriteErrors:                    atomic.LoadInt32(&store.writeErrors),
@@ -248,12 +254,14 @@ func (store *default{{.T}}Store) Stats(ctx context.Context, debug bool) (fmt.Str
     {{if eq .t "group"}}
     atomic.AddInt32(&store.lookupGroups, -stats.LookupGroups)
     atomic.AddInt32(&store.lookupGroupItems, -stats.LookupGroupItems)
+    atomic.AddInt32(&store.lookupGroupErrors, -stats.LookupGroupErrors)
     {{end}}
     atomic.AddInt32(&store.reads, -stats.Reads)
     atomic.AddInt32(&store.readErrors, -stats.ReadErrors)
     {{if eq .t "group"}}
     atomic.AddInt32(&store.readGroups, -stats.ReadGroups)
     atomic.AddInt32(&store.readGroupItems, -stats.ReadGroupItems)
+    atomic.AddInt32(&store.readGroupErrors, -stats.ReadGroupErrors)
     {{end}}
     atomic.AddInt32(&store.writes, -stats.Writes)
     atomic.AddInt32(&store.writeErrors, -stats.WriteErrors)
@@ -351,9 +359,15 @@ func (stats *{{.T}}StoreStats) String() string {
         {{if eq .t "group"}}
         {"LookupGroups", fmt.Sprintf("%d", stats.LookupGroups)},
         {"LookupGroupItems", fmt.Sprintf("%d", stats.LookupGroupItems)},
+        {"LookupGroupErrors", fmt.Sprintf("%d", stats.LookupGroupErrors)},
         {{end}}
         {"Reads", fmt.Sprintf("%d", stats.Reads)},
         {"ReadErrors", fmt.Sprintf("%d", stats.ReadErrors)},
+        {{if eq .t "group"}}
+        {"ReadGroups", fmt.Sprintf("%d", stats.ReadGroups)},
+        {"ReadGroupItems", fmt.Sprintf("%d", stats.ReadGroupItems)},
+        {"ReadGroupErrors", fmt.Sprintf("%d", stats.ReadGroupErrors)},
+        {{end}}
         {"Writes", fmt.Sprintf("%d", stats.Writes)},
         {"WriteErrors", fmt.Sprintf("%d", stats.WriteErrors)},
         {"WritesOverridden", fmt.Sprintf("%d", stats.WritesOverridden)},

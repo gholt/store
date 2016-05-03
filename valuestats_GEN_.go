@@ -329,6 +329,7 @@ func (stats *ValueStoreStats) String() string {
 
 		{"Reads", fmt.Sprintf("%d", stats.Reads)},
 		{"ReadErrors", fmt.Sprintf("%d", stats.ReadErrors)},
+
 		{"Writes", fmt.Sprintf("%d", stats.Writes)},
 		{"WriteErrors", fmt.Sprintf("%d", stats.WriteErrors)},
 		{"WritesOverridden", fmt.Sprintf("%d", stats.WritesOverridden)},

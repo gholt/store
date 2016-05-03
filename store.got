@@ -82,12 +82,14 @@ type default{{.T}}Store struct {
     {{if eq .t "group"}}
     lookupGroups                    int32
     lookupGroupItems                int32
+    lookupGroupErrors               int32
     {{end}}
     reads                           int32
     readErrors                      int32
     {{if eq .t "group"}}
     readGroups                      int32
     readGroupItems                  int32
+    readGroupErrors                 int32
     {{end}}
     writes                          int32
     writeErrors                     int32

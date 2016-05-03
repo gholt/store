@@ -80,14 +80,16 @@ type defaultGroupStore struct {
 	lookups      int32
 	lookupErrors int32
 
-	lookupGroups     int32
-	lookupGroupItems int32
+	lookupGroups      int32
+	lookupGroupItems  int32
+	lookupGroupErrors int32
 
 	reads      int32
 	readErrors int32
 
-	readGroups     int32
-	readGroupItems int32
+	readGroups      int32
+	readGroupItems  int32
+	readGroupErrors int32
 
 	writes                        int32
 	writeErrors                   int32
