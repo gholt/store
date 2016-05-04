@@ -52,13 +52,13 @@ type GroupStoreConfig struct {
 	ValueCap int
 	// BackgroundInterval indicates the minimum number of seconds between the
 	// starts of background passes (such as discarding expired tombstones
-	// [deletion markers]). If set to 60 seconds and the passes take 10 seconds
-	// to run, they will wait 50 seconds (with a small amount of randomization)
+	// [deletion markers]). If set to 6 seconds and the passes take 1 seconds
+	// to run, they will wait 5 seconds (with a small amount of randomization)
 	// between the stop of one run and the start of the next. This is really
 	// just meant to keep nearly empty structures from using a lot of resources
 	// doing nearly nothing. Normally, you'd want your background passes to be
 	// running constantly so that they are as fast as possible and the load
-	// constant. The default of 60 seconds is almost always fine.
+	// constant. The default of 6 seconds is almost always fine.
 	BackgroundInterval int
 	// Workers indicates how many goroutines may be used for various tasks
 	// (processing incoming writes and batching them to disk, background tasks,
@@ -336,7 +336,7 @@ func resolveGroupStoreConfig(c *GroupStoreConfig) *GroupStoreConfig {
 		}
 	}
 	if cfg.BackgroundInterval == 0 {
-		cfg.BackgroundInterval = 60
+		cfg.BackgroundInterval = 6
 	}
 	if cfg.BackgroundInterval < 1 {
 		cfg.BackgroundInterval = 1
