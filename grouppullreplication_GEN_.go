@@ -295,10 +295,14 @@ func (store *defaultGroupStore) inPullReplication(wg *sync.WaitGroup) {
 		// pull-replication messages, which are sent concurrently to all other
 		// replicas, will get different responses back instead of duplicate
 		// items if there is a lot of data to be sent.
-		scanStart := prm.rangeStart() + (prm.rangeStop()-prm.rangeStart())/uint64(ring.ReplicaCount())*uint64(ring.ResponsibleReplica(uint32(prm.rangeStart()>>(64-ring.PartitionBitCount()))))
+		responsibleReplica := ring.ResponsibleReplica(uint32(prm.rangeStart() >> (64 - ring.PartitionBitCount())))
+		if responsibleReplica < 0 {
+			responsibleReplica = 0
+		}
+		scanStart := prm.rangeStart() + (prm.rangeStop()-prm.rangeStart())/uint64(ring.ReplicaCount())*uint64(responsibleReplica)
 		scanStop := prm.rangeStop()
 		store.locmap.ScanCallback(scanStart, scanStop, 0, _TSB_LOCAL_REMOVAL, cutoff, math.MaxUint64, callback)
-		if l > 0 {
+		if scanStart != prm.rangeStart() && l > 0 {
 			scanStop = scanStart - 1
 			scanStart = prm.rangeStart()
 			store.locmap.ScanCallback(scanStart, scanStop, 0, _TSB_LOCAL_REMOVAL, cutoff, math.MaxUint64, callback)
