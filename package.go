@@ -151,6 +151,9 @@ const (
 )
 
 func IsNotFound(err error) bool {
+	if err == nil {
+		return false
+	}
 	_, is := err.(ErrNotFound)
 	return is
 }
