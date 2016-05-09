@@ -2,6 +2,7 @@ package store
 
 import (
 	"encoding/binary"
+	"fmt"
 	"io"
 	"sync"
 	"sync/atomic"
@@ -219,8 +220,7 @@ func (store *defaultValueStore) inBulkSet(wg *sync.WaitGroup) {
 		var ptimestampbits uint64
 		if ring != nil {
 			rightwardPartitionShift = 64 - uint64(ring.PartitionBitCount())
-			// Only ack if there is someone to ack to, which should always be
-			// the case but just in case.
+			// Only ack if there is someone to ack to.
 			if bsm.nodeID() != 0 {
 				bsam = store.newOutBulkSetAckMsg()
 			}
@@ -233,6 +233,10 @@ func (store *defaultValueStore) inBulkSet(wg *sync.WaitGroup) {
 			l := binary.BigEndian.Uint32(body[24:])
 
 			atomic.AddInt32(&store.inBulkSetWrites, 1)
+			// REMOVEME logging when we get zero-length values.
+			if l == 0 && timestampbits&_TSB_DELETION == 0 {
+				fmt.Printf("REMOVEME got a zero-length value, %x %x %x\n", keyA, keyB, timestampbits)
+			}
 			// Attempt to store everything received...
 			// Note that deletions are acted upon as internal requests (work
 			// even if writes are disabled due to disk fullness) and new data
