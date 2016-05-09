@@ -945,6 +945,8 @@ func (store *defaultValueStore) recovery() error {
 			freeBatchChans[i] <- make([]valueTOCEntry, store.recoveryBatchSize)
 		}
 	}
+	var encounteredValues int64
+	var zeroLengthValues int64
 	wg := &sync.WaitGroup{}
 	wg.Add(len(pendingBatchChans))
 	for i := 0; i < len(pendingBatchChans); i++ {
@@ -958,6 +960,10 @@ func (store *defaultValueStore) recovery() error {
 					wr := &batch[j]
 					if wr.TimestampBits&_TSB_LOCAL_REMOVAL != 0 {
 						wr.BlockID = 0
+					}
+					atomic.AddInt64(&encounteredValues, 1)
+					if wr.Length == 0 {
+						atomic.AddInt64(&zeroLengthValues, 1)
 					}
 					if store.logDebugOn {
 						if store.locmap.Set(wr.KeyA, wr.KeyB, wr.TimestampBits, wr.BlockID, wr.Offset, wr.Length, true) < wr.TimestampBits {
@@ -1042,5 +1048,6 @@ func (store *defaultValueStore) recovery() error {
 		}
 		store.logDebug("recovery: secondary recovery completed.")
 	}
+	fmt.Println("REMOVEME encountered", encounteredValues, "values,", zeroLengthValues, "were zero-length")
 	return nil
 }
