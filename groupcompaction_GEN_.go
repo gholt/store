@@ -326,6 +326,10 @@ func (store *defaultGroupStore) compactFile(nametoc string, blockID uint32, cont
 						atomic.AddUint32(&stale, 1)
 						continue
 					}
+					// REMOVEME skipping any zero-length values for now
+					if timestampBits&_TSB_DELETION == 0 && len(value) == 0 {
+						continue
+					}
 					_, err = store.write(wr.KeyA, wr.KeyB, wr.ChildKeyA, wr.ChildKeyB, wr.TimestampBits|_TSB_COMPACTION_REWRITE, value, true)
 					if err != nil {
 						store.logError("compactFile: error with %s: %s", nametoc, err)
