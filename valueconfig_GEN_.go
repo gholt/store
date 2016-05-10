@@ -419,10 +419,10 @@ func resolveValueStoreConfig(c *ValueStoreConfig) *ValueStoreConfig {
 		}
 	}
 	if cfg.MsgTimeout == 0 {
-		cfg.MsgTimeout = 100
+		cfg.MsgTimeout = 250
 	}
 	if cfg.MsgTimeout < 1 {
-		cfg.MsgTimeout = 100
+		cfg.MsgTimeout = 250
 	}
 	if env := os.Getenv("VALUESTORE_FILE_CAP"); env != "" {
 		if val, err := strconv.Atoi(env); err == nil {
@@ -568,7 +568,7 @@ func resolveValueStoreConfig(c *ValueStoreConfig) *ValueStoreConfig {
 		cfg.OutPullReplicationMsgTimeout = cfg.MsgTimeout
 	}
 	if cfg.OutPullReplicationMsgTimeout < 1 {
-		cfg.OutPullReplicationMsgTimeout = 100
+		cfg.OutPullReplicationMsgTimeout = 250
 	}
 	if env := os.Getenv("VALUESTORE_IN_PULL_REPLICATION_WORKERS"); env != "" {
 		if val, err := strconv.Atoi(env); err == nil {
@@ -601,7 +601,7 @@ func resolveValueStoreConfig(c *ValueStoreConfig) *ValueStoreConfig {
 		cfg.InPullReplicationResponseMsgTimeout = cfg.MsgTimeout
 	}
 	if cfg.InPullReplicationResponseMsgTimeout < 1 {
-		cfg.InPullReplicationResponseMsgTimeout = 100
+		cfg.InPullReplicationResponseMsgTimeout = 250
 	}
 	if env := os.Getenv("VALUESTORE_PUSH_REPLICATION_INTERVAL"); env != "" {
 		if val, err := strconv.Atoi(env); err == nil {
@@ -634,7 +634,7 @@ func resolveValueStoreConfig(c *ValueStoreConfig) *ValueStoreConfig {
 		cfg.PushReplicationMsgTimeout = cfg.MsgTimeout
 	}
 	if cfg.PushReplicationMsgTimeout < 1 {
-		cfg.PushReplicationMsgTimeout = 100
+		cfg.PushReplicationMsgTimeout = 250
 	}
 	if env := os.Getenv("VALUESTORE_BULK_SET_MSG_CAP"); env != "" {
 		if val, err := strconv.Atoi(env); err == nil {
@@ -689,7 +689,7 @@ func resolveValueStoreConfig(c *ValueStoreConfig) *ValueStoreConfig {
 		cfg.InBulkSetResponseMsgTimeout = cfg.MsgTimeout
 	}
 	if cfg.InBulkSetResponseMsgTimeout < 1 {
-		cfg.InBulkSetResponseMsgTimeout = 100
+		cfg.InBulkSetResponseMsgTimeout = 250
 	}
 	if env := os.Getenv("VALUESTORE_OUT_BULK_SET_ACK_MSG_CAP"); env != "" {
 		if val, err := strconv.Atoi(env); err == nil {

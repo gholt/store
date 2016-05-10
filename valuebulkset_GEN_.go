@@ -233,10 +233,12 @@ func (store *defaultValueStore) inBulkSet(wg *sync.WaitGroup) {
 			l := binary.BigEndian.Uint32(body[24:])
 
 			atomic.AddInt32(&store.inBulkSetWrites, 1)
-			// REMOVEME logging when we get zero-length values.
-			if l == 0 && timestampbits&_TSB_DELETION == 0 {
-				fmt.Printf("REMOVEME got a zero-length value, %x %x %x\n", keyA, keyB, timestampbits)
-			}
+			/*
+			   // REMOVEME logging when we get zero-length values.
+			   if l == 0 && timestampbits&_TSB_DELETION == 0 {
+			       fmt.Printf("REMOVEME inbulkset got a zero-length value, %x %x %x\n", keyA, keyB, timestampbits)
+			   }
+			*/
 			// Attempt to store everything received...
 			// Note that deletions are acted upon as internal requests (work
 			// even if writes are disabled due to disk fullness) and new data
@@ -309,9 +311,12 @@ func (bsm *valueBulkSetMsg) nodeID() uint64 {
 }
 
 func (bsm *valueBulkSetMsg) add(keyA uint64, keyB uint64, timestampbits uint64, value []byte) bool {
-	// CONSIDER: I'd rather not have "useless" checks every place wasting
-	// cycles when the caller should have already validated the input; but here
-	// len(value) must not exceed math.MaxUint32.
+	// REMOVEME double-checking
+	dctimestampbits, dcblockid, dclength, dcerr := bsm.store.lookup(keyA, keyB)
+	if int(dclength) != len(value) {
+		fmt.Printf("REMOVEME bulkset.add double-check error: ka:%x kb:%x ts:%x l:%d dcts:%x dcbi:%d dcl:%d dce:%s\n", keyA, keyB, timestampbits, len(value), dctimestampbits, dcblockid, dclength, dcerr)
+		panic("REMOVEME double-check error")
+	}
 	o := len(bsm.body)
 	if o+_VALUE_BULK_SET_MSG_ENTRY_HEADER_LENGTH+len(value) >= cap(bsm.body) {
 		return false

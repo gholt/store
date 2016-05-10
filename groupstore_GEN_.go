@@ -1013,7 +1013,7 @@ func (store *defaultGroupStore) recovery() error {
 		}
 	}
 	var encounteredValues int64
-	var zeroLengthValues int64
+	var zeroLengthValues int64 // REMOVEME
 	wg := &sync.WaitGroup{}
 	wg.Add(len(pendingBatchChans))
 	for i := 0; i < len(pendingBatchChans); i++ {
@@ -1029,8 +1029,10 @@ func (store *defaultGroupStore) recovery() error {
 						wr.BlockID = 0
 					}
 					atomic.AddInt64(&encounteredValues, 1)
-					if wr.Length == 0 {
+					// REMOVEME zlv check and discard, for now
+					if wr.TimestampBits&_TSB_DELETION == 0 && wr.Length == 0 {
 						atomic.AddInt64(&zeroLengthValues, 1)
+						continue
 					}
 					if store.logDebugOn {
 						if store.locmap.Set(wr.KeyA, wr.KeyB, wr.ChildKeyA, wr.ChildKeyB, wr.TimestampBits, wr.BlockID, wr.Offset, wr.Length, true) < wr.TimestampBits {
