@@ -281,10 +281,8 @@ func (store *defaultValueStore) needsCompaction(nametoc string, candidateBlockID
 }
 
 func (store *defaultValueStore) compactFile(nametoc string, blockID uint32, controlChan chan struct{}) {
-	// TODO: Compaction needs to rewrite all the good entries it can, but also
-	// deliberately remove any known bad entries from the locmap so that
-	// replication can get them back in place from other servers.
-	var errorCount uint32
+	var readErrorCount uint32
+	var writeErrorCount uint32
 	var count uint32
 	var rewrote uint32
 	var stale uint32
@@ -310,7 +308,7 @@ func (store *defaultValueStore) compactFile(nametoc string, blockID uint32, cont
 				if batch == nil {
 					break
 				}
-				if atomic.LoadUint32(&errorCount) > 0 {
+				if atomic.LoadUint32(&writeErrorCount) > 0 {
 					continue
 				}
 				for j := 0; j < len(batch); j++ {
@@ -322,6 +320,17 @@ func (store *defaultValueStore) compactFile(nametoc string, blockID uint32, cont
 						continue
 					}
 					timestampBits, value, err := store.read(wr.KeyA, wr.KeyB, value[:0])
+					if err != nil {
+						store.logError("compactFile: error reading while compacting %s: %s", nametoc, err)
+						atomic.AddUint32(&readErrorCount, 1)
+						// Keeps going, but the readErrorCount will let it know
+						// to *not* remove the original file. This is "for
+						// now". TODO: In the future, I'd like this to remove
+						// the entry from the locmap so replication will bring
+						// it back from other nodes, but that code can wait for
+						// the moment.
+						continue
+					}
 					if timestampBits > wr.TimestampBits {
 						atomic.AddUint32(&stale, 1)
 						continue
@@ -332,8 +341,13 @@ func (store *defaultValueStore) compactFile(nametoc string, blockID uint32, cont
 					}
 					_, err = store.write(wr.KeyA, wr.KeyB, wr.TimestampBits|_TSB_COMPACTION_REWRITE, value, true)
 					if err != nil {
-						store.logError("compactFile: error with %s: %s", nametoc, err)
-						atomic.AddUint32(&errorCount, 1)
+						store.logCritical("compactFile: error writing while compacting %s: %s", nametoc, err)
+						atomic.AddUint32(&writeErrorCount, 1)
+						// TODO: Write errors are pretty bad and we should quit
+						// writing new data if we get a write error. For now,
+						// this quits writing during this compaction, but
+						// doesn't disable the whole service from writes, or
+						// the next compaction pass.
 						break
 					}
 					atomic.AddUint32(&rewrote, 1)
@@ -391,6 +405,22 @@ func (store *defaultValueStore) compactFile(nametoc string, blockID uint32, cont
 		spindown(false)
 		return
 	default:
+	}
+	if rec := atomic.LoadUint32(&readErrorCount); rec > 0 {
+		// TODO: Eventually, as per the note above, this should remove the
+		// unable-to-be-read entries from the locmap so replication can repair
+		// them, and then remove the original bad file.
+		store.logError("compactFile: %d data read errors with %s; file will be retried later.", rec, nametoc)
+		spindown(false)
+		return
+	}
+	if wec := atomic.LoadUint32(&writeErrorCount); wec > 0 {
+		// TODO: Eventually, as per the note above, this should disable writes
+		// until a person can look at the problem and bring the service back
+		// online.
+		store.logCritical("compactFile: %d data write errors with %s; will retry later.", wec, nametoc)
+		spindown(false)
+		return
 	}
 	if len(errs) > 0 {
 		if fdc == 0 {
