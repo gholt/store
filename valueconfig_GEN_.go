@@ -87,7 +87,7 @@ type ValueStoreConfig struct {
 	// 16,777,216 bytes.
 	MsgCap int
 	// MsgTimeout indicates the maximum milliseconds a message can be pending
-	// before just discarding it. Defaults to 100 milliseconds.
+	// before just discarding it. Defaults to 250 milliseconds.
 	MsgTimeout int
 	// FileCap indicates how large a file can be before closing it and opening
 	// a new one. Defaults to 4,294,967,295 bytes.
