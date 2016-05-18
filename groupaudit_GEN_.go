@@ -272,7 +272,7 @@ func (store *defaultGroupStore) auditPass(speed bool, notifyChan chan *bgNotific
 					nextNotificationChan <- nil
 				}
 			}()
-			store.compactFile(names[i], store.locBlockIDFromTimestampnano(namets), controlChan)
+			store.compactFile(names[i], store.locBlockIDFromTimestampnano(namets), controlChan, "auditPass")
 			close(controlChan2)
 			if n := <-nextNotificationChan; n != nil {
 				return n

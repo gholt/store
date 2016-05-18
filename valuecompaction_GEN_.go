@@ -201,7 +201,7 @@ func (store *defaultValueStore) compactionWorker(jobChan chan *valueCompactionJo
 			}
 			atomic.AddInt32(&store.compactions, 1)
 		}
-		store.compactFile(c.nametoc, c.candidateBlockID, controlChan)
+		store.compactFile(c.nametoc, c.candidateBlockID, controlChan, "compactionWorker")
 	}
 	wg.Done()
 }
@@ -280,7 +280,7 @@ func (store *defaultValueStore) needsCompaction(nametoc string, candidateBlockID
 	return stale > uint32(float64(checked)*store.compactionState.threshold)
 }
 
-func (store *defaultValueStore) compactFile(nametoc string, blockID uint32, controlChan chan struct{}) {
+func (store *defaultValueStore) compactFile(nametoc string, blockID uint32, controlChan chan struct{}, removemeCaller string) {
 	var readErrorCount uint32
 	var writeErrorCount uint32
 	var count uint32
@@ -365,6 +365,7 @@ func (store *defaultValueStore) compactFile(nametoc string, blockID uint32, cont
 		}
 		wg.Wait()
 		if remove {
+			store.logError("REMOVEME: removing %s due to compaction triggered by %s", fullpathtoc, removemeCaller)
 			if err := store.remove(fullpathtoc); err != nil {
 				store.logError("compactFile: unable to remove %s %s", fullpathtoc, err)
 				if err = store.rename(fullpathtoc, fullpathtoc+".renamed"); err != nil {

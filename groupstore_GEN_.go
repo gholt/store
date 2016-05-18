@@ -1113,7 +1113,7 @@ func (store *defaultGroupStore) recovery() error {
 	if len(compactNames) > 0 {
 		store.logDebug("recovery: secondary recovery started for %d files.", len(compactNames))
 		for i, name := range compactNames {
-			store.compactFile(name, compactBlockIDs[i], make(chan struct{}))
+			store.compactFile(name, compactBlockIDs[i], make(chan struct{}), "recovery")
 		}
 		store.logDebug("recovery: secondary recovery completed.")
 	}
