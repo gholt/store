@@ -320,7 +320,7 @@ func (store *defaultGroupStore) compactFile(nametoc string, blockID uint32, cont
 						continue
 					}
 					timestampBits, value, err := store.read(wr.KeyA, wr.KeyB, wr.ChildKeyA, wr.ChildKeyB, value[:0])
-					if err != nil {
+					if err != nil && !IsNotFound(err) {
 						store.logError("compactFile: error reading while compacting %s: %s", nametoc, err)
 						atomic.AddUint32(&readErrorCount, 1)
 						// Keeps going, but the readErrorCount will let it know
