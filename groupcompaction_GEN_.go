@@ -360,10 +360,6 @@ func (store *defaultGroupStore) compactFile(nametoc string, blockID uint32, cont
 	fullpath := path.Join(store.path, nametoc[:len(nametoc)-3])
 	fullpathtoc := path.Join(store.pathtoc, nametoc)
 	spindown := func(remove bool) {
-		for i := 0; i < len(pendingBatchChans); i++ {
-			pendingBatchChans[i] <- nil
-		}
-		wg.Wait()
 		if remove {
 			store.logError("REMOVEME: removing %s due to compaction triggered by %s", fullpathtoc, removemeCaller)
 			if err := store.remove(fullpathtoc); err != nil {
@@ -407,6 +403,10 @@ func (store *defaultGroupStore) compactFile(nametoc string, blockID uint32, cont
 		return
 	default:
 	}
+	for i := 0; i < len(pendingBatchChans); i++ {
+		pendingBatchChans[i] <- nil
+	}
+	wg.Wait()
 	if rec := atomic.LoadUint32(&readErrorCount); rec > 0 {
 		// TODO: Eventually, as per the note above, this should remove the
 		// unable-to-be-read entries from the locmap so replication can repair
