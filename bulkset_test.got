@@ -6,7 +6,7 @@ import (
     "io"
     "testing"
 
-    //"github.com/gholt/ring"
+    "github.com/gholt/ring"
     "golang.org/x/net/context"
 )
 
@@ -115,7 +115,6 @@ func Test{{.T}}BulkSetReadLowSendCap(t *testing.T) {
     }
 }
 
-/* Temporarily disabled due to REMOVEME code in bulkset.got
 func Test{{.T}}BulkSetMsgWithoutAck(t *testing.T) {
     b := ring.NewBuilder(64)
     n, err := b.AddNode(true, 1, nil, nil, "", nil)
@@ -160,7 +159,6 @@ func Test{{.T}}BulkSetMsgWithoutAck(t *testing.T) {
         t.Fatal(v2)
     }
 }
-*/
 
 /*
 func Test{{.T}}BulkSetMsgWithAck(t *testing.T) {

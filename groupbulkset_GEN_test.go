@@ -6,7 +6,7 @@ import (
 	"io"
 	"testing"
 
-	//"github.com/gholt/ring"
+	"github.com/gholt/ring"
 	"golang.org/x/net/context"
 )
 
@@ -115,52 +115,50 @@ func TestGroupBulkSetReadLowSendCap(t *testing.T) {
 	}
 }
 
-/* Temporarily disabled due to REMOVEME code in bulkset.got
 func TestGroupBulkSetMsgWithoutAck(t *testing.T) {
-    b := ring.NewBuilder(64)
-    n, err := b.AddNode(true, 1, nil, nil, "", nil)
-    if err != nil {
-        t.Fatal(err)
-    }
-    r := b.Ring()
-    r.SetLocalNode(n.ID())
-    m := &msgRingPlaceholder{ring: r}
-    cfg := newTestGroupStoreConfig()
-    cfg.MsgRing = m
-    cfg.InBulkSetWorkers = 1
-    cfg.InBulkSetMsgs = 1
-    store, _ := newTestGroupStore(cfg)
-    if err := store.Startup(context.Background()); err != nil {
-        t.Fatal(err)
-    }
-    defer store.Shutdown(context.Background())
-    bsm := <-store.bulkSetState.inFreeMsgChan
-    bsm.body = bsm.body[:0]
-    if !bsm.add(1, 2, 3, 4, 0x500, []byte("testing")) {
-        t.Fatal("")
-    }
-    store.bulkSetState.inMsgChan <- bsm
-    // only one of these, so if we get it back we know the previous data was
-    // processed
-    <-store.bulkSetState.inFreeMsgChan
-    ts, v, err := store.Read(context.Background(), 1, 2, 3, 4, nil)
-    if err != nil {
-        t.Fatal(err)
-    }
-    if ts != 5 { // the bottom 8 bits are discarded for the public Read
-        t.Fatal(ts)
-    }
-    if string(v) != "testing" {
-        t.Fatal(string(v))
-    }
-    m.lock.Lock()
-    v2 := len(m.msgToNodeIDs)
-    m.lock.Unlock()
-    if v2 != 0 {
-        t.Fatal(v2)
-    }
+	b := ring.NewBuilder(64)
+	n, err := b.AddNode(true, 1, nil, nil, "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := b.Ring()
+	r.SetLocalNode(n.ID())
+	m := &msgRingPlaceholder{ring: r}
+	cfg := newTestGroupStoreConfig()
+	cfg.MsgRing = m
+	cfg.InBulkSetWorkers = 1
+	cfg.InBulkSetMsgs = 1
+	store, _ := newTestGroupStore(cfg)
+	if err := store.Startup(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	defer store.Shutdown(context.Background())
+	bsm := <-store.bulkSetState.inFreeMsgChan
+	bsm.body = bsm.body[:0]
+	if !bsm.add(1, 2, 3, 4, 0x500, []byte("testing")) {
+		t.Fatal("")
+	}
+	store.bulkSetState.inMsgChan <- bsm
+	// only one of these, so if we get it back we know the previous data was
+	// processed
+	<-store.bulkSetState.inFreeMsgChan
+	ts, v, err := store.Read(context.Background(), 1, 2, 3, 4, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ts != 5 { // the bottom 8 bits are discarded for the public Read
+		t.Fatal(ts)
+	}
+	if string(v) != "testing" {
+		t.Fatal(string(v))
+	}
+	m.lock.Lock()
+	v2 := len(m.msgToNodeIDs)
+	m.lock.Unlock()
+	if v2 != 0 {
+		t.Fatal(v2)
+	}
 }
-*/
 
 /*
 func TestGroupBulkSetMsgWithAck(t *testing.T) {
