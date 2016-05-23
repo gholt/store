@@ -514,6 +514,10 @@ func (store *default{{.T}}Store) read(keyA uint64, keyB uint64{{if eq .t "group"
 }
 
 func (store *default{{.T}}Store) Write(ctx context.Context, keyA uint64, keyB uint64{{if eq .t "group"}}, childKeyA uint64, childKeyB uint64{{end}}, timestampmicro int64, value []byte) (int64, error) {
+    if len(value) == 0 {
+        store.logError("REMOVEME was asked to store a zlv %x %x{{if eq .t "group"}} %x %x{{end}} %x", keyA, keyB{{if eq .t "group"}}, childKeyA, childKeyB{{end}}, timestampmicro)
+        panic("REMOVEME was asked to store a zlv")
+    }
     atomic.AddInt32(&store.writes, 1)
     if timestampmicro < TIMESTAMPMICRO_MIN {
         atomic.AddInt32(&store.writeErrors, 1)

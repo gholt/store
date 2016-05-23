@@ -453,6 +453,10 @@ func (store *defaultValueStore) read(keyA uint64, keyB uint64, value []byte) (ui
 }
 
 func (store *defaultValueStore) Write(ctx context.Context, keyA uint64, keyB uint64, timestampmicro int64, value []byte) (int64, error) {
+	if len(value) == 0 {
+		store.logError("REMOVEME was asked to store a zlv %x %x %x", keyA, keyB, timestampmicro)
+		panic("REMOVEME was asked to store a zlv")
+	}
 	atomic.AddInt32(&store.writes, 1)
 	if timestampmicro < TIMESTAMPMICRO_MIN {
 		atomic.AddInt32(&store.writeErrors, 1)
