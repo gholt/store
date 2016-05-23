@@ -201,7 +201,7 @@ func (store *default{{.T}}Store) compactionWorker(jobChan chan *{{.t}}Compaction
             }
             atomic.AddInt32(&store.compactions, 1)
         }
-        store.compactFile(c.nametoc, c.candidateBlockID, controlChan)
+        store.compactFile(c.nametoc, c.candidateBlockID, controlChan, "compactionWorker")
     }
     wg.Done()
 }
@@ -280,7 +280,7 @@ func (store *default{{.T}}Store) needsCompaction(nametoc string, candidateBlockI
     return stale > uint32(float64(checked) * store.compactionState.threshold)
 }
 
-func (store *default{{.T}}Store) compactFile(nametoc string, blockID uint32, controlChan chan struct{}) {
+func (store *default{{.T}}Store) compactFile(nametoc string, blockID uint32, controlChan chan struct{}, removemeCaller string) {
     var readErrorCount uint32
     var writeErrorCount uint32
     var count uint32
@@ -335,6 +335,10 @@ func (store *default{{.T}}Store) compactFile(nametoc string, blockID uint32, con
                         atomic.AddUint32(&stale, 1)
                         continue
                     }
+                    // REMOVEME skipping any zero-length values for now
+                    if timestampBits&_TSB_DELETION == 0 && len(value) == 0 {
+                        continue
+                    }
                     _, err = store.write(wr.KeyA, wr.KeyB{{if eq .t "group"}}, wr.ChildKeyA, wr.ChildKeyB{{end}}, wr.TimestampBits|_TSB_COMPACTION_REWRITE, value, true)
                     if err != nil {
                         store.logCritical("compactFile: error writing while compacting %s: %s", nametoc, err)
@@ -357,6 +361,7 @@ func (store *default{{.T}}Store) compactFile(nametoc string, blockID uint32, con
     fullpathtoc := path.Join(store.pathtoc, nametoc)
     spindown := func(remove bool) {
         if remove {
+            store.logError("REMOVEME: removing %s due to compaction triggered by %s", fullpathtoc, removemeCaller)
             if err := store.remove(fullpathtoc); err != nil {
                 store.logError("compactFile: unable to remove %s %s", fullpathtoc, err)
                 if err = store.rename(fullpathtoc, fullpathtoc + ".renamed"); err != nil {
