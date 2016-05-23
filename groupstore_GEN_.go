@@ -1032,7 +1032,7 @@ func (store *defaultGroupStore) recovery() error {
 					// REMOVEME zlv check and discard, for now
 					if wr.TimestampBits&_TSB_DELETION == 0 && wr.Length == 0 {
 						if atomic.AddInt64(&zeroLengthValues, 1) < 10 {
-							store.logError("REMOVEME encountered zlv %x %x%x %x %x", wr.KeyA, wr.KeyB, wr.ChildKeyA, wr.ChildKeyB, wr.TimestampBits)
+							store.logError("REMOVEME encountered zlv %x %x %x %x %x", wr.KeyA, wr.KeyB, wr.ChildKeyA, wr.ChildKeyB, wr.TimestampBits)
 						}
 						continue
 					}
