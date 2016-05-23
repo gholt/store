@@ -964,7 +964,9 @@ func (store *defaultValueStore) recovery() error {
 					atomic.AddInt64(&encounteredValues, 1)
 					// REMOVEME zlv check and discard, for now
 					if wr.TimestampBits&_TSB_DELETION == 0 && wr.Length == 0 {
-						atomic.AddInt64(&zeroLengthValues, 1)
+						if atomic.AddInt64(&zeroLengthValues, 1) < 10 {
+							store.logError("REMOVEME encountered zlv %x %x %x", wr.KeyA, wr.KeyB, wr.TimestampBits)
+						}
 						continue
 					}
 					if store.logDebugOn {
@@ -1050,6 +1052,6 @@ func (store *defaultValueStore) recovery() error {
 		}
 		store.logDebug("recovery: secondary recovery completed.")
 	}
-	fmt.Println("REMOVEME encountered", encounteredValues, "values,", zeroLengthValues, "were zero-length")
+	store.logError("REMOVEME encountered %d values, %d were zero-length", encounteredValues, zeroLengthValues)
 	return nil
 }
