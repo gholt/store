@@ -205,7 +205,7 @@ func TestValueBulkSetAckMsgOut(t *testing.T) {
 	if !bytes.Equal(buf.Bytes(), []byte{}) {
 		t.Fatal(buf.Bytes())
 	}
-	bsam.Free()
+	bsam.Free(0, 0)
 	bsam = store.newOutBulkSetAckMsg()
 	bsam.add(1, 2, 0x500)
 	bsam.add(6, 7, 0xa00)
@@ -235,7 +235,7 @@ func TestValueBulkSetAckMsgOut(t *testing.T) {
 	}) {
 		t.Fatal(buf.Bytes())
 	}
-	bsam.Free()
+	bsam.Free(0, 0)
 }
 
 func TestValueBulkSetAckMsgOutWriteError(t *testing.T) {
@@ -252,7 +252,7 @@ func TestValueBulkSetAckMsgOutWriteError(t *testing.T) {
 	if err == nil {
 		t.Fatal(err)
 	}
-	bsam.Free()
+	bsam.Free(0, 0)
 }
 
 func TestValueBulkSetAckMsgOutHitCap(t *testing.T) {

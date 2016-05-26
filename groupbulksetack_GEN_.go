@@ -192,7 +192,7 @@ func (store *defaultGroupStore) inBulkSetAck(wg *sync.WaitGroup) {
 // newOutBulkSetAckMsg gives an initialized groupBulkSetAckMsg for filling out
 // and eventually sending using the MsgRing. The MsgRing (or someone else if
 // the message doesn't end up with the MsgRing) will call
-// groupBulkSetAckMsg.Free() eventually and the groupBulkSetAckMsg will be
+// groupBulkSetAckMsg.Free eventually and the groupBulkSetAckMsg will be
 // requeued for reuse later. There is a fixed number of outgoing
 // groupBulkSetAckMsg instances that can exist at any given time, capping
 // memory usage. Once the limit is reached, this method will block until a
@@ -216,7 +216,7 @@ func (bsam *groupBulkSetAckMsg) WriteContent(w io.Writer) (uint64, error) {
 	return uint64(n), err
 }
 
-func (bsam *groupBulkSetAckMsg) Free() {
+func (bsam *groupBulkSetAckMsg) Free(successes int, failures int) {
 	bsam.store.bulkSetAckState.outFreeMsgChan <- bsam
 }
 

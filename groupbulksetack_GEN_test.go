@@ -205,7 +205,7 @@ func TestGroupBulkSetAckMsgOut(t *testing.T) {
 	if !bytes.Equal(buf.Bytes(), []byte{}) {
 		t.Fatal(buf.Bytes())
 	}
-	bsam.Free()
+	bsam.Free(0, 0)
 	bsam = store.newOutBulkSetAckMsg()
 	bsam.add(1, 2, 3, 4, 0x500)
 	bsam.add(6, 7, 8, 9, 0xa00)
@@ -241,7 +241,7 @@ func TestGroupBulkSetAckMsgOut(t *testing.T) {
 	}) {
 		t.Fatal(buf.Bytes())
 	}
-	bsam.Free()
+	bsam.Free(0, 0)
 }
 
 func TestGroupBulkSetAckMsgOutWriteError(t *testing.T) {
@@ -258,7 +258,7 @@ func TestGroupBulkSetAckMsgOutWriteError(t *testing.T) {
 	if err == nil {
 		t.Fatal(err)
 	}
-	bsam.Free()
+	bsam.Free(0, 0)
 }
 
 func TestGroupBulkSetAckMsgOutHitCap(t *testing.T) {

@@ -503,7 +503,7 @@ func (store *defaultGroupStore) outPullReplicationPass(notifyChan chan *bgNotifi
 // newOutPullReplicationMsg gives an initialized groupPullReplicationMsg for
 // filling out and eventually sending using the MsgRing. The MsgRing (or
 // someone else if the message doesn't end up with the MsgRing) will call
-// groupPullReplicationMsg.Free() eventually and the pullReplicationMsg will
+// groupPullReplicationMsg.Free eventually and the pullReplicationMsg will
 // be requeued for reuse later. There is a fixed number of outgoing
 // groupPullReplicationMsg instances that can exist at any given time, capping
 // memory usage. Once the limit is reached, this method will block until a
@@ -576,6 +576,6 @@ func (prm *groupPullReplicationMsg) WriteContent(w io.Writer) (uint64, error) {
 	return uint64(n), err
 }
 
-func (prm *groupPullReplicationMsg) Free() {
+func (prm *groupPullReplicationMsg) Free(successes int, failures int) {
 	prm.store.pullReplicationState.outMsgChan <- prm
 }

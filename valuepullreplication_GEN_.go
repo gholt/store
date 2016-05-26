@@ -503,7 +503,7 @@ func (store *defaultValueStore) outPullReplicationPass(notifyChan chan *bgNotifi
 // newOutPullReplicationMsg gives an initialized valuePullReplicationMsg for
 // filling out and eventually sending using the MsgRing. The MsgRing (or
 // someone else if the message doesn't end up with the MsgRing) will call
-// valuePullReplicationMsg.Free() eventually and the pullReplicationMsg will
+// valuePullReplicationMsg.Free eventually and the pullReplicationMsg will
 // be requeued for reuse later. There is a fixed number of outgoing
 // valuePullReplicationMsg instances that can exist at any given time, capping
 // memory usage. Once the limit is reached, this method will block until a
@@ -576,6 +576,6 @@ func (prm *valuePullReplicationMsg) WriteContent(w io.Writer) (uint64, error) {
 	return uint64(n), err
 }
 
-func (prm *valuePullReplicationMsg) Free() {
+func (prm *valuePullReplicationMsg) Free(successes int, failures int) {
 	prm.store.pullReplicationState.outMsgChan <- prm
 }

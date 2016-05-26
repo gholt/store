@@ -32,7 +32,7 @@ func (m *msgRingValuePullReplicationTester) MsgToNode(msg ring.Msg, nodeID uint6
 	m.lock.Lock()
 	m.msgToNodeIDs = append(m.msgToNodeIDs, nodeID)
 	m.lock.Unlock()
-	msg.Free()
+	msg.Free(0, 0)
 }
 
 func (m *msgRingValuePullReplicationTester) MsgToOtherReplicas(msg ring.Msg, partition uint32, timeout time.Duration) {
@@ -47,7 +47,7 @@ func (m *msgRingValuePullReplicationTester) MsgToOtherReplicas(msg ring.Msg, par
 		m.bodyToPartitions = append(m.bodyToPartitions, b)
 		m.lock.Unlock()
 	}
-	msg.Free()
+	msg.Free(0, 0)
 }
 
 func TestValuePullReplicationSimple(t *testing.T) {

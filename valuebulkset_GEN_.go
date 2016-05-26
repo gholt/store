@@ -267,7 +267,7 @@ func (store *defaultValueStore) inBulkSet(wg *sync.WaitGroup) {
 
 // newOutBulkSetMsg gives an initialized valueBulkSetMsg for filling out and
 // eventually sending using the MsgRing. The MsgRing (or someone else if the
-// message doesn't end up with the MsgRing) will call valueBulkSetMsg.Free()
+// message doesn't end up with the MsgRing) will call valueBulkSetMsg.Free
 // eventually and the valueBulkSetMsg will be requeued for reuse later. There
 // is a fixed number of outgoing valueBulkSetMsg instances that can exist at
 // any given time, capping memory usage. Once the limit is reached, this method
@@ -302,7 +302,7 @@ func (bsm *valueBulkSetMsg) WriteContent(w io.Writer) (uint64, error) {
 	return uint64(len(bsm.header)) + uint64(n), err
 }
 
-func (bsm *valueBulkSetMsg) Free() {
+func (bsm *valueBulkSetMsg) Free(successes int, failures int) {
 	bsm.store.bulkSetState.outFreeMsgChan <- bsm
 }
 

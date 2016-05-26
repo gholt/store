@@ -80,14 +80,14 @@ func (m *msgRingPlaceholder) MsgToNode(msg ring.Msg, nodeID uint64, timeout time
 	m.lock.Lock()
 	m.msgToNodeIDs = append(m.msgToNodeIDs, nodeID)
 	m.lock.Unlock()
-	msg.Free()
+	msg.Free(0, 0)
 }
 
 func (m *msgRingPlaceholder) MsgToOtherReplicas(msg ring.Msg, partition uint32, timeout time.Duration) {
 	m.lock.Lock()
 	m.msgToPartitions = append(m.msgToPartitions, partition)
 	m.lock.Unlock()
-	msg.Free()
+	msg.Free(0, 0)
 }
 
 type testErrorWriter struct {
