@@ -13,6 +13,7 @@ type groupTombstoneDiscardState struct {
 	interval  int
 	age       uint64
 	batchSize int
+	workers   int
 
 	startupShutdownLock sync.Mutex
 	notifyChan          chan *bgNotification
@@ -33,6 +34,7 @@ func (store *defaultGroupStore) tombstoneDiscardConfig(cfg *GroupStoreConfig) {
 	store.tombstoneDiscardState.interval = cfg.TombstoneDiscardInterval
 	store.tombstoneDiscardState.age = (uint64(cfg.TombstoneAge) * uint64(time.Second) / 1000) << _TSB_UTIL_BITS
 	store.tombstoneDiscardState.batchSize = cfg.TombstoneDiscardBatchSize
+	store.tombstoneDiscardState.workers = cfg.TombstoneDiscardWorkers
 }
 
 func (store *defaultGroupStore) tombstoneDiscardStartup() {
@@ -126,7 +128,7 @@ func (store *defaultGroupStore) tombstoneDiscardPassLocalRemovals(notifyChan cha
 		partitionShift = 64 - pbc
 		partitionMax = (uint64(1) << pbc) - 1
 	}
-	workerMax := uint64(store.workers - 1)
+	workerMax := uint64(store.tombstoneDiscardState.workers - 1)
 	workerPartitionPiece := (uint64(1) << partitionShift) / (workerMax + 1)
 	work := func(partition uint64, worker uint64) {
 		partitionOnLeftBits := partition << partitionShift
@@ -196,7 +198,7 @@ func (store *defaultGroupStore) tombstoneDiscardPassExpiredDeletions(notifyChan 
 		partitionShift = 64 - pbc
 		partitionMax = (uint64(1) << pbc) - 1
 	}
-	workerMax := uint64(store.workers - 1)
+	workerMax := uint64(store.tombstoneDiscardState.workers - 1)
 	workerPartitionPiece := (uint64(1) << partitionShift) / (workerMax + 1)
 	work := func(partition uint64, worker uint64, localRemovals []groupLocalRemovalEntry) {
 		partitionOnLeftBits := partition << partitionShift

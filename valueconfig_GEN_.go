@@ -108,6 +108,10 @@ type ValueStoreConfig struct {
 	// TombstoneAge indicates how many seconds old a deletion marker may be
 	// before it is permanently removed. Defaults to 14,400 seconds (4 hours).
 	TombstoneAge int
+	// TombstoneDiscardWorkers indicates how many goroutines may be used for
+	// discard passes (discarding expired tombstones [deletion markers]).
+	// Defaults to Workers.
+	TombstoneDiscardWorkers int
 	// ReplicationIgnoreRecent indicates how many seconds old a value should be
 	// before it is included in replication processing. Defaults to 60 seconds.
 	ReplicationIgnoreRecent int
@@ -492,6 +496,17 @@ func resolveValueStoreConfig(c *ValueStoreConfig) *ValueStoreConfig {
 	}
 	if cfg.TombstoneAge < 0 {
 		cfg.TombstoneAge = 0
+	}
+	if env := os.Getenv("VALUESTORE_TOMBSTONE_DISCARD_WORKERS"); env != "" {
+		if val, err := strconv.Atoi(env); err == nil {
+			cfg.TombstoneDiscardWorkers = val
+		}
+	}
+	if cfg.TombstoneDiscardWorkers == 0 {
+		cfg.TombstoneDiscardWorkers = cfg.Workers
+	}
+	if cfg.TombstoneDiscardWorkers < 1 {
+		cfg.TombstoneDiscardWorkers = 1
 	}
 	if env := os.Getenv("VALUESTORE_REPLICATION_IGNORE_RECENT"); env != "" {
 		if val, err := strconv.Atoi(env); err == nil {
