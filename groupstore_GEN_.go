@@ -120,6 +120,7 @@ type defaultGroupStore struct {
 	inPullReplicationDrops        int32
 	inPullReplicationInvalids     int32
 	expiredDeletions              int32
+	tombstoneDiscardNanoseconds   int64
 	compactions                   int32
 	smallFileCompactions          int32
 

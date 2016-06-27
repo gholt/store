@@ -103,7 +103,9 @@ func (store *defaultValueStore) tombstoneDiscardLauncher(notifyChan chan *bgNoti
 func (store *defaultValueStore) tombstoneDiscardPass(notifyChan chan *bgNotification) *bgNotification {
 	begin := time.Now()
 	defer func() {
-		store.logDebug("tombstoneDiscard: pass took %s", time.Now().Sub(begin))
+		elapsed := time.Now().Sub(begin)
+		store.logDebug("tombstoneDiscard: pass took %s", elapsed)
+		atomic.StoreInt64(&store.tombstoneDiscardNanoseconds, elapsed.Nanoseconds())
 	}()
 	if n := store.tombstoneDiscardPassLocalRemovals(notifyChan); n != nil {
 		return n
