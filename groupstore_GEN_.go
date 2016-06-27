@@ -481,6 +481,9 @@ func (store *defaultGroupStore) ReadGroup(ctx context.Context, keyA uint64, keyB
 	i := 0
 	for _, item := range items {
 		timestampMicro, value, err := store.read(keyA, keyB, item.ChildKeyA, item.ChildKeyB, nil)
+		if err != nil && err != errNotFound {
+			atomic.AddInt32(&store.readGroupErrors, 1)
+		}
 		if err == nil && timestampMicro&_TSB_DELETION == 0 {
 			rv[i].ChildKeyA = item.ChildKeyA
 			rv[i].ChildKeyB = item.ChildKeyB
