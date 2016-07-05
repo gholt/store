@@ -155,6 +155,9 @@ type GroupStoreStats struct {
 	MemUsed uint64
 	// MemSize is the size in bytes of total memory on the system.
 	MemSize uint64
+	// ReadOnly indicates when the system has been put in read-only mode,
+	// whether by DisableWrites or automatically by the watcher.
+	ReadOnly bool
 
 	debug                      bool
 	freeableMemBlockChansCap   int
@@ -253,6 +256,9 @@ func (store *defaultGroupStore) Stats(ctx context.Context, debug bool) (fmt.Stri
 		MemUsed:                       atomic.LoadUint64(&store.watcherState.memUsed),
 		MemSize:                       atomic.LoadUint64(&store.watcherState.memSize),
 	}
+	store.disableEnableWritesLock.Lock()
+	stats.ReadOnly = store.readOnly
+	store.disableEnableWritesLock.Unlock()
 	atomic.AddInt32(&store.lookups, -stats.Lookups)
 	atomic.AddInt32(&store.lookupErrors, -stats.LookupErrors)
 

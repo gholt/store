@@ -71,6 +71,7 @@ type defaultGroupStore struct {
 	bulkSetState            groupBulkSetState
 	bulkSetAckState         groupBulkSetAckState
 	disableEnableWritesLock sync.Mutex
+	readOnly                bool
 	userDisabled            bool
 	flusherState            groupFlusherState
 	watcherState            groupWatcherState
@@ -397,6 +398,7 @@ func (store *defaultGroupStore) EnableWrites(ctx context.Context) error {
 
 func (store *defaultGroupStore) enableWrites(userCall bool) {
 	store.disableEnableWritesLock.Lock()
+	store.readOnly = false
 	if userCall || !store.userDisabled {
 		store.userDisabled = false
 		for _, c := range store.pendingWriteReqChans {
@@ -413,6 +415,7 @@ func (store *defaultGroupStore) DisableWrites(ctx context.Context) error {
 
 func (store *defaultGroupStore) disableWrites(userCall bool) {
 	store.disableEnableWritesLock.Lock()
+	store.readOnly = true
 	if userCall {
 		store.userDisabled = true
 	}
