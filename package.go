@@ -69,7 +69,7 @@
 // continue.
 //
 // There is also a modified form of ValueStore called GroupStore that expands
-// the primary key to two 128 bit keys and offers a Lookup methods which
+// the primary key to two 128 bit keys and offers a Lookup method which
 // retrieves all matching items for the first key.
 package store
 
