@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gholt/msgring"
 	"github.com/gholt/ring"
 	"golang.org/x/net/context"
 )
@@ -25,17 +26,17 @@ func (m *msgRingGroupPullReplicationTester) MaxMsgLength() uint64 {
 	return 65536
 }
 
-func (m *msgRingGroupPullReplicationTester) SetMsgHandler(msgType uint64, handler ring.MsgUnmarshaller) {
+func (m *msgRingGroupPullReplicationTester) SetMsgHandler(msgType uint64, handler msgring.MsgUnmarshaller) {
 }
 
-func (m *msgRingGroupPullReplicationTester) MsgToNode(msg ring.Msg, nodeID uint64, timeout time.Duration) {
+func (m *msgRingGroupPullReplicationTester) MsgToNode(msg msgring.Msg, nodeID uint64, timeout time.Duration) {
 	m.lock.Lock()
 	m.msgToNodeIDs = append(m.msgToNodeIDs, nodeID)
 	m.lock.Unlock()
 	msg.Free(0, 0)
 }
 
-func (m *msgRingGroupPullReplicationTester) MsgToOtherReplicas(msg ring.Msg, partition uint32, timeout time.Duration) {
+func (m *msgRingGroupPullReplicationTester) MsgToOtherReplicas(msg msgring.Msg, partition uint32, timeout time.Duration) {
 	prm, ok := msg.(*groupPullReplicationMsg)
 	if ok {
 		m.lock.Lock()

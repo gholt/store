@@ -18,7 +18,7 @@ import (
 
 	"github.com/gholt/brimio"
 	"github.com/gholt/locmap"
-	"github.com/gholt/ring"
+	"github.com/gholt/msgring"
 	"github.com/spaolacci/murmur3"
 	"go.uber.org/zap"
 	"golang.org/x/net/context"
@@ -59,7 +59,7 @@ type defaultGroupStore struct {
 	fileCap                 uint32
 	fileReaders             int
 	checksumInterval        uint32
-	msgRing                 ring.MsgRing
+	msgRing                 msgring.MsgRing
 	tombstoneDiscardState   groupTombstoneDiscardState
 	auditState              groupAuditState
 	replicationIgnoreRecent uint64

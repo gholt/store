@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/gholt/locmap"
-	"github.com/gholt/ring"
+	"github.com/gholt/msgring"
 	"go.uber.org/zap"
 )
 
@@ -71,7 +71,7 @@ type ValueStoreConfig struct {
 	// MsgRing sets the ring.MsgRing to use for determining the key ranges the
 	// ValueStore is responsible for as well as providing methods to send
 	// messages to other nodes.
-	MsgRing ring.MsgRing
+	MsgRing msgring.MsgRing
 	// MsgCap indicates the maximum bytes for outgoing messages. Defaults to
 	// 16,777,216 bytes.
 	MsgCap int

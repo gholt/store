@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/gholt/msgring"
 	"github.com/gholt/ring"
 )
 
@@ -73,17 +74,17 @@ func (m *msgRingPlaceholder) MaxMsgLength() uint64 {
 	return 65536
 }
 
-func (m *msgRingPlaceholder) SetMsgHandler(msgType uint64, handler ring.MsgUnmarshaller) {
+func (m *msgRingPlaceholder) SetMsgHandler(msgType uint64, handler msgring.MsgUnmarshaller) {
 }
 
-func (m *msgRingPlaceholder) MsgToNode(msg ring.Msg, nodeID uint64, timeout time.Duration) {
+func (m *msgRingPlaceholder) MsgToNode(msg msgring.Msg, nodeID uint64, timeout time.Duration) {
 	m.lock.Lock()
 	m.msgToNodeIDs = append(m.msgToNodeIDs, nodeID)
 	m.lock.Unlock()
 	msg.Free(0, 0)
 }
 
-func (m *msgRingPlaceholder) MsgToOtherReplicas(msg ring.Msg, partition uint32, timeout time.Duration) {
+func (m *msgRingPlaceholder) MsgToOtherReplicas(msg msgring.Msg, partition uint32, timeout time.Duration) {
 	m.lock.Lock()
 	m.msgToPartitions = append(m.msgToPartitions, partition)
 	m.lock.Unlock()
