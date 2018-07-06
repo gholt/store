@@ -6,8 +6,8 @@ import (
 	"sync"
 	"time"
 
+	ring "github.com/gholt/devicering"
 	"github.com/gholt/msgring"
-	"github.com/gholt/ring"
 )
 
 type memBuf struct {

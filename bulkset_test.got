@@ -6,7 +6,7 @@ import (
     "io"
     "testing"
 
-    "github.com/gholt/ring"
+    ring "github.com/gholt/devicering"
     "golang.org/x/net/context"
 )
 

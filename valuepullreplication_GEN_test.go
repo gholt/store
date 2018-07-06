@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
+	ring "github.com/gholt/devicering"
 	"github.com/gholt/msgring"
-	"github.com/gholt/ring"
 	"golang.org/x/net/context"
 )
 
